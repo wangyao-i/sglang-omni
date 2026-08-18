@@ -1,0 +1,41 @@
+docs/get_started/installation_npu.md
+  s_20148b947ee193::t_7aea79294e5838 1-176
+pyproject_npu.toml
+  s_20148b947ee193::t_0f0253cb597818 54-57,61
+scripts/npu/install_npu.sh
+  s_20148b947ee193::t_c00decbd87569d 1-256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "82df1b7803ca28f9ec76598eac3d90de6456fda8",
+  "prompts": {},
+  "humans": {
+    "h_49e3ade6bee302": {
+      "author": "wangyao-i <wangyao47@huawei.com>"
+    }
+  },
+  "sessions": {
+    "s_20148b947ee193": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a7fceb71d780f14cf4a3e0a",
+        "model": "glm-5.2"
+      },
+      "human_author": "wangyao-i <wangyao47@huawei.com>",
+      "custom_attributes": {
+        "source_scene": "agent",
+        "tool_type": "builtin",
+        "tool_use_id": "6a8401c82ef527c3d14b53c9",
+        "dedupe_key": "6a7fceb71d780f14cf4a3e0a:6a8401c82ef527c3d14b53c9:afterEdit:1874366f",
+        "runtime_client": "trae-tob-git-ai",
+        "session_id": "6a7fceb71d780f14cf4a3e0a",
+        "client_type": "ide",
+        "external_session_id": "6a7fceb71d780f14cf4a3e0a",
+        "edit_kind": "file_edit",
+        "tool_id": "icube:applyChatSnapshotPatch",
+        "operation_id": "6a8401c82ef527c3d14b53c9"
+      }
+    }
+  }
+}
