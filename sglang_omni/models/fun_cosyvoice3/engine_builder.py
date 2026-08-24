@@ -60,30 +60,6 @@ class FunCosyVoice3EngineBuilder(TtsEngineBuilder):
             "trust_remote_code": True,
         }
 
-    def adjust_overrides(self, overrides: dict[str, Any]) -> None:
-        """Keep the initial NPU path on the validated eager execution mode."""
-        from sglang_omni.platforms import current_platform
-
-        if current_platform.device_type != "npu":
-            return
-
-        graph_requested = not bool(overrides.get("disable_cuda_graph", False))
-        compile_requested = bool(overrides.get("enable_torch_compile", False))
-        nested_graph_config = overrides.pop("cuda_graph_config", None)
-
-        overrides["disable_cuda_graph"] = True
-        overrides["disable_prefill_cuda_graph"] = True
-        overrides["cuda_graph_backend_prefill"] = "disabled"
-        overrides["enable_torch_compile"] = False
-        overrides.pop("cuda_graph_bs_prefill", None)
-        overrides.pop("cuda_graph_max_bs_prefill", None)
-
-        if graph_requested or compile_requested or nested_graph_config is not None:
-            logger.warning(
-                "Fun-CosyVoice3 NPU support currently runs in eager mode; "
-                "disabling generation graphs and torch.compile"
-            )
-
     def setup_model(
         self,
         *,
