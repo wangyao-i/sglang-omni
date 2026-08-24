@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import inspect
+
 import torch
 
+import sglang_omni.platforms as platforms
 from sglang_omni.models.fun_cosyvoice3 import CAPABILITIES
 from sglang_omni.models.fun_cosyvoice3.config import FunCosyVoice3PipelineConfig
+from sglang_omni.models.fun_cosyvoice3.engine_builder import (
+    FunCosyVoice3EngineBuilder,
+)
 from sglang_omni.models.fun_cosyvoice3.payload_types import FunCosyVoice3State
+from sglang_omni.models.fun_cosyvoice3.stages import (
+    create_sglang_tts_engine_executor,
+)
 from sglang_omni.models.registry import PIPELINE_CONFIG_REGISTRY
 from tests.unit_test.pipeline.helpers import build_compiled_process_topology
 
@@ -37,6 +46,45 @@ def test_fun_cosyvoice3_config_and_registry_contract() -> None:
         PIPELINE_CONFIG_REGISTRY.get_config("FunCosyVoice3SGLangModel")
         is FunCosyVoice3PipelineConfig
     )
+
+
+def test_fun_cosyvoice3_generation_factory_resolves_host_platform_by_default() -> None:
+    signature = inspect.signature(create_sglang_tts_engine_executor)
+
+    assert signature.parameters["device"].default is None
+
+
+def test_fun_cosyvoice3_npu_forces_eager_generation(monkeypatch) -> None:
+    monkeypatch.setattr(platforms.current_platform, "device_type", "npu")
+    overrides = {
+        **FunCosyVoice3EngineBuilder().generation_defaults(dtype="bfloat16"),
+        "disable_cuda_graph": False,
+        "disable_prefill_cuda_graph": False,
+        "cuda_graph_backend_prefill": "piecewise",
+        "cuda_graph_bs_prefill": [1, 2],
+        "cuda_graph_max_bs_prefill": 2,
+        "cuda_graph_config": {"prefill": {"backend": "piecewise"}},
+        "enable_torch_compile": True,
+    }
+
+    FunCosyVoice3EngineBuilder().adjust_overrides(overrides)
+
+    assert overrides["disable_cuda_graph"] is True
+    assert overrides["disable_prefill_cuda_graph"] is True
+    assert overrides["cuda_graph_backend_prefill"] == "disabled"
+    assert overrides["enable_torch_compile"] is False
+    assert "cuda_graph_config" not in overrides
+    assert "cuda_graph_bs_prefill" not in overrides
+    assert "cuda_graph_max_bs_prefill" not in overrides
+
+
+def test_fun_cosyvoice3_cuda_keeps_generation_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(platforms.current_platform, "device_type", "cuda")
+    overrides = FunCosyVoice3EngineBuilder().generation_defaults(dtype="bfloat16")
+
+    FunCosyVoice3EngineBuilder().adjust_overrides(overrides)
+
+    assert overrides["disable_cuda_graph"] is False
 
 
 def test_fun_cosyvoice3_state_round_trip_preserves_wire_contract() -> None:

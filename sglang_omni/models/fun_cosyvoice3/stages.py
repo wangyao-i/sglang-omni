@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import torch
@@ -27,9 +28,8 @@ from sglang_omni.utils.device import resolve_device_spec
 logger = logging.getLogger(__name__)
 
 _COSYVOICE_INSTALL_HINT = (
-    "Fun-CosyVoice3 support requires the `cosyvoice` package. "
-    "Clone the official repository and set PYTHONPATH, or install it "
-    "in the serving environment before launching Fun-CosyVoice3."
+    "Fun-CosyVoice3 requires the `fun-cosyvoice3` optional dependencies "
+    "and the official CosyVoice source tree on PYTHONPATH."
 )
 
 
@@ -46,17 +46,59 @@ def _load_cosyvoice3_flow_hift(
     device: str,
     fp16: bool = False,
 ) -> tuple[Any, Any]:
+    del fp16  # Mixed precision is applied around inference, not weight loading.
     try:
-        from cosyvoice.cli.cosyvoice import CosyVoice3
+        from hyperpyyaml import load_hyperpyyaml
     except ImportError as exc:
         raise RuntimeError(_COSYVOICE_INSTALL_HINT) from exc
 
-    cv = CosyVoice3(checkpoint_dir, fp16=fp16)
-    flow = cv.model.flow
-    hift = cv.model.hift
+    config_path = os.path.join(checkpoint_dir, "cosyvoice3.yaml")
+    if not os.path.isfile(config_path):
+        raise FileNotFoundError(f"CosyVoice3 config not found: {config_path}")
+
+    try:
+        with open(config_path, encoding="utf-8") as config_file:
+            configs = load_hyperpyyaml(
+                config_file,
+                overrides={
+                    "qwen_pretrain_path": os.path.join(
+                        checkpoint_dir, "CosyVoice-BlankEN"
+                    )
+                },
+            )
+    except ImportError as exc:
+        raise RuntimeError(_COSYVOICE_INSTALL_HINT) from exc
+
+    try:
+        flow = configs["flow"]
+        hift = configs["hift"]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"CosyVoice3 config {config_path} does not define flow and hift"
+        ) from exc
+    del configs
+
+    # The upstream CosyVoice3 wrapper chooses only CUDA or CPU and loads the
+    # unused LLM weights before Omni moves these modules to the stage device.
+    # Load the two vocoder-stage components directly so NPU startup never takes
+    # that CUDA-first path and does not duplicate the AR model in host memory.
+    flow_state = torch.load(
+        os.path.join(checkpoint_dir, "flow.pt"),
+        map_location="cpu",
+        weights_only=True,
+    )
+    hift_state = {
+        key.replace("generator.", ""): value
+        for key, value in torch.load(
+            os.path.join(checkpoint_dir, "hift.pt"),
+            map_location="cpu",
+            weights_only=True,
+        ).items()
+    }
+    flow.load_state_dict(flow_state, strict=True)
+    hift.load_state_dict(hift_state, strict=True)
     flow.to(device).eval()
     hift.to(device).eval()
-    del cv.model.llm
     return flow, hift
 
 
@@ -71,7 +113,7 @@ def create_preprocessing_executor(model_path: str) -> SimpleScheduler:
 def create_sglang_tts_engine_executor(
     model_path: str,
     *,
-    device: str = "cuda:0",
+    device: str | None = None,
     gpu_id: int | None = None,
     dtype: str = "bfloat16",
     server_args_overrides: dict[str, Any] | None = None,

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -35,12 +37,79 @@ class _FakeHiFT(torch.nn.Module):
         return torch.arange(speech_feat.shape[-1]).reshape(1, -1).float(), None
 
 
+class _FakeCheckpointModule:
+    def __init__(self) -> None:
+        self.loaded_state = None
+        self.strict = None
+        self.device = None
+        self.training = True
+
+    def load_state_dict(self, state, *, strict):
+        self.loaded_state = state
+        self.strict = strict
+
+    def to(self, device):
+        self.device = device
+        return self
+
+    def eval(self):
+        self.training = False
+        return self
+
+
 def _payload(state: FunCosyVoice3State) -> StagePayload:
     return StagePayload(
         request_id="req-vocoder",
         request=OmniRequest(inputs="hello"),
         data=state.to_dict(),
     )
+
+
+def test_load_cosyvoice3_flow_hift_skips_upstream_cuda_wrapper(
+    monkeypatch, tmp_path
+) -> None:
+    flow = _FakeCheckpointModule()
+    hift = _FakeCheckpointModule()
+    captured = {}
+
+    def fake_load_hyperpyyaml(stream, *, overrides):
+        captured["config"] = stream.name
+        captured["overrides"] = overrides
+        return {"llm": object(), "flow": flow, "hift": hift}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hyperpyyaml",
+        SimpleNamespace(load_hyperpyyaml=fake_load_hyperpyyaml),
+    )
+
+    def fake_torch_load(path, *, map_location, weights_only):
+        assert map_location == "cpu"
+        assert weights_only is True
+        if str(path).endswith("flow.pt"):
+            return {"flow.weight": torch.tensor([1.0])}
+        return {
+            "generator.input.weight": torch.tensor([2.0]),
+            "other.weight": torch.tensor([3.0]),
+        }
+
+    monkeypatch.setattr(torch, "load", fake_torch_load)
+    (tmp_path / "cosyvoice3.yaml").write_text("test", encoding="utf-8")
+
+    loaded_flow, loaded_hift = stages._load_cosyvoice3_flow_hift(
+        str(tmp_path), device="npu:0"
+    )
+
+    assert loaded_flow is flow
+    assert loaded_hift is hift
+    assert captured["overrides"]["qwen_pretrain_path"].endswith(
+        "CosyVoice-BlankEN"
+    )
+    assert flow.loaded_state == {"flow.weight": torch.tensor([1.0])}
+    assert set(hift.loaded_state) == {"input.weight", "other.weight"}
+    assert flow.strict is True and hift.strict is True
+    assert flow.device == hift.device == "npu:0"
+    assert flow.training is False and hift.training is False
 
 
 def test_cosyvoice3_vocoder_does_not_pad_or_rescale_short_sequences() -> None:
