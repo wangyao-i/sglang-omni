@@ -85,6 +85,19 @@ dynamic allocation/shape during capture, memory budget, eager/graph mismatch,
 or replay failure. Make the smallest backend-specific fix and add a fake-backend
 unit test before committing it.
 
+### Known Transformers masking failure
+
+ACL error `107027` at `transformers/masking_utils.py`, caused by
+`(packed_sequence_mask[:, -1] == 0).all()` entering a Python `if`, is addressed
+by the accelerator-aware tracing patch in
+`sglang_omni/utils/hf_transformers_patches.py`. It preserves upstream tracing
+checks and adds SGLang's generic device-module query:
+`torch.get_device_module(...).is_current_stream_capturing()`. Do not edit the
+installed Transformers package. If this error persists, verify that both
+`transformers.utils.import_utils.is_tracing` and the directly imported
+`transformers.masking_utils.is_tracing` carry the SGLang-Omni wrapper, then
+return the complete traceback and installed Transformers version.
+
 ## Verification and Commit Policy
 
 After every fix run:
