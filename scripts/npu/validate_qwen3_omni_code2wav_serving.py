@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import hashlib
 import io
 import json
 import math
+import re
 import time
 import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -171,7 +173,7 @@ def _run_request(
             audio_seconds=audio_seconds,
             audio_sha256=hashlib.sha256(audio).hexdigest(),
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - each request must become report data
         ended = time.perf_counter()
         return RequestResult(
             **common,
@@ -249,13 +251,17 @@ def _phase_summary(results: list[RequestResult]) -> dict[str, Any]:
     }
 
 
-def _scan_server_log(path: Path, *, require_runtime_stats: bool) -> dict[str, Any]:
+def _scan_server_log(
+    path: Path,
+    *,
+    require_runtime_stats: bool,
+    max_final_ineligible: int = 0,
+) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8", errors="replace")
     startup_marker = "Code2Wav NPU graph startup stats="
     replay_marker = "Code2Wav NPU graph replay active"
     runtime_marker = "Code2Wav NPU graph runtime stats"
     failure_markers = {
-        "eager_fallback": "Code2Wav NPU graph eager fallback",
         "capture_failed": "capture_failed",
         "runtime_replay_failed": "runtime_replay_failed",
         "runner_disabled": "Code2Wav NPU graph replay disabled the runner",
@@ -273,10 +279,53 @@ def _scan_server_log(path: Path, *, require_runtime_stats: bool) -> dict[str, An
     )
     replay_markers = text.count(replay_marker)
     runtime_lines = [line for line in text.splitlines() if runtime_marker in line]
-    unhealthy_runtime_lines = [
+    runtime_pattern = re.compile(
+        r"replay_failures=(?P<replay_failures>\d+)\s+"
+        r"fallback_counts=(?P<fallback_counts>\{[^}]*\})"
+    )
+    unhealthy_runtime_lines = []
+    max_observed_ineligible = 0
+    unexpected_fallback_counts: dict[str, int] = {}
+    for line in runtime_lines:
+        match = runtime_pattern.search(line)
+        if match is None:
+            unhealthy_runtime_lines.append(line)
+            continue
+        try:
+            fallback_counts = ast.literal_eval(match.group("fallback_counts"))
+        except (SyntaxError, ValueError):
+            unhealthy_runtime_lines.append(line)
+            continue
+        if not isinstance(fallback_counts, dict) or any(
+            not isinstance(reason, str) or not isinstance(count, int) or count < 0
+            for reason, count in fallback_counts.items()
+        ):
+            unhealthy_runtime_lines.append(line)
+            continue
+        if int(match.group("replay_failures")) != 0:
+            unhealthy_runtime_lines.append(line)
+        max_observed_ineligible = max(
+            max_observed_ineligible,
+            fallback_counts.get("ineligible", 0),
+        )
+        for reason, count in fallback_counts.items():
+            if reason != "ineligible":
+                unexpected_fallback_counts[reason] = max(
+                    unexpected_fallback_counts.get(reason, 0), count
+                )
+
+    eager_lines = [
         line
-        for line in runtime_lines
-        if "replay_failures=0" not in line or "fallback_counts={}" not in line
+        for line in text.splitlines()
+        if "Code2Wav NPU graph eager fallback" in line
+    ]
+    expected_eager_lines = [
+        line
+        for line in eager_lines
+        if "reason=ineligible" in line and "key=None" in line
+    ]
+    unexpected_eager_lines = [
+        line for line in eager_lines if line not in expected_eager_lines
     ]
     issues = []
     if not healthy_startup:
@@ -286,7 +335,22 @@ def _scan_server_log(path: Path, *, require_runtime_stats: bool) -> dict[str, An
     if require_runtime_stats and not runtime_lines:
         issues.append("missing periodic graph runtime stats marker")
     if unhealthy_runtime_lines:
-        issues.append("periodic graph runtime stats report failures or fallback")
+        issues.append(
+            "periodic graph runtime stats are malformed or report replay failure"
+        )
+    if unexpected_fallback_counts:
+        issues.append(
+            f"unexpected graph fallback counters present: {unexpected_fallback_counts}"
+        )
+    if max_observed_ineligible > max_final_ineligible:
+        issues.append(
+            "final-window ineligible fallback count exceeds request budget: "
+            f"{max_observed_ineligible} > {max_final_ineligible}"
+        )
+    if len(expected_eager_lines) > 1:
+        issues.append("multiple final-window ineligible warning markers present")
+    if unexpected_eager_lines:
+        issues.append("unexpected graph eager fallback warning present")
     if failures:
         issues.append(f"graph/device failure markers present: {failures}")
     return {
@@ -297,6 +361,10 @@ def _scan_server_log(path: Path, *, require_runtime_stats: bool) -> dict[str, An
         "replay_markers": replay_markers,
         "runtime_stats_markers": len(runtime_lines),
         "unhealthy_runtime_stats": len(unhealthy_runtime_lines),
+        "allowed_final_ineligible_fallbacks": max_observed_ineligible,
+        "allowed_final_ineligible_markers": len(expected_eager_lines),
+        "unexpected_fallback_counts": unexpected_fallback_counts,
+        "unexpected_eager_fallback_markers": len(unexpected_eager_lines),
         "failure_markers": failures,
         "issues": issues,
     }
@@ -354,6 +422,7 @@ def main() -> None:
         log_report = _scan_server_log(
             args.server_log,
             require_runtime_stats=args.require_runtime_stats,
+            max_final_ineligible=len(results),
         )
         issues.extend(log_report["issues"])
     elif args.require_runtime_stats:

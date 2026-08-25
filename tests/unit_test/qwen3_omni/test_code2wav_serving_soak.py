@@ -101,7 +101,72 @@ def test_server_log_scan_rejects_fallback_and_replay_failure(tmp_path) -> None:
 
     assert report["status"] == "fail"
     assert report["failure_markers"] == {
-        "eager_fallback": 1,
         "runtime_replay_failed": 1,
     }
+    assert report["unexpected_eager_fallback_markers"] == 1
     assert "missing periodic graph runtime stats marker" in report["issues"]
+
+
+def test_server_log_scan_accepts_bounded_final_window_fallback(tmp_path) -> None:
+    log_path = tmp_path / "server.log"
+    log_path.write_text(
+        'Code2Wav NPU graph startup stats={"disable_reason":null,"enabled":true}\n'
+        "Code2Wav NPU graph replay active: execution_mode=npu_graph\n"
+        "Code2Wav NPU graph eager fallback: reason=ineligible key=None\n"
+        "Code2Wav NPU graph runtime stats: graph_replays=100 "
+        "replay_failures=0 fallback_counts={'ineligible': 26}\n"
+    )
+
+    report = _scan_server_log(
+        log_path,
+        require_runtime_stats=True,
+        max_final_ineligible=32,
+    )
+
+    assert report["status"] == "pass"
+    assert report["allowed_final_ineligible_fallbacks"] == 26
+    assert report["allowed_final_ineligible_markers"] == 1
+    assert report["unexpected_fallback_counts"] == {}
+
+
+def test_server_log_scan_rejects_ineligible_count_above_request_budget(
+    tmp_path,
+) -> None:
+    log_path = tmp_path / "server.log"
+    log_path.write_text(
+        'Code2Wav NPU graph startup stats={"disable_reason":null,"enabled":true}\n'
+        "Code2Wav NPU graph replay active: execution_mode=npu_graph\n"
+        "Code2Wav NPU graph eager fallback: reason=ineligible key=None\n"
+        "Code2Wav NPU graph runtime stats: graph_replays=100 "
+        "replay_failures=0 fallback_counts={'ineligible': 33}\n"
+    )
+
+    report = _scan_server_log(
+        log_path,
+        require_runtime_stats=True,
+        max_final_ineligible=32,
+    )
+
+    assert report["status"] == "fail"
+    assert any("exceeds request budget" in issue for issue in report["issues"])
+
+
+def test_server_log_scan_rejects_non_final_or_key_miss_fallback(tmp_path) -> None:
+    log_path = tmp_path / "server.log"
+    log_path.write_text(
+        'Code2Wav NPU graph startup stats={"disable_reason":null,"enabled":true}\n'
+        "Code2Wav NPU graph replay active: execution_mode=npu_graph\n"
+        "Code2Wav NPU graph eager fallback: reason=ineligible key=GraphKey(1, 7)\n"
+        "Code2Wav NPU graph runtime stats: graph_replays=100 "
+        "replay_failures=0 fallback_counts={'ineligible': 1, 'key_miss': 1}\n"
+    )
+
+    report = _scan_server_log(
+        log_path,
+        require_runtime_stats=True,
+        max_final_ineligible=32,
+    )
+
+    assert report["status"] == "fail"
+    assert report["unexpected_eager_fallback_markers"] == 1
+    assert report["unexpected_fallback_counts"] == {"key_miss": 1}
