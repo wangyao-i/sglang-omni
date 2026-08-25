@@ -422,7 +422,7 @@ def main() -> None:
         log_report = _scan_server_log(
             args.server_log,
             require_runtime_stats=args.require_runtime_stats,
-            max_final_ineligible=len(results),
+            max_final_ineligible=sum(result.status == "pass" for result in results),
         )
         issues.extend(log_report["issues"])
     elif args.require_runtime_stats:
