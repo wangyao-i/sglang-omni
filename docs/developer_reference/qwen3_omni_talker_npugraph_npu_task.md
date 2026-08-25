@@ -1,5 +1,9 @@
 # Qwen3-Omni Talker NPUGraph on Ascend NPU
 
+> The isolated-server execution contract, current sampler blocker, required
+> cross-repository commits, and result template are recorded in
+> `qwen3_omni_talker_npugraph_npu_handoff.md`.
+
 ## Dependency and Branch Contract
 
 This is stacked work. The branch `npu-talker-npugraph` is based on
