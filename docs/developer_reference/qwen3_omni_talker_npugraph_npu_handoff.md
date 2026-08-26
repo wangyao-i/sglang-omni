@@ -1,5 +1,54 @@
 # Qwen3-Omni Talker NPUGraph NPU Handoff
 
+## Completion Status
+
+> **Status: complete.** The batch-one and 16-sequential plus 16-concurrent
+> stability gates passed on Ascend 910 A3. Talker replayed through SGLang's full
+> decode NPUGraph runner, Thinker decode graphs remained disabled, and
+> Code2Wav NPUGraph remained enabled.
+
+Validated runtime matrix:
+
+- Ascend 910 A3 with CANN 9.0.1;
+- PyTorch 2.10.0+cpu and torch_npu 2.10.0.post2;
+- SGLang v0.5.16 base `fdebc938f7`;
+- Thinker TP=8 on NPU 0-7;
+- Talker and Code2Wav colocated on NPU 8.
+
+The isolated server report supplied commit messages but not its three commit
+hashes. The verified changes were reconstructed locally as:
+
+| Repository | Server change | Local equivalent |
+|---|---|---|
+| sglang-omni | `[NPU] Route Talker sampling through Ascend backend on NPU` | `71bd777d` |
+| sglang | `[NPU] Make Ascend top-k/top-p sampling guard capture-safe` | `f46251ce8` |
+| sglang | `[NPU] Cast top_ps to logits dtype for fused npu_top_k_top_p` | `ec43c1f20` |
+
+The two SGLang equivalents are on branch
+`npu/talker-npugraph-v0.5.16` in the dedicated v0.5.16 worktree. Add the server
+hashes to this table if they become available; their absence does not weaken
+the supplied hardware evidence or the locally reviewable equivalents.
+
+Completion evidence:
+
+- focused Omni suite: 17 passed on the isolated server;
+- wider Omni suite: 91 passed, 6 skipped;
+- focused SGLang capture-safety suite: 4 passed;
+- batch one: two valid WAV responses, Talker
+  `execution_mode=npu_graph batch_size=1`, and Code2Wav NPUGraph replay;
+- stability: 32/32 valid WAV responses, zero request failures, peak concurrency
+  four, and zero in-contract Talker eager markers;
+- zero `aclnnNonzeroV2`, ACL `107027`, `161002`/`EZ1001`, capture failure, or
+  replay failure markers;
+- Code2Wav reported zero replay failures; only its expected final-tail
+  `reason=ineligible` fallback was observed;
+- the post-run health endpoint and participating NPUs remained healthy;
+- live tensor memory stabilized after scheduler drain and device synchronize.
+
+Use `/v1/chat/completions` with `modalities=["audio"]` and WAV audio options for
+this qualification. `/v1/audio/speech` currently has an unrelated text-to-chat
+message wrapping failure and is not part of this gate.
+
 ## Purpose
 
 This file is the execution contract between the public-repository Agent and the
@@ -50,7 +99,7 @@ On NPU, the PyTorch sampling path lowers boolean advanced indexing to
 hardware qualification, reconstruct that change on the Omni branch with its
 two new regression tests and the corrected environment-dependent assertion.
 
-The remaining blocker is in SGLang `v0.5.16`:
+The second blocker was in SGLang `v0.5.16`:
 
 ```text
 python/sglang/srt/layers/sampler.py
@@ -60,6 +109,12 @@ top_k_top_p_min_p_sampling_from_logits_ascend()
 Its fused-kernel guard calls `torch.all()` on the device `top_ks` tensor. That
 causes a device-to-host scalar synchronization during capture and fails with
 ACL `107027` (`Not allow to synchronize captured-stream`).
+
+After that guard was made capture-safe, the eligible eager fused path exposed
+a third issue: `torch_npu.npu_top_k_top_p` requires `top_ps` to have the same
+dtype as `logits`. `SamplingBatchInfo` supplied FP32 `top_ps` with BF16 Talker
+logits, causing `AclNN_Parameter_Error` `161002`/`EZ1001`. Casting `top_ps` to
+`logits.dtype` immediately before the fused call resolved it.
 
 ## Phase 1: Reconstruct and Verify the Omni Fix
 
@@ -122,6 +177,12 @@ Add regression coverage proving that capture mode neither calls `torch.all`
 nor enters `npu_top_k_top_p`; retain coverage for the eligible eager fused path
 and the out-of-range eager fallback. Commit this change only in SGLang and
 report its hash.
+
+Commit the capture-safe guard first. In a second commit, cast `top_ps` to
+`logits.dtype` inside the `if use_fused_top_k_top_p:` block immediately before
+calling `npu_top_k_top_p`. Strengthen the eligible eager regression test with
+BF16 logits and FP32 `top_ps`, and assert that the fused stub receives BF16
+`top_ps`. Keep the v0.5.16 argument order unchanged.
 
 Before the full service run:
 
@@ -222,7 +283,5 @@ Commits created:
 Working tree status:
 ```
 
-Do not mark this handoff complete until both the batch-one and stability gates
-pass. After completion, update this file with a short completion status and the
-two final commit hashes; preserve this procedure for future CANN/torch_npu
-qualification.
+This handoff is complete. Preserve the procedure for future CANN, PyTorch, or
+torch_npu qualification and rerun both gates when the runtime matrix changes.

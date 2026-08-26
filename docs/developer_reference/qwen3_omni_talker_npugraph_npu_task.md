@@ -1,6 +1,10 @@
 # Qwen3-Omni Talker NPUGraph on Ascend NPU
 
-> The isolated-server execution contract, current sampler blocker, required
+> **Status: complete.** Batch-one and 16-sequential plus 16-concurrent serving
+> gates passed on Ascend 910 A3. The validated runtime matrix, commit mapping,
+> failure resolutions, and evidence summary are preserved in the handoff.
+>
+> The isolated-server execution contract, resolved sampler blockers, required
 > cross-repository commits, and result template are recorded in
 > `qwen3_omni_talker_npugraph_npu_handoff.md`.
 
