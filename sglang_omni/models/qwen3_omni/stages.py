@@ -28,6 +28,7 @@ from sglang_omni.models.qwen3_omni.request_builders import (
     apply_encoder_result,
     build_encoder_request,
 )
+from sglang_omni.platforms import current_platform
 from sglang_omni.profiler.event_recorder import emit as _emit_event
 from sglang_omni.proto import StagePayload
 from sglang_omni.scheduling.generation_batch_policy import (
@@ -97,14 +98,14 @@ def _apply_colocated_ar_memory_contract(
         if encoder_mem_reserve:
             raise ValueError(
                 f"Stage {stage_name} cannot apply encoder_mem_reserve when "
-                "runtime.sglang_server_args.mem_fraction_static is explicitly set."
+                "engine.mem_fraction_static is explicitly set."
             )
         if abs(float(explicit_mem_fraction) - total_gpu_memory_fraction) > 1e-3:
             raise ValueError(
                 f"Stage {stage_name} sets conflicting colocated memory "
                 "contracts: runtime.resources.total_gpu_memory_fraction="
                 f"{total_gpu_memory_fraction:.3f} and "
-                "runtime.sglang_server_args.mem_fraction_static="
+                "engine.mem_fraction_static="
                 f"{float(explicit_mem_fraction):.3f}. Use one value or make "
                 "the explicit SGLang override match the stage total budget."
             )
@@ -801,7 +802,7 @@ def _batch_audio_encoder_payloads(
 def create_preprocessing_executor(
     model_path: str,
     *,
-    thinker_max_seq_len: int | None = None,
+    max_seq_len: int | None = None,
     video_fps: float | None = None,
     video_max_frames: int | None = None,
     video_min_pixels: int | None = None,
@@ -812,7 +813,7 @@ def create_preprocessing_executor(
 
     preprocessor = Qwen3OmniPreprocessor(
         model_path=model_path,
-        max_seq_len=thinker_max_seq_len,
+        max_seq_len=max_seq_len,
         video_fps=video_fps,
         video_max_frames=video_max_frames,
         video_min_pixels=video_min_pixels,
@@ -1002,7 +1003,7 @@ def create_sglang_thinker_executor_from_config(
     tp_rank: int = 0,
     tp_size: int = 1,
     nccl_port: int | None = None,
-    thinker_max_seq_len: int = 8192,
+    max_seq_len: int = 8192,
     server_args_overrides: dict[str, Any] | None = None,
     encoder_mem_reserve: float = 0.05,
     speech_enabled: bool = False,
@@ -1053,7 +1054,7 @@ def create_sglang_thinker_executor_from_config(
     )
     server_args = build_sglang_server_args(
         model_path,
-        context_length=thinker_max_seq_len,
+        context_length=max_seq_len,
         **overrides,
     )
     validate_generation_batch_policy(
@@ -1082,7 +1083,7 @@ def create_sglang_thinker_executor_from_config(
     pre_load_process_mem = get_process_gpu_memory_bytes(gpu_id)
     logger.info(
         f"sglang_ar_startup stage=thinker gpu_id={gpu_id} tp_rank={tp_rank}/{tp_size} "
-        f"context_length={thinker_max_seq_len} "
+        f"context_length={max_seq_len} "
         f"total_gpu_memory_fraction={total_gpu_memory_fraction} "
         f"effective_total_gpu_memory_fraction={effective_total_gpu_memory_fraction} "
         f"mem_fraction_static={server_args.mem_fraction_static} "
@@ -1107,7 +1108,7 @@ def create_sglang_thinker_executor_from_config(
     post_load_process_mem = get_process_gpu_memory_bytes(gpu_id)
     logger.info(
         f"sglang_ar_started stage=thinker gpu_id={gpu_id} tp_rank={tp_rank}/{tp_size} "
-        f"context_length={thinker_max_seq_len} "
+        f"context_length={max_seq_len} "
         f"total_gpu_memory_fraction={total_gpu_memory_fraction} "
         f"effective_total_gpu_memory_fraction={effective_total_gpu_memory_fraction} "
         f"mem_fraction_static={server_args.mem_fraction_static} "
@@ -1127,7 +1128,7 @@ def create_talker_ar_executor_from_config(
     tp_rank: int = 0,
     tp_size: int = 1,
     nccl_port: int | None = None,
-    talker_max_seq_len: int = 4096,
+    max_seq_len: int = 4096,
     server_args_overrides: dict[str, Any] | None = None,
     speech_enabled: bool = True,
     feedback_enabled: bool = True,
@@ -1142,16 +1143,20 @@ def create_talker_ar_executor_from_config(
     # Note (Xuesong, Chenyang): cuda_graph defaults to ON for the talker
     # after #384, which routed talker MoE through `self.experts` (FusedMoE)
     # — the `fused_experts (full graph)` backend picked in #344. Caller can
-    # override via factory_args or the `--talker-cuda-graph off` CLI flag.
+    # override via the talker stage's engine.disable_cuda_graph setting.
     # Note (Xuesong): pytorch backend works around an sglang upstream gap —
-    # Sampler.forward doesn't forward seed to flashinfer, so
-    # under cuda graph the captured RNG is boot-dependent and ~5% of prompts
-    # trigger degenerate AR loops (see #408). Revert once upstream lands.
+    # Sampler.forward doesn't forward seed to flashinfer, so under CUDA graph
+    # the captured RNG is boot-dependent and ~5% of prompts trigger degenerate
+    # AR loops (see #408). NPU must use the Ascend backend: the PyTorch path's
+    # boolean advanced indexing lowers to aclnnNonzeroV2, which is not safe
+    # during NPU graph capture. An explicit server_args_overrides value wins.
     overrides = build_generation_batch_overrides(
         max_running_requests=32,
         server_args_overrides=server_args_overrides,
         disable_cuda_graph=False,
-        sampling_backend="pytorch",
+        sampling_backend=(
+            "ascend" if current_platform.device_type == "npu" else "pytorch"
+        ),
     )
     overrides["tp_size"] = tp_size
     _apply_colocated_ar_memory_contract(
@@ -1161,7 +1166,7 @@ def create_talker_ar_executor_from_config(
     )
     server_args = build_sglang_server_args(
         model_path,
-        context_length=talker_max_seq_len,
+        context_length=max_seq_len,
         **overrides,
     )
     validate_generation_batch_policy(
@@ -1170,9 +1175,17 @@ def create_talker_ar_executor_from_config(
     )
     pre_load_avail_mem = avail_gpu_mem(gpu_id)
     pre_load_process_mem = get_process_gpu_memory_bytes(gpu_id)
+    decode_graph_config = getattr(
+        getattr(server_args, "cuda_graph_config", None), "decode", None
+    )
     logger.info(
         f"sglang_ar_startup stage=talker_ar gpu_id={gpu_id} tp_rank={tp_rank}/{tp_size} "
-        f"context_length={talker_max_seq_len} "
+        f"context_length={max_seq_len} "
+        f"disable_cuda_graph={server_args.disable_cuda_graph} "
+        f"disable_decode_cuda_graph="
+        f"{getattr(server_args, 'disable_decode_cuda_graph', None)} "
+        f"decode_cuda_graph_backend="
+        f"{getattr(decode_graph_config, 'backend', None)} "
         f"total_gpu_memory_fraction={total_gpu_memory_fraction} "
         f"mem_fraction_static={server_args.mem_fraction_static} "
         f"pre_load_avail_mem={pre_load_avail_mem} "
@@ -1194,7 +1207,7 @@ def create_talker_ar_executor_from_config(
     post_load_process_mem = get_process_gpu_memory_bytes(gpu_id)
     logger.info(
         f"sglang_ar_started stage=talker_ar gpu_id={gpu_id} tp_rank={tp_rank}/{tp_size} "
-        f"context_length={talker_max_seq_len} "
+        f"context_length={max_seq_len} "
         f"total_gpu_memory_fraction={total_gpu_memory_fraction} "
         f"mem_fraction_static={server_args.mem_fraction_static} "
         f"pre_load_avail_mem={pre_load_avail_mem} "
