@@ -59,20 +59,22 @@ PY
 
 Expected source stack:
 
-- sglang-omni Talker branch containing the three PR commits based on
-  `npu-code2wav-npugraph`;
+- sglang-omni community Talker HEAD `74120f7c`, or internal handoff branch
+  `npu-talker-npugraph` whose code tree contains that exact HEAD;
+- Code2Wav base HEAD `7320eeee` and upstream-main base `c2d193fc`;
 - SGLang v0.5.16 plus the capture-safe Ascend sampler and `top_ps` dtype fixes;
 - Thinker TP=8 on NPU 0-7;
 - Talker and Code2Wav on NPU 8;
 - Thinker graph off and Code2Wav graph on in both A/B modes;
-- `max-running-requests=4` and `cuda-graph-max-bs=4` in both modes.
+- Thinker and Talker `engine.max_running_requests=4` and
+  `engine.cuda_graph_max_bs=4` in both modes.
 
 The only allowed A/B difference is:
 
 | Mode | Launch argument |
 |---|---|
-| `graph_off` | `--talker-cuda-graph off` |
-| `graph_on` | `--talker-cuda-graph on` |
+| `graph_off` | `--talker_ar.engine.disable_cuda_graph true` |
+| `graph_on` | `--talker_ar.engine.disable_cuda_graph false` |
 
 Use the same patched SGLang checkout for both modes. NPU must continue to use
 the Ascend sampling backend when the Talker graph is off; otherwise the run
@@ -110,8 +112,11 @@ Do not mix two corpora in one comparison.
 For every A/B mode change, stop the old service and launch a fresh process with
 a new log. Start from the Phase 2 command in
 `qwen3_omni_talker_npugraph_npu_task.md`, keep all its topology and memory
-arguments, and change only `--talker-cuda-graph off|on`. Wait for the health
-endpoint before benchmarking.
+arguments, and change only
+`--talker_ar.engine.disable_cuda_graph true|false`. The canonical config
+runtime propagates that value to SGLang's phase-specific
+`disable_decode_cuda_graph` switch unless it is explicitly overridden. Wait
+for the health endpoint before benchmarking.
 
 Before each measured cell:
 

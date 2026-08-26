@@ -2,10 +2,12 @@
 
 ## Completion Status
 
-> **Status: complete.** The batch-one and 16-sequential plus 16-concurrent
-> stability gates passed on Ascend 910 A3. Talker replayed through SGLang's full
-> decode NPUGraph runner, Thinker decode graphs remained disabled, and
-> Code2Wav NPUGraph remained enabled.
+> **Status: historical hardware gate complete; rebased-head qualification
+> pending.** The batch-one and 16-sequential plus 16-concurrent stability gates
+> passed on Ascend 910 A3 before the community branches were rebased over the
+> canonical config refactor. Talker HEAD `74120f7c` preserves the qualified
+> runtime changes, but must pass the batch-one probe and performance task on
+> the isolated server before the pull-request evidence is considered current.
 
 Validated runtime matrix:
 
@@ -20,7 +22,7 @@ hashes. The verified changes were reconstructed locally as:
 
 | Repository | Server change | Local equivalent |
 |---|---|---|
-| sglang-omni | `[NPU] Route Talker sampling through Ascend backend on NPU` | `71bd777d` |
+| sglang-omni | `[NPU] Route Talker sampling through Ascend backend on NPU` | `74120f7c` |
 | sglang | `[NPU] Make Ascend top-k/top-p sampling guard capture-safe` | `f46251ce8` |
 | sglang | `[NPU] Cast top_ps to logits dtype for fused npu_top_k_top_p` | `ec43c1f20` |
 
@@ -75,15 +77,22 @@ The Omni work is intentionally stacked:
 
 ```text
 sglang-omni upstream/main
-  -> npu-code2wav-npugraph
-    -> npu-talker-npugraph
+  c2d193fc
+    -> npu-code2wav-npugraph 7320eeee
+      -> br_omni_npu_talker_npugraph 74120f7c
+        -> npu-talker-npugraph (internal documents only)
 ```
 
-Use the `npu-talker-npugraph` branch in `sglang-omni`. It currently contains:
+Use the `npu-talker-npugraph` branch in `sglang-omni`. Its community code base
+contains:
 
-- `de4d2dd9 [NPU] Log talker decode graph startup settings`;
-- `6e421116 [NPU] Log Qwen3-Omni talker graph replay mode`;
-- `e752cef0 docs: add Qwen3-Omni Talker NPUGraph NPU gate`.
+- `a38ef396 [NPU] Log talker decode graph startup settings`;
+- `fc8e484d [NPU] Log Qwen3-Omni talker graph replay mode`;
+- `74120f7c [NPU] Route Talker sampling through Ascend backend on NPU`.
+
+The internal-only commits above `74120f7c` contain only `AGENTS.md` and the
+durable handoff/task documents. Do not include them in the community pull
+request.
 
 The runtime dependency is a separate SGLang checkout based on `v0.5.16`. Do
 not copy the framework patch into `sglang-omni` or edit an installed
@@ -91,8 +100,10 @@ site-package. Record the exact SGLang HEAD before testing; `v0.5.16` points to
 `fdebc93`, but an internal checkout may contain additional vendor commits and
 must be patched from its actual HEAD.
 
-Until the Code2Wav branch merges, a Talker pull request must target
-`npu-code2wav-npugraph`, not `main`. Thinker decode graphs remain disabled and
+Community PR #1737 currently targets upstream `main`, so its view includes the
+eight #1710 commits plus three Talker commits. This is a GitHub cross-fork base
+limitation, not an unstacked code history. After #1710 merges, rebase the three
+Talker commits onto upstream `main`. Thinker decode graphs remain disabled and
 the already-qualified Code2Wav NPUGraph path must remain enabled.
 
 ## Current Hardware Findings

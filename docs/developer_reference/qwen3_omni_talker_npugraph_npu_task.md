@@ -1,8 +1,10 @@
 # Qwen3-Omni Talker NPUGraph on Ascend NPU
 
-> **Status: complete.** Batch-one and 16-sequential plus 16-concurrent serving
-> gates passed on Ascend 910 A3. The validated runtime matrix, commit mapping,
-> failure resolutions, and evidence summary are preserved in the handoff.
+> **Status: previous baseline complete; rebased-head probe pending.** Batch-one
+> and 16-sequential plus 16-concurrent serving gates passed on Ascend 910 A3
+> before the community branches were rebased over the canonical config
+> refactor. Run Phase 1 on Talker HEAD `74120f7c`, then execute the linked
+> performance task; its full request matrix also re-establishes stability.
 >
 > The isolated-server execution contract, resolved sampler blockers, required
 > cross-repository commits, and result template are recorded in
@@ -14,12 +16,17 @@
 
 ## Dependency and Branch Contract
 
-This is stacked work. The branch `npu-talker-npugraph` is based on
-`npu-code2wav-npugraph`, the head branch of
+This is stacked work. Internal branch `npu-talker-npugraph` is based on
+community Talker branch `br_omni_npu_talker_npugraph` at `74120f7c`. That
+branch contains three Talker commits on Code2Wav branch
+`npu-code2wav-npugraph` at `7320eeee`, the head branch of
 [sglang-omni PR #1710](https://github.com/sgl-project/sglang-omni/pull/1710).
-Until #1710 merges, a Talker pull request must target
-`wangyao-i/sglang-omni:npu-code2wav-npugraph`, not `main`. After #1710 merges,
-rebase this branch onto the new upstream `main` and retarget the pull request.
+Both community branches have been rebased onto upstream `main` at `c2d193fc`.
+PR #1737 targets upstream `main` because an upstream pull request cannot use a
+branch in the contributor fork as its base; until #1710 merges, its 11-commit
+view intentionally includes the eight Code2Wav commits plus three Talker
+commits. Rebase the three Talker commits onto upstream `main` after #1710
+merges.
 
 The stack is intentional:
 
@@ -78,22 +85,23 @@ enable the Talker graph:
 ```bash
 sgl-omni serve \
   --model-path /home/weights/Qwen3-Omni-30B-A3B-Instruct \
-  --thinker-tp-size 8 \
-  --thinker-gpus 0,1,2,3,4,5,6,7 \
-  --talker-gpu 8 \
-  --code2wav-gpu 8 \
-  --stages.thinker.process thinker \
-  --stages.image_encoder.runtime.resources.total_gpu_memory_fraction 0.03 \
-  --stages.audio_encoder.runtime.resources.total_gpu_memory_fraction 0.03 \
-  --stages.thinker.runtime.resources.total_gpu_memory_fraction 0.80 \
-  --stages.talker_ar.runtime.resources.total_gpu_memory_fraction 0.20 \
-  --stages.code2wav.runtime.resources.total_gpu_memory_fraction 0.02 \
-  --stages.code2wav.factory_args.enable_cuda_graph true \
-  --thinker-cuda-graph off \
-  --talker-cuda-graph on \
-  --talker-partial-start off \
-  --max-running-requests 1 \
-  --cuda-graph-max-bs 1 \
+  --thinker.tp_size 8 \
+  --thinker.gpu "[0,1,2,3,4,5,6,7]" \
+  --talker_ar.gpu 8 \
+  --code2wav.gpu 8 \
+  --image_encoder.gpu_memory_fraction 0.03 \
+  --audio_encoder.gpu_memory_fraction 0.03 \
+  --thinker.gpu_memory_fraction 0.80 \
+  --talker_ar.gpu_memory_fraction 0.20 \
+  --code2wav.gpu_memory_fraction 0.02 \
+  --code2wav.factory.enable_cuda_graph true \
+  --thinker.engine.disable_cuda_graph true \
+  --talker_ar.engine.disable_cuda_graph false \
+  --talker_ar.factory.enable_partial_start false \
+  --thinker.engine.max_running_requests 1 \
+  --talker_ar.engine.max_running_requests 1 \
+  --thinker.engine.cuda_graph_max_bs 1 \
+  --talker_ar.engine.cuda_graph_max_bs 1 \
   --host 0.0.0.0 --port 8008 \
   2>&1 | tee /tmp/qwen3_omni_talker_npugraph_b1.log
 ```
@@ -118,9 +126,10 @@ startup capture alone is not accepted as evidence of replay.
 
 ## Phase 2: Serving Stability Gate
 
-After batch-one passes, raise `max_running_requests` and
-`cuda_graph_max_bs` together to four and rerun in a fresh process. Run 16
-sequential requests followed by 16 requests at concurrency four.
+After batch-one passes, raise both Thinker and Talker
+`engine.max_running_requests` and `engine.cuda_graph_max_bs` values together to
+four and rerun in a fresh process. Run 16 sequential requests followed by 16
+requests at concurrency four.
 
 Pass criteria:
 
