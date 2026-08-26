@@ -7,6 +7,10 @@
 > The isolated-server execution contract, resolved sampler blockers, required
 > cross-repository commits, and result template are recorded in
 > `qwen3_omni_talker_npugraph_npu_handoff.md`.
+>
+> Numerical graph-off versus graph-on latency and throughput qualification is
+> tracked separately in
+> `qwen3_omni_talker_npugraph_npu_performance_task.md`.
 
 ## Dependency and Branch Contract
 

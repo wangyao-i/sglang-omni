@@ -63,6 +63,12 @@ The detailed serving procedure and pass criteria live in
 stack, cross-repository dependency, current blockers, execution order, and the
 evidence that must be returned.
 
+The completed stability gate proves correctness and graph replay but does not
+yet quantify graph benefit. The graph-off versus graph-on latency, RTF,
+throughput, and memory run is specified in
+`qwen3_omni_talker_npugraph_npu_performance_task.md`. Add its compact median
+table here after the isolated-server result returns.
+
 ## Branch and Dependency Contract
 
 The Omni work is intentionally stacked:
