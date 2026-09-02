@@ -21,7 +21,8 @@ Status at base commit `e7d876b28326c55d777ae62e1c3650b816785d8c`:
 **A3 eager functional baseline and generation graph capacities 1 through 70
 with torch compile disabled passed capture and single-request replay; the named
 encoder-eager candidate passes two concurrent requests after both inputs are
-warmed but hangs when uncached encoder work overlaps generation, while compiled
+warmed but hangs only when uncached encoder work overlaps enabled generation
+graph execution; disabling generation graph removes the hang, while compiled
 generation and encoder graph remain unqualified**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
@@ -35,7 +36,7 @@ remains unstarted until the same gates run on the intended device class.
 | Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager batch 1, two-concurrent, ten-sequential, health, shutdown, and restart gates passed after repairing the OpenCV environment; not yet started on 910B |
 | Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | With torch compile disabled, A3 capacities 1/16/32/64/70 captured and each passed one decode replay smoke; with compile enabled, batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; maximum-bucket concurrent replay remains untested |
 | Encoder graph | Implemented with `torch.cuda.Stream`, `torch.cuda.CUDAGraph`, and `torch.cuda.graph`; enabled by default | A3 capture failed for every attempted bucket because captured-stream synchronization memcpy is unsupported; each bucket explicitly stayed eager |
-| Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; the cap-70 named candidate passes a both-warm two-request wave but hangs when a cached request overlaps a second clip's uncached encode |
+| Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; the cap-70 named candidate passes a both-warm wave and a graph-disabled warm-A/cold-B wave, but hangs when cold encoder work overlaps enabled generation graph execution |
 | SSE transcription | Emits decoder-token deltas after the complete upload has entered one engine request | Not continuous audio-input realtime |
 | Realtime WebSocket | Buffers PCM16 until VAD stops, then runs a response pass followed by a transcription pass | Does not meet the incremental-ASR target by inspection; not yet verified on 910B |
 
@@ -398,6 +399,33 @@ miss alone is sufficient. A warm-corpus workaround is not an acceptable
 performance qualification because the offline contract requires distinct
 audio bytes with no repeated-audio cache hits.
 
+### Generation-graph cold-overlap A/B
+
+Run `910C-010` used two fresh processes with the exact same warm-A/cold-B
+request order and changed only generation graph enablement. Arm A retained the
+capacity-70 graph profile. After clip A warmed and state drained, the A+B wave
+reproduced the failure: both clients timed out after 120 seconds with no bytes,
+coordinator state remained at two running requests and two pending completions,
+only one `#new-seq: 1` graph prefill appeared, and no decode followed. HBM was
+stable and no graph fallback or device error was reported.
+
+Arm B explicitly disabled generation graph. The same warm-A/cold-B wave
+completed in 0.44 seconds with two HTTP 200 responses and the two frozen output
+hashes. Its two requests coalesced into one `#new-seq: 2` prefill with
+`npu graph: False`, and all state drained. Encoder graph remained explicitly
+disabled in both arms, so neither arm attempted encoder capture or emitted the
+known encoder fallback signature.
+
+This establishes generation graph execution as a necessary condition for the
+observed cold-encoder hang under the tested configuration. Together with
+`910C-009`, the failure requires both an uncached encoder operation and enabled
+generation graph execution; removing either condition avoids it. It does not
+yet prove that shared NPU default-stream execution is the complete mechanism.
+The asynchronous request-builder lets encoder device work overlap scheduler
+generation, and insertion-ordered future draining can amplify a blocked first
+build, so one further serialization A/B is required before selecting a source
+fix.
+
 ### Independent encoder graph failure
 
 The same run produced hardware evidence for the encoder boundary previously
@@ -434,55 +462,51 @@ next server run.
 
 ## Next bounded diagnostic task
 
-Run identifier: `910C-010`. Perform a two-arm, fresh-process A/B that changes
-only **generation graph enablement** while preserving the `910C-008` cold-
-overlap request order. This tests whether generation graph execution is a
-necessary condition for the hang before source instrumentation is introduced.
+Run identifier: `910C-011`. Retain the graph-enabled `910C-010` Arm A profile
+and change only `request_build_max_workers` from 8 to 1. At one worker the
+scheduler does not construct a request-build thread pool, so request building
+and its blocking pre-LM encode execute synchronously on the scheduler thread.
+This tests whether asynchronous encoder/generation overlap is necessary for
+the hang; it is a correctness diagnostic, not a performance candidate.
 
-1. For both arms retain the repaired A3 stack, torch compile disabled, encoder
-   graph explicitly disabled, `max_running_requests=70`, unchanged encoder
-   cache, prefill coalescing, request-builder, memory, versions, frozen clips,
-   expected hashes, request timing, and 120-second client timeouts. Use no retry.
-2. Before each arm require a fresh service process, clean tracked worktree, no
-   process or port owner, healthy device state, and idle-baseline HBM. After
-   each arm stop and verify process/port release, device health, idle HBM, and
-   no orphan process before continuing.
-3. Arm A is the control: use the exact named-candidate generation graph profile
-   with capacity 70. Require capture through bucket 70 and zero encoder graph
-   capture/fallback/error signatures. Warm clip A only, wait for all state to
-   drain, leave clip B uncached, then submit one synchronized A+B wave.
-4. Poll coordinator health and `GET /model_info` at submission and approximately
-   1, 5, 15, 30, 60, and 120 seconds until completion or timeout. Preserve
-   sanitized coordinator states/completions, scheduler
-   `request_build_pending`, `request_admission_pending`, build backlog,
-   waiting-queue size, `running_batch_size`, request-build start/end events,
-   prefill/decode events, and NPU utilization/HBM.
-5. If Arm A does not reproduce the hang, stop after cleanup and classify the A/B
-   as invalid because the control did not reproduce. Do not run Arm B, increase
-   concurrency, or add source diagnostics.
-6. If Arm A reproduces the hang, preserve its complete first-failure timeline,
-   clean the service, and run Arm B. Change only generation graph to explicitly
-   disabled with `--asr.engine.disable_cuda_graph true`; keep encoder graph
-   disabled, torch compile disabled, capacity/admission/cache/coalescing, and
-   the warm-A/cold-B synchronized wave unchanged. No `npu graph` marker is
-   expected in this arm.
-7. Arm B passes only if both requests return HTTP 200 with their respective
-   frozen hashes, no forbidden device/runtime error occurs, and coordinator,
-   build, admission, waiting, and running counts drain. If it passes,
-   generation graph execution is necessary for the observed hang and the next
-   fix should isolate NPU default-stream coordination between encoder work and
-   graph generation. If it hangs, generation graph is not necessary and the
-   next task should distinguish general encoder/generation default-stream
-   concurrency from scheduler future/admission head-of-line blocking.
-8. This predeclared control/treatment A/B may proceed from the reproduced Arm A
-   failure to Arm B; that is not authorization to expand load. Do not run more
-   than the warm request and one two-request wave per arm.
+1. Use one fresh process with the repaired A3 stack, generation graph capacity
+   70, torch compile disabled, encoder graph explicitly disabled,
+   `max_running_requests=70`, and `request_build_max_workers=1`. Retain the
+   exact cache, pending-build limit where accepted, prefill coalescing, memory,
+   versions, frozen clips, expected hashes, request timing, 120-second timeout,
+   and no-retry policy from `910C-010` Arm A.
+2. Before startup require a clean tracked worktree, no process or port owner,
+   healthy device state, and idle-baseline HBM. Verify the resolved profile has
+   one request-build worker, no request-build executor, generation capture
+   through bucket 70, and zero encoder capture/fallback/error signatures. If
+   the runtime does not expose executor state, the worker count plus the
+   absence of asynchronous build-pending growth is acceptable evidence.
+3. Warm clip A only, wait for coordinator, admission, build, waiting, and
+   running state to drain, confirm one cache entry, and leave clip B uncached.
+   Then submit exactly one synchronized A+B wave with the same ordering and
+   client harness as `910C-010`.
+4. Poll health and `GET /model_info` at submission and approximately 1, 5, 15,
+   30, 60, and 120 seconds until completion or timeout. Preserve request-build
+   start/end, encoder batch, prefill/decode, coordinator and scheduler state,
+   NPU utilization/HBM, hashes, and latencies. Do not retry or run larger load.
+5. Pass requires two HTTP 200 responses with the respective frozen hashes,
+   generation `npu graph: True`, zero graph fallback/forbidden errors, and all
+   state drained. A pass establishes asynchronous request-building overlap as
+   another necessary condition and authorizes local design of an NPU-specific
+   encoder/generation exclusion protocol before a hardware fix run.
+6. A hang shows that moving encode onto the scheduler thread is insufficient;
+   preserve the first complete timeline and stop. The next local diagnostic
+   must then instrument device-operation boundaries rather than altering build
+   ordering or worker count.
+7. Stop normally when possible; after a hang use bounded forced cleanup.
+   Confirm process/port release, device health, idle HBM, and no orphan process.
 
-Do not add diagnostic prints, edit SGLang/Omni/CANN packages, re-enable encoder
-graph, change admission capacity, clear or resize caches, alter coalescing, run
-larger concurrency, performance, or realtime in `910C-010`. Source
-instrumentation is authorized only in a later locally reviewed diagnostic
-change if this A/B cannot distinguish the blocked layer.
+Do not treat `request_build_max_workers=1` as the performance solution, patch a
+dedicated NPU stream on the server, change generation/encoder graph settings,
+change admission capacity, cache, coalescing, or pending-build policy, or run
+performance/realtime in `910C-011`. A dedicated NPU stream needs locally
+reviewed cross-stream ordering and tensor-lifetime semantics before hardware
+execution; raw stream diagnostics alone are not a safe fix.
 
 Formal performance prerequisites are not yet met. Maximum-bucket concurrent
 replay is unproven, and the named encoder-eager mode is not stable when an
@@ -532,7 +556,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-007 | `330db6d0`; no runtime edit | not applicable | Repaired A3 stack; SGLang `71de97b2`; headless OpenCV 5.0.0.93; torch compile disabled | generation decode capacity 70 capture and one replay smoke | passed | Bucket list ended exactly at 70; all 13 buckets captured in 2.13 s; smoke HTTP 200 with frozen hash and `npu graph: True`; encoder six-bucket fallback unchanged |
 | 910C-008 | `4e5befe6`; no runtime edit | not applicable | Repaired A3 stack; SGLang `71de97b2`; compile disabled; encoder graph explicitly disabled | named candidate functional and bounded-concurrency ladder | failed at two concurrent | Startup and one request passed; A+B wave timed out at 120 s with two coordinator-running requests, one prefill, no decode, stable HBM, and no error/fallback |
 | 910C-009 | `0452d9de`; no runtime edit | not applicable | Exact `910C-008` named-candidate stack | sequentially warm A/B, then one A+B wave with state polling | passed | Both-warm wave completed in 1.87 s; 2/2 HTTP 200 with frozen hashes, prefill `#new-seq: 2` and `npu graph: True`, zero fallback, and drained state; uncached encoder work is necessary for the `910C-008` hang under the tested ordering |
-| 910C-010 | pending | pending | Exact `910C-008` named-candidate stack required | warm-A/cold-B two-request A/B with generation graph enabled versus explicitly disabled | pending | Control must reproduce before the graph-disabled treatment runs |
+| 910C-010 | `2336ccff`; no runtime edit | not applicable | Exact `910C-008` named-candidate stack; only generation graph enablement varied | warm-A/cold-B two-request A/B with generation graph enabled versus explicitly disabled | Arm A reproduced hang; Arm B passed | Graph on timed out at 120 s with two running requests and no decode; graph off completed 2/2 in 0.44 s with frozen hashes and `npu graph: False`; generation graph execution is necessary for the cold-encoder hang |
+| 910C-011 | pending | pending | Exact graph-enabled `910C-010` Arm A stack required except one request-build worker | warm-A/cold-B two-request wave with synchronous request building | pending | Tests whether asynchronous encoder/generation overlap is also necessary before choosing a source fix |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
