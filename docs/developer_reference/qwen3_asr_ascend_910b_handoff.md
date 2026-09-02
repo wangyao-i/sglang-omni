@@ -24,8 +24,9 @@ encoder-eager candidate passes two concurrent requests after both inputs are
 warmed but hangs only when uncached encoder work overlaps enabled generation
 graph execution; disabling generation graph removes the hang, while compiled
 generation and encoder graph remain unqualified. Synchronous request building
-also removes the hang, and prefill-versus-decode graph scope is the next
-isolation gate**.
+also removes the hang; disabling only prefill graph removes it while decode
+graph remains captured, making prefill-eager/decode-graph the bounded-
+concurrency candidate**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. It is therefore recorded as the derived run
@@ -36,9 +37,9 @@ remains unstarted until the same gates run on the intended device class.
 |---|---|---|
 | Ascend installation | NPU manifest, precheck, and installation guide are implemented | Precheck passed on A3; not yet run on the target 910B |
 | Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager batch 1, two-concurrent, ten-sequential, health, shutdown, and restart gates passed after repairing the OpenCV environment; not yet started on 910B |
-| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | With torch compile disabled, A3 capacities 1/16/32/64/70 captured and each passed one decode replay smoke; with compile enabled, batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; maximum-bucket concurrent replay remains untested |
+| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | With torch compile disabled, A3 capacities 1/16/32/64/70 captured and each passed one decode replay smoke; prefill graph was isolated as necessary for the cold-encoder hang and is disabled in the current candidate; with compile enabled, batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; maximum-bucket concurrent replay remains untested |
 | Encoder graph | Implemented with `torch.cuda.Stream`, `torch.cuda.CUDAGraph`, and `torch.cuda.graph`; enabled by default | A3 capture failed for every attempted bucket because captured-stream synchronization memcpy is unsupported; each bucket explicitly stayed eager |
-| Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; the cap-70 named candidate passes a both-warm wave and a graph-disabled warm-A/cold-B wave, but hangs when cold encoder work overlaps enabled generation graph execution |
+| Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; cold work hangs only when it overlaps asynchronous prefill-graph execution in the tested matrix; prefill eager with decode graph retained passed the two-request wave |
 | SSE transcription | Emits decoder-token deltas after the complete upload has entered one engine request | Not continuous audio-input realtime |
 | Realtime WebSocket | Buffers PCM16 until VAD stops, then runs a response pass followed by a transcription pass | Does not meet the incremental-ASR target by inspection; not yet verified on 910B |
 
@@ -452,6 +453,27 @@ cause. One build worker is a diagnostic result, not a performance candidate:
 it removes request-build parallelism and encoder batching that the measured
 GPU profile needs at higher concurrency.
 
+### Prefill-eager/decode-graph pass
+
+Run `910C-012` returned to eight asynchronous request-build workers and changed
+only prefill graph enablement from the failing `910C-010` Arm A profile.
+Prefill graph was explicitly disabled, decode graph still captured every bucket
+through 70, and encoder graph remained explicitly disabled. After warming only
+clip A, the warm-A/cold-B wave completed in 0.19 seconds with two HTTP 200
+responses and both frozen hashes. The two requests coalesced into one
+`#new-seq: 2` prefill with `npu graph: False`; fallback and forbidden-error
+counts were zero and all state drained.
+
+This isolates prefill graph, rather than decode graph in general, as necessary
+for the observed NPU cold-encoder hang. The result supports a zero-source-change
+prefill-eager/decode-graph candidate with eight build workers. It does not yet
+prove decode replay in that exact run: the short outputs ended before the
+default decode logging interval and `GET /model_info` did not expose a decode
+replay counter. That missing attestation should be collected during the
+bounded-concurrency ladder, where lowering the decode log interval is an
+evidence-only setting; another two-request clip experiment would not add a
+distinct functional boundary.
+
 ### Independent encoder graph failure
 
 The same run produced hardware evidence for the encoder boundary previously
@@ -488,60 +510,69 @@ next server run.
 
 ## Next bounded diagnostic task
 
-Run identifier: `910C-012`. Return to the asynchronous, graph-enabled
-`910C-010` Arm A profile and change only **prefill graph enablement**. Disable
-prefill graph while retaining decode graph through bucket 70. The failed arm
-logged one prefill graph replay and no decode, so this gate determines whether
-the unsafe overlap is specific to prefill graph and whether a zero-source-change
-prefill-eager/decode-graph candidate can preserve the important decode path.
+Run identifier: `910C-013`. Promote the `910C-012` prefill-eager/decode-graph
+profile to a bounded functional concurrency ladder using the existing CUDA
+SeedTTS benchmark scenario. This run must attest decode replay and cold-input
+stability; its short, non-exact-duration clips and evidence logging mean its
+latencies are preliminary and cannot satisfy the hard exact-10-second target.
 
-1. Use one fresh process with the repaired A3 stack, torch compile disabled,
-   encoder graph explicitly disabled, `max_running_requests=70`,
-   `request_build_max_workers=8`, and decode graph capacity 70. Retain the exact
-   cache, pending-build, prefill coalescing, memory, versions, frozen clips,
-   expected hashes, request timing, 120-second timeout, and no-retry policy from
-   `910C-010` Arm A.
-2. Set only `--asr.engine.disable_prefill_cuda_graph true`. Before startup
-   require a clean tracked worktree, no process or port owner, healthy device
-   state, and idle-baseline HBM. Verify prefill graph is explicitly disabled
-   with zero prefill capture/replay attempts, decode graph still captures all
-   buckets through exactly 70, request-build workers resolve to 8, and encoder
-   graph has zero capture/fallback/error signatures.
-3. Warm clip A only, wait for coordinator, admission, build, waiting, and
-   running state to drain, confirm one cache entry, and leave clip B uncached.
-   Submit exactly one synchronized A+B wave using the `910C-010` harness.
-4. Poll health and `GET /model_info` at submission and approximately 1, 5, 15,
-   30, 60, and 120 seconds until completion or timeout. Preserve request-build
-   and encoder events, prefill/decode batch logs, graph counters, coordinator
-   and scheduler state, NPU utilization/HBM, hashes, and latencies.
-5. Pass requires two HTTP 200 responses with their frozen hashes, prefill
-   `npu graph: False`, positive decode-graph replay evidence (`Decode batch`
-   with `npu graph: True` or an equivalent decode replay counter), zero graph
-   fallback/forbidden errors, and all state drained. A pass establishes prefill
-   graph as a necessary condition and promotes prefill-eager/decode-graph with
-   eight build workers to the next bounded-concurrency candidate.
-6. If the wave hangs, preserve the first complete state timeline and stop. Do
-   not run a complementary decode-off arm or edit source. That result means
-   prefill graph alone is not the full boundary and the next step is a locally
-   reviewed encoder/generation exclusion protocol with device-boundary
-   instrumentation.
-7. Stop normally when possible; after a hang use bounded forced cleanup.
-   Confirm process/port release, device health, idle HBM, and no orphan process.
+1. Keep the repaired A3 stack, torch compile disabled, encoder graph explicitly
+   disabled, prefill graph explicitly disabled, decode graph captured through
+   bucket 70, `max_running_requests=70`, `request_build_max_workers=8`, and the
+   `910C-012` cache, pending-build, coalescing, memory, and version settings.
+   Use the pinned SeedTTS EN dataset already supported by the repository; if it
+   cannot be staged through the documented dataset command, stop rather than
+   installing an ad-hoc dependency or substituting private data.
+2. Run concurrency levels 8, 16, 32, 64, and 70 in order. Use a fresh server
+   process for every level so a prior level cannot warm measured embeddings.
+   Before every startup require a clean worktree, free port, no worker/orphan,
+   healthy device, and idle-baseline HBM; verify the exact candidate profile,
+   decode buckets ending at 70, and zero prefill/encoder graph capture attempts.
+3. In each fresh process, send the existing frozen clip A once to complete
+   first-use encoder compilation, then wait for all state to drain. Clip A must
+   not belong to the measured SeedTTS subset. Run exactly one repeat over the
+   first 70 pinned SeedTTS EN samples at that level with
+   `benchmark_asr_seedtts --max-samples 70 --concurrencies <level> --repeats 1`
+   and **without** `--warmup`. Every measured audio sample must appear once;
+   require the encoder-cache statistics delta to show 70 measured misses and
+   zero measured hits or merged same-key requests.
+4. Set the upstream decode log interval to 1 for this qualification only, using
+   `--asr.engine.decode_log_interval 1`, so short outputs still attest each
+   decode batch. Record prefill `npu graph: False`, decode `npu graph: True`,
+   maximum observed running decode batch size, fallback counts, request-build
+   and encoder statistics, coordinator/scheduler drain, peak/steady HBM, NPU
+   utilization, completion count, aggregate WER, and preliminary latency and
+   throughput. Do not use these logging-instrumented timings as the hard gate.
+5. Stop immediately at the first timeout, HTTP failure, wrong/empty transcript,
+   WER regression outside the repository SeedTTS threshold, OOM, device error,
+   graph fallback, unexpected cache hit, state leak, or orphan. Preserve the
+   first complete sanitized failure and do not run higher levels.
+6. A level passes only when all 70 requests complete, all timed inputs are
+   cache misses, prefill remains eager, positive decode graph replay is logged,
+   no forbidden error/fallback occurs, memory remains bounded, and all state
+   drains. At concurrency 70 also record whether an actual running decode batch
+   of 70 selected graph bucket 70. If the level passes but scheduling never
+   forms batch 70, report the observed maximum; capacity-70 client stability
+   passes but maximum-bucket replay remains a separate unproven item.
+7. Stop and clean normally after every level. Confirm port/process release,
+   healthy device, idle HBM, and no orphan before starting the next process.
 
-Do not patch a dedicated NPU stream, alter request-build workers, disable decode
-graph, change admission capacity, cache, coalescing, or pending-build policy, or
-run larger concurrency, performance, or realtime in `910C-012`. The task is a
-single-variable graph-scope qualification, not a performance run.
+Do not enable benchmark warm-up, reuse a service across levels, disable the
+encoder cache without a reviewed repository change, alter graph/build/admission
+settings, add a longer-output diagnostic clip, or run the exact-10-second hard
+gate or realtime in `910C-013`. Raw audio, transcripts, paths, and request logs
+remain server-local; return only revisions, aggregate dataset identity,
+statistics, hashes, and sanitized failure classes.
 
-Formal performance prerequisites are not yet met. Maximum-bucket concurrent
-replay is unproven, and the named encoder-eager mode is not stable when an
-uncached encoder request overlaps generation. The performance contract requires
-distinct timed audio bytes or a disabled repeated-embedding cache, so prewarming
-the measured corpus cannot bypass this gate. The repository performance task
-also records that the NPU-aware exact-10-second manifest harness has not yet
-been implemented and tested. Compile-disabled generation is a valid explicit
-candidate mode, but it is not evidence that the repository's compile-enabled
-default is supported.
+Formal performance prerequisites are not yet met. The prefill-eager/decode-
+graph candidate has passed only one two-request cold-overlap wave; bounded
+concurrency and maximum-bucket replay remain unproven. The performance contract
+requires distinct timed audio bytes or a disabled repeated-embedding cache, so
+prewarming the measured corpus cannot bypass this gate. The repository
+performance task also records that the NPU-aware exact-10-second manifest
+harness has not yet been implemented and tested. Compile-disabled generation
+is a valid explicit candidate mode, but it is not evidence that the repository's
+compile-enabled default is supported.
 
 Do not run performance or realtime measurements until the functional gates are
 green. A server-side diagnostic edit is not a deliverable fix; any confirmed
@@ -583,7 +614,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-009 | `0452d9de`; no runtime edit | not applicable | Exact `910C-008` named-candidate stack | sequentially warm A/B, then one A+B wave with state polling | passed | Both-warm wave completed in 1.87 s; 2/2 HTTP 200 with frozen hashes, prefill `#new-seq: 2` and `npu graph: True`, zero fallback, and drained state; uncached encoder work is necessary for the `910C-008` hang under the tested ordering |
 | 910C-010 | `2336ccff`; no runtime edit | not applicable | Exact `910C-008` named-candidate stack; only generation graph enablement varied | warm-A/cold-B two-request A/B with generation graph enabled versus explicitly disabled | Arm A reproduced hang; Arm B passed | Graph on timed out at 120 s with two running requests and no decode; graph off completed 2/2 in 0.44 s with frozen hashes and `npu graph: False`; generation graph execution is necessary for the cold-encoder hang |
 | 910C-011 | `a67b2859`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except `request_build_max_workers=1` | warm-A/cold-B two-request wave with synchronous request building | passed | Completed 2/2 in 1.88 s with frozen hashes and `npu graph: True`; one worker with zero build pending/backlog; asynchronous request-building overlap is also necessary for the hang |
-| 910C-012 | pending | pending | Exact graph-enabled `910C-010` Arm A stack except prefill graph explicitly disabled | warm-A/cold-B two-request wave with prefill eager and decode graph retained | pending | Tests whether prefill graph is the unsafe overlap boundary and a decode-graph performance candidate remains viable |
+| 910C-012 | `97769286`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except prefill graph explicitly disabled | warm-A/cold-B two-request wave with prefill eager and decode graph retained | wave passed; decode replay not attested | Completed 2/2 in 0.19 s with frozen hashes, prefill `npu graph: False`, zero fallback, and drained state; prefill graph is necessary for the hang; short outputs and absent decode counter left decode replay unproven |
+| 910C-013 | pending | pending | Exact `910C-012` prefill-eager/decode-graph stack with decode log interval 1 | fresh-process SeedTTS EN cold-input ladder at concurrency 8/16/32/64/70 | pending | Requires 70 unique measured misses per level, positive decode replay, stability, and observed maximum decode batch; not the exact-10-second hard gate |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
