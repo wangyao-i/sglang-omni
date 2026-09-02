@@ -18,9 +18,9 @@ Target topology: one Ascend 910B, one Qwen3-ASR-1.7B stage, BF16, no model
 quantization, and no tensor or data parallelism.
 
 Status at base commit `e7d876b28326c55d777ae62e1c3650b816785d8c`:
-**A3 eager functional baseline and generation graph capacities 1 through 64
-with torch compile disabled passed; target capacity 70, compiled generation,
-and encoder graph remain unqualified**.
+**A3 eager functional baseline and generation graph capacities 1 through 70
+with torch compile disabled passed capture and single-request replay; bounded
+concurrency, compiled generation, and encoder graph remain unqualified**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. It is therefore recorded as the derived run
@@ -31,7 +31,7 @@ remains unstarted until the same gates run on the intended device class.
 |---|---|---|
 | Ascend installation | NPU manifest, precheck, and installation guide are implemented | Precheck passed on A3; not yet run on the target 910B |
 | Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager batch 1, two-concurrent, ten-sequential, health, shutdown, and restart gates passed after repairing the OpenCV environment; not yet started on 910B |
-| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | With torch compile disabled, A3 capacities 1/16/32/64 captured and each passed one decode replay smoke; with compile enabled, batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; target capacity 70 and maximum-bucket replay remain untested |
+| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | With torch compile disabled, A3 capacities 1/16/32/64/70 captured and each passed one decode replay smoke; with compile enabled, batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; maximum-bucket concurrent replay remains untested |
 | Encoder graph | Implemented with `torch.cuda.Stream`, `torch.cuda.CUDAGraph`, and `torch.cuda.graph`; enabled by default | A3 capture failed for every attempted bucket because captured-stream synchronization memcpy is unsupported; each bucket explicitly stayed eager |
 | Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; graph mode remains blocked before serving |
 | SSE transcription | Emits decoder-token deltas after the complete upload has entered one engine request | Not continuous audio-input realtime |
@@ -318,6 +318,25 @@ compile explicitly disabled. It does not prove that the maximum bucket replayed
 under concurrency, does not cover the target concurrency 70, and does not
 qualify the encoder graph or compile-enabled mode.
 
+### Target-capacity generation graph pass
+
+Run `910C-007` changed only the paired generation capacity from 64 to 70 while
+retaining the compile-disabled `910C-006` configuration. The resolved decode
+list was `[1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64, 70]`; SGLang neither
+clamped nor omitted the target bucket. Prefill capture succeeded, and all 13
+decode buckets captured in 2.13 seconds using 0.27 GiB, leaving approximately
+8.99 GiB available.
+
+The one allowed smoke request returned HTTP 200 with the frozen eager output
+hash, explicit `npu graph: True`, zero generation fallback, and none of the
+known Dynamo, ATB, GE/Manager, error-500001, or OpenCV signatures. The encoder
+capture failure retained its exact six buckets and known error signature. The
+service shut down cleanly and HBM returned to the idle baseline.
+
+This passes generation capacity-70 capture and a single-request replay smoke
+for the explicit compile-disabled mode. It does not prove that a 70-request
+decode batch selected and replayed bucket 70.
+
 ### Independent encoder graph failure
 
 The same run produced hardware evidence for the encoder boundary previously
@@ -354,49 +373,61 @@ next server run.
 
 ## Next bounded diagnostic task
 
-Run identifier: `910C-007`. The only variable relative to the passing capacity
-64 arm is **paired generation capacity 70**, matching the offline concurrency
-target. This is a capture and single-request replay gate, not the concurrency
-or performance gate.
+Run identifier: `910C-008`. Establish the named A3 candidate mode
+**generation graph enabled at capacity 70, torch compile disabled, and encoder
+graph explicitly disabled**. The only configuration change from `910C-007` is
+`--asr.factory.enable_encoder_cuda_graph false`; the progressive request loads
+below are validation levels, not configuration A/Bs.
 
 1. Use a fresh process and keep the exact repaired A3 stack, model, SGLang
-   `71de97b2`, `mem_fraction_static=0.837`, prefill configuration,
-   `--asr.engine.enable_torch_compile false`, encoder configuration, and all
-   other settings from the `910C-006` capacity-64 arm. Change only
-   `--asr.engine.max_running_requests 70` and
-   `--asr.engine.cuda_graph_max_bs 70`; these paired controls represent the
-   single admission/capture-capacity variable.
+   `71de97b2`, `mem_fraction_static=0.837`, prefill settings,
+   `--asr.engine.max_running_requests 70`,
+   `--asr.engine.cuda_graph_max_bs 70`, and
+   `--asr.engine.enable_torch_compile false` from `910C-007`. Add only
+   `--asr.factory.enable_encoder_cuda_graph false`.
 2. Before startup, require a clean tracked worktree, no service process or port
-   owner, healthy device state, and idle-baseline HBM. Record the exact Omni and
-   SGLang commits and resolved runtime profile.
-3. Require `cuda_graph=True`, `torch_compile=False`,
-   `max_running_requests=70`, and a decode bucket list whose maximum is exactly
-   70. If SGLang clamps, omits, or rounds away bucket 70, stop as an invalid
-   capacity configuration rather than continuing with concurrency.
-4. Record prefill/decode capture duration and memory, every completed bucket,
-   available HBM, and the first complete failure. On failure, stop. Enable
-   ATB/ASDOPS DEBUG only for one same-configuration rerun if the first failure
-   is the known `PagedAttentionOperation` signature; a successful capture does
-   not need a diagnostic rerun.
-5. If capture succeeds, send exactly one smoke request and require HTTP 200,
-   the frozen output hash, explicit `npu graph: True`, zero generation-graph
-   fallback, and zero new forbidden-error signatures. Treat latency as
-   diagnostic only.
-6. The unchanged six-bucket encoder `aclrtMemcpy` 107030 failures are the same
-   predeclared background evidence as `910C-006`. Record their signature and
-   count. Any change is a new first failure; an unchanged fallback still means
-   the overall default graph profile is not qualified.
-7. Stop normally and verify process/port release, device health, idle-baseline
-   HBM, and no orphan process.
+   owner, healthy device state, and idle-baseline HBM. Record exact revisions,
+   the resolved runtime profile, and the server-local input-set fingerprint.
+3. Require generation graph capture through bucket 70. Also require zero
+   encoder graph capture attempts, zero `bucket stays eager` warnings, and zero
+   encoder `aclrtMemcpy` 107030 errors. The encoder must be eager by explicit
+   configuration, not by capture failure or runtime fallback.
+4. Use at least two distinct frozen server-local clips with different expected
+   output hashes, alternating them within every multi-request wave. Do not
+   return paths, audio, or transcripts. Record pre-LM cache hit, miss, in-flight
+   deduplication, queue, and batch counters so repeated-input effects remain
+   visible. Do not enable a cache that was disabled in `910C-007` or change its
+   configured size.
+5. Run these functional levels in order with no retries: one request, one
+   synchronized two-request wave, ten sequential requests, then one
+   synchronized wave each at concurrency 8, 16, 32, and 64, followed by three
+   synchronized waves at concurrency 70. Stop at the first HTTP failure,
+   timeout, output-hash mismatch, cross-input contamination, graph fallback,
+   forbidden error, device-health failure, or monotonic HBM growth.
+6. At every concurrency level, report requested concurrency, successes and
+   failures, client wall time, diagnostic latency distribution, peak scheduled
+   and running requests, generation graph markers, encoder queue/batch/cache
+   counters, and peak/settled HBM. These are functional diagnostics, not the
+   exact-10-second performance result.
+7. Bucket-70 replay passes only if a decode runtime event from a concurrency-70
+   wave shows an actual running decode batch of 70 selecting generation NPU
+   graph execution (`npu graph: True`) with no fallback. Seventy successful
+   client requests without that same-event evidence are **inconclusive**, not a
+   pass. Do not increase offered concurrency above 70 to force the condition.
+8. After the final wave, verify service health, allow queues to drain, record
+   settled HBM, stop normally, and confirm process/port release, device health,
+   idle-baseline HBM, and no orphan process.
 
-Do not send concurrent load or run performance/realtime measurements in
-`910C-007`. Do not change encoder graph, compile mode, memory fraction,
-versions, or source. If capacity 70 passes, the following task will establish
-an explicit final candidate profile and progressively prove bounded concurrency
-and maximum-bucket replay before formal performance measurement.
+Do not run the formal exact-10-second benchmark, realtime workload, long soak,
+compile-enabled A/B, encoder-graph implementation experiment, version change,
+memory-fraction change, or source patch in `910C-008`. If the service cannot
+form an actual decode batch of 70, preserve scheduler/encoder timing evidence
+and stop; the next task will isolate admission, coalescing, or request-duration
+limits without redefining this gate after the fact.
 
-Formal performance prerequisites are not yet met. Capacity 70 capture and
-maximum-bucket replay are unproven, the encoder graph still falls back, and the
+Formal performance prerequisites are not yet met. Maximum-bucket concurrent
+replay is unproven, the named encoder-eager mode is not yet functionally
+qualified, and the
 repository performance task records that the NPU-aware exact-10-second manifest
 harness has not yet been implemented and tested. Compile-disabled generation is
 a valid explicit candidate mode, but it is not evidence that the repository's
@@ -437,7 +468,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-004 | `bb456255`; no runtime edit | not applicable | Repaired A3 stack; SGLang `71de97b2`; headless OpenCV 5.0.0.93 | capacity-1 decode graph capture with compile enabled | failed; ladder stopped as required | Batch 1 failed before ATB: Dynamo rejected skipped triton-ascend `NPUUtils.get_device_properties`; 16/32/64 not run |
 | 910C-005 | `18c4e6c4`; no runtime edit | not applicable | Repaired A3 stack; SGLang `71de97b2`; headless OpenCV 5.0.0.93; torch compile disabled | capacity-1 generation graph capture and replay | passed | Prefill/decode captured; one request HTTP 200 with `npu graph: True`; output hash matched eager; encoder graph independently failed with `aclrtMemcpy` 107030 and stayed eager |
 | 910C-006 | `2e37bcc6`; no runtime edit | not applicable | Repaired A3 stack; SGLang `71de97b2`; headless OpenCV 5.0.0.93; torch compile disabled | generation decode capacity 16/32/64 | passed | All capture ladders and one-smoke replay checks passed; output hash frozen and `npu graph: True`; compile-enabled batch-64 ATB failure absent; encoder six-bucket fallback unchanged |
-| 910C-007 | pending | pending | Exact 910C-006 stack and compile-disabled mode required | generation decode capacity 70 capture and one replay smoke | pending | pending |
+| 910C-007 | `330db6d0`; no runtime edit | not applicable | Repaired A3 stack; SGLang `71de97b2`; headless OpenCV 5.0.0.93; torch compile disabled | generation decode capacity 70 capture and one replay smoke | passed | Bucket list ended exactly at 70; all 13 buckets captured in 2.13 s; smoke HTTP 200 with frozen hash and `npu graph: True`; encoder six-bucket fallback unchanged |
+| 910C-008 | pending | pending | Exact 910C-007 stack; compile disabled; encoder graph explicitly disabled | named candidate functional and bounded-concurrency ladder through 70 | pending | pending |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
