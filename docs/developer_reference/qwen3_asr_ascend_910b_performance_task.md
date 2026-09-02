@@ -19,6 +19,15 @@ status; this page owns the measurement procedure.
   variant. Change only one setting or patch between A and B.
 - Install benchmark dependencies through the repository-supported `eval`
   extra. Do not install ad-hoc packages into `site-packages` to repair a run.
+- On an isolated host without Hugging Face access, pre-stage the standard
+  `HF_HOME` cache in a connected environment using the repository's documented
+  dataset command and pinned revision. Verify that cache there with
+  `HF_HUB_OFFLINE=1` and `HF_DATASETS_OFFLINE=1`, archive it while preserving
+  layout and links, record the archive SHA-256 and dependency versions, and
+  transfer it through the approved channel. The isolated run must verify the
+  hash and repeat the prepare command fully offline before starting a server.
+  Do not replace the pinned corpus with repeated test clips or an unmanifested
+  local dataset.
 
 The current SeedTTS benchmark is useful for public accuracy and concurrency
 comparisons, but it does not enforce exact 10 s clips and its resource monitor

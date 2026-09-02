@@ -26,7 +26,9 @@ graph execution; disabling generation graph removes the hang, while compiled
 generation and encoder graph remain unqualified. Synchronous request building
 also removes the hang; disabling only prefill graph removes it while decode
 graph remains captured, making prefill-eager/decode-graph the bounded-
-concurrency candidate**.
+concurrency candidate. That ladder is currently blocked before service startup
+because the isolated server cannot stage the pinned SeedTTS dataset through its
+enterprise proxy**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. It is therefore recorded as the derived run
@@ -474,6 +476,43 @@ bounded-concurrency ladder, where lowering the decode log interval is an
 evidence-only setting; another two-request clip experiment would not add a
 distinct functional boundary.
 
+### Pinned SeedTTS staging blocker
+
+Run `910C-013` stopped before service startup because the isolated host had no
+SeedTTS cache and both the default Hugging Face endpoint and configured mirror
+failed through the enterprise TLS proxy. The default endpoint returned a proxy
+504 and the mirror connection closed during TLS handling. The operator did not
+install a dependency, edit the benchmark, substitute private data, or run the
+concurrency ladder. Device, port, process, HBM, and tracked-worktree state
+remained clean.
+
+This is an environment prerequisite, not a model or candidate-profile failure.
+The approved recovery is an offline transfer of the standard Hugging Face cache
+created on a connected environment from repository
+`zhaochenyang20/seed-tts-eval-arrow` at exact revision
+`27f4c1adee83b5b29b7c4b375f6b976324bda308`. The connected environment must use
+the same checked-out benchmark and compatible `datasets` and `huggingface_hub`
+versions, set an otherwise empty explicit `HF_HOME`, run the documented
+`benchmarks.dataset.prepare` command with the exact revision, then repeat that
+command successfully with `HF_HUB_OFFLINE=1` and `HF_DATASETS_OFFLINE=1`.
+
+Archive that complete `HF_HOME` while preserving its directory layout and
+links, record the archive SHA-256 and package versions, transfer it through the
+approved isolated-server channel, and extract it into a new explicit directory.
+On the target, verify the archive SHA-256, point `HF_HOME` at the extracted
+directory, set both offline variables, and rerun the same prepare command. A
+successful offline prepare is the resume signal for `910C-013`; any network
+attempt, missing revision, cache rebuild failure, or dataset-schema error keeps
+the run blocked. The cache archive, audio, paths, and transcripts remain local;
+returned evidence contains only the repo ID, revision, archive hash, package
+versions, split/sample counts, and benchmark evaluation-input hash.
+
+The benchmark also accepts a local `meta.lst`, but that fallback is not approved
+for this recovery because the current repository has no pinned export command
+that records upstream identity and per-file integrity. Repeated repository test
+clips cannot replace the dataset: cache hits and absent corpus references would
+invalidate cold-input concurrency and WER evidence.
+
 ### Independent encoder graph failure
 
 The same run produced hardware evidence for the encoder boundary previously
@@ -516,13 +555,33 @@ SeedTTS benchmark scenario. This run must attest decode replay and cold-input
 stability; its short, non-exact-duration clips and evidence logging mean its
 latencies are preliminary and cannot satisfy the hard exact-10-second target.
 
+Before resuming the numbered steps, create the cache in a connected Linux
+environment from the same repository revision and compatible evaluation
+dependencies:
+
+```bash
+export HF_HOME=<new-empty-seedtts-cache-directory>
+python -m benchmarks.dataset.prepare --dataset seedtts \
+  --revision 27f4c1adee83b5b29b7c4b375f6b976324bda308
+HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 \
+  python -m benchmarks.dataset.prepare --dataset seedtts \
+  --revision 27f4c1adee83b5b29b7c4b375f6b976324bda308
+```
+
+Archive the complete directory with a link-preserving tool and record its
+SHA-256. After approved transfer and extraction, the isolated server must point
+`HF_HOME` at that directory and run the second, fully offline command. Do not
+resume step 1 until it succeeds and reports the pinned revision from cache.
+
 1. Keep the repaired A3 stack, torch compile disabled, encoder graph explicitly
    disabled, prefill graph explicitly disabled, decode graph captured through
    bucket 70, `max_running_requests=70`, `request_build_max_workers=8`, and the
    `910C-012` cache, pending-build, coalescing, memory, and version settings.
-   Use the pinned SeedTTS EN dataset already supported by the repository; if it
-   cannot be staged through the documented dataset command, stop rather than
-   installing an ad-hoc dependency or substituting private data.
+   Use the pinned SeedTTS EN dataset already supported by the repository with
+   `HF_HUB_OFFLINE=1` and `HF_DATASETS_OFFLINE=1` retained for the entire run.
+   If the transferred cache cannot satisfy the documented command, stop rather
+   than enabling network access, installing an ad-hoc dependency, or
+   substituting private data.
 2. Run concurrency levels 8, 16, 32, 64, and 70 in order. Use a fresh server
    process for every level so a prior level cannot warm measured embeddings.
    Before every startup require a clean worktree, free port, no worker/orphan,
@@ -615,7 +674,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-010 | `2336ccff`; no runtime edit | not applicable | Exact `910C-008` named-candidate stack; only generation graph enablement varied | warm-A/cold-B two-request A/B with generation graph enabled versus explicitly disabled | Arm A reproduced hang; Arm B passed | Graph on timed out at 120 s with two running requests and no decode; graph off completed 2/2 in 0.44 s with frozen hashes and `npu graph: False`; generation graph execution is necessary for the cold-encoder hang |
 | 910C-011 | `a67b2859`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except `request_build_max_workers=1` | warm-A/cold-B two-request wave with synchronous request building | passed | Completed 2/2 in 1.88 s with frozen hashes and `npu graph: True`; one worker with zero build pending/backlog; asynchronous request-building overlap is also necessary for the hang |
 | 910C-012 | `97769286`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except prefill graph explicitly disabled | warm-A/cold-B two-request wave with prefill eager and decode graph retained | wave passed; decode replay not attested | Completed 2/2 in 0.19 s with frozen hashes, prefill `npu graph: False`, zero fallback, and drained state; prefill graph is necessary for the hang; short outputs and absent decode counter left decode replay unproven |
-| 910C-013 | pending | pending | Exact `910C-012` prefill-eager/decode-graph stack with decode log interval 1 | fresh-process SeedTTS EN cold-input ladder at concurrency 8/16/32/64/70 | pending | Requires 70 unique measured misses per level, positive decode replay, stability, and observed maximum decode batch; not the exact-10-second hard gate |
+| 910C-013 | `73d6d6bc`; no runtime service started | not applicable | Exact `910C-012` prefill-eager/decode-graph stack planned; isolated host has no SeedTTS cache | fresh-process SeedTTS EN cold-input ladder at concurrency 8/16/32/64/70 | blocked before startup; offline-cache resume pending | Default endpoint failed with proxy 504 and mirror TLS closed; no ladder level ran; resume only after exact-revision standard HF cache transfer and successful fully offline prepare |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
