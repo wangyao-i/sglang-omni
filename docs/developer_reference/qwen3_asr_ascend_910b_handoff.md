@@ -6,13 +6,19 @@ the operator of the isolated 910B server. Update this page when a gate changes;
 the companion task pages contain executable procedures, not competing status
 or support claims.
 
+**Server-task synchronization rule:** every new request for isolated-server
+execution must be written into this handoff before the operator runs it. A
+server experiment mentioned only in chat is not an executable task. Each
+completed run must replace or close the previous task here before another
+server-side variable is introduced.
+
 ## Scope and status
 
 Target topology: one Ascend 910B, one Qwen3-ASR-1.7B stage, BF16, no model
 quantization, and no tensor or data parallelism.
 
 Status at base commit `e7d876b28326c55d777ae62e1c3650b816785d8c`:
-**first failure captured; bounded process-topology A/B pending**.
+**first failure captured; CANN Manager child failure detail pending**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. It is therefore recorded as the derived run
@@ -148,37 +154,43 @@ The failure was stable across three requests. Host memory, file descriptors,
 shared memory, inodes, and device HBM were all sufficient. Five progressively
 closer standalone probes passed, including BF16 `conv2d`, non-JIT compile mode,
 a thread-pool worker, and a spawn child process whose worker thread executed
-the operator. Those probes rule out a general A3 `conv2d` failure, but they did
-not reproduce the daemon property of the actual Omni stage process.
+the operator. Those probes rule out a general A3 `conv2d` failure.
 
 ### Current diagnosis and ownership
 
-The strongest diagnosis is a SGLang-Omni process-lifecycle defect, pending a
-one-variable A/B confirmation:
+The daemon-process diagnosis recorded in commit `fa27495d` is rejected by run
+`910C-001`. The operator first confirmed the Python invariant independently:
+`multiprocessing.Manager()` raises `AssertionError: daemonic processes are not
+allowed to have children` in a daemon spawn child and succeeds in an otherwise
+equivalent non-daemon child. The service-side A/B then changed only the ASR
+stage process to `daemon=False`; an explicit diagnostic line confirmed the
+failing stage PID was non-daemon. Batch 1 nevertheless failed in that same PID
+with the unchanged CANN Manager EC0009, `GEInitializeV2`, and error-500001
+chain. The checkout was restored to `daemon=True` and a clean worktree after
+the diagnostic run.
 
-1. `StageGroup.spawn()` currently constructs every stage process with
-   `daemon=True` in `sglang_omni/pipeline/stage_workers.py`.
-2. Python daemon processes are not permitted to create child processes.
-3. CANN knowledge-base initialization attempts to create a
-   `multiprocessing.Manager`, which itself creates a child process.
-4. The likely failure chain is therefore: daemonized ASR stage -> first
-   GE/TBE-compiled operator -> Manager child creation rejected -> CANN EC0009
-   -> `GEInitializeV2` failure -> outer `AclSetCompileopt` error 500001.
+Therefore the current classification is **CANN GE/TBE knowledge-bank
+initialization failure in a full service process; owning component unresolved**.
+The failure may be a CANN defect, or a CANN compatibility defect triggered by
+process state established by SGLang/SGLang-Omni. It is not currently evidence
+for an Omni daemon-lifecycle fix, a CANN version mismatch, or an unsupported
+`conv2d`.
 
-Items 1 and 2 are established implementation/runtime facts; items 3 and 4 are
-supported by the captured nested error and the missing condition in the five
-passing probes, but remain a high-confidence diagnosis until the next A/B run.
-The first `conv2d` is most likely only the first operator to trigger compiler
-initialization. Do not classify it as an unsupported convolution without new
-operator-level evidence.
+The EC0009 text is not a root cause. CANN wraps exceptions from
+`multiprocessing.Manager()` with that message. In the closely matching public
+issue ICVT2X, the underlying exception is an `EOFError` while the Manager
+parent waits for the server child to return its address, meaning the short-lived
+Manager child exited before completing its startup handshake. A separate
+public case shows the same CANN wrapper around Python's spawn bootstrapping
+`RuntimeError`. The next gate must capture this run's original Python exception
+and Manager-child exit reason before assigning ownership or changing versions.
 
-If the daemon A/B confirms this chain, ownership returns to this repository:
-stage-process lifecycle must allow a backend to create managed child
-processes. The existing `StageGroup.shutdown()` already owns explicit
-join/terminate/kill cleanup, but a production change still requires focused
-tests for normal shutdown, startup failure, parent termination, and stuck-child
-cleanup. If the A/B does not remove EC0009, record the next daemon ancestor and
-reclassify before changing versions or compiler controls.
+The operator also found and force-stopped a stage process orphaned from the
+initial validation for more than 12 hours, with PPID 1 and approximately 55 GiB
+of chip-0 HBM. It contaminated earlier retry observations but was not the batch-1
+cause: after removal, HBM returned to the approximately 3 GiB idle baseline and
+a fresh non-daemon run reproduced the same failure. The orphan is retained as
+a separate shutdown/reap defect relevant to the later stability gate.
 
 ### Runtime and workaround conclusions
 
@@ -186,6 +198,11 @@ reclassify before changing versions or compiler controls.
   A3 stacks, and CANN 9.0.1 with `torch_npu` 2.10.0.post2 is a plausible matched
   ecosystem stack. The present evidence does not identify version mismatch as
   the cause.
+- A CANN KB/GE integration defect is now the leading candidate, but is not yet
+  confirmed as a CANN 9.0.1-specific bug. The public ICVT2X report exhibits the
+  same Manager/EC0009/GE failure class on a different CANN and PyTorch stack and
+  has no public patch, so it supports the failure class rather than an exact
+  version conclusion.
 - Do not downgrade or upgrade CANN/`torch_npu` as the next variable. If a later
   version experiment is needed, replace the complete vendor-supported stack
   and record every component, rather than changing only one package.
@@ -197,29 +214,66 @@ reclassify before changing versions or compiler controls.
   GE initialization.
 - Installing a headless OpenCV package merely to unlock direct SGLang serving
   is lower priority and must not mutate the frozen environment. Use a cloned
-  environment only if separation is still needed after the daemon A/B.
+  environment only if separation remains necessary after the Manager failure
+  is classified.
 
 ## Next bounded diagnostic task
 
-Keep the A3 environment, base commits, eager flags, input, and single-request
-gate fixed. Change only the process daemon property, and start from a fresh
-process for each arm:
+Run identifier: `910C-002`. Keep the A3 hardware, runtime stack, model, eager
+flags, input, and batch-1 request fixed. Begin only after confirming no stale
+service/stage process, port owner, or non-baseline HBM allocation. Use a new
+server-local evidence directory and a fresh service process for every arm.
 
-1. Extend the passing spawn-child probe with `daemon=True`; print the child
-   daemon state and attempt `multiprocessing.Manager()` before running the same
-   `conv2d`. Preserve the direct Python exception and the operator-wrapped
-   exception separately.
-2. In a diagnostic-only SGLang-Omni checkout, change the stage process from
-   `daemon=True` to `daemon=False`, start the same eager profile, and run only
-   batch 1. Do not continue to larger gates in that process.
-3. If batch 1 passes, implement the repository fix with CPU process-lifecycle
-   regression tests, then repeat eager batch 1 from a fresh server process. If
-   EC0009 persists, locate the next daemonized parent. If a different failure
-   appears, preserve it as the new first failure and classify it independently.
-4. Return to the default graph gate only after eager batch 1, two-request,
-   sequential, restart, health, and memory gates pass. The earlier
-   `PagedAttentionOperation` failure remains a separate graph qualification
-   item unless its full nested log contains the same Manager/EC0009 signature.
+### Gate A: capture the CANN Manager exception without pre-initialization
+
+1. Set `ASCEND_PROCESS_LOG_PATH` to a writable directory inside this run's
+   evidence directory, `ASCEND_GLOBAL_LOG_LEVEL=0`,
+   `PYTHONFAULTHANDLER=1`, and `PYTHONUNBUFFERED=1` before service startup.
+2. Use a diagnostic-only non-daemon ASR stage so Python permits a Manager
+   child. In that stage, enable `multiprocessing.util` DEBUG logging and wrap
+   `multiprocessing.Manager` only to log its full original exception before
+   re-raising it. Do not call Manager early, change its context, suppress the
+   exception, or edit CANN/`site-packages`.
+3. Immediately before the failing `conv2d`, from the same request-builder
+   thread, log the sanitized values of current-process daemon state,
+   `multiprocessing.get_start_method(allow_none=True)`, default-context start
+   method, thread name/main-thread status, `sys.executable`, `sys.argv[0]`,
+   current directory, `tempfile.gettempdir()`, and the SIGCHLD handler.
+4. Send exactly one smoke request. Preserve the service stderr, the complete
+   Python traceback intercepted around Manager, CANN plog for the stage PID and
+   any short-lived child PID, and any permitted kernel OOM/segfault record.
+   Record cgroup `pids.current` and `pids.max` in addition to shell ulimits.
+5. Stop after this request even if it succeeds. Restore all diagnostic source
+   edits and verify the checkout, processes, ports, and HBM baseline.
+
+If the wrapper does not expose an exception more specific than EC0009, use one
+additional fresh process with `strace -ff` limited to process, signal, file,
+and IPC events to identify the Manager child exit/exec/permission failure. Do
+not return the full trace; retain it server-side and report only the relevant
+syscall, errno or terminating signal.
+
+### Gate B: plain Manager control in the exact service thread
+
+Use another fresh non-daemon diagnostic process. At the same request-thread
+location, run one ordinary `multiprocessing.Manager()` creation and a trivial
+proxy operation, record its original result, then deliberately stop before
+executing `conv2d`. Do not use the process for a subsequent functional claim,
+because the control can initialize or mutate global multiprocessing state.
+
+- Plain Manager fails: preserve its raw traceback and child exit reason. The
+  service process state, rather than CANN alone, is sufficient to reproduce the
+  failure.
+- Plain Manager passes while Gate A's CANN Manager fails: classify the boundary
+  as CANN KB integration/embedded-Python state and prepare a vendor reproducer.
+- Either arm reports a new first failure: stop and return that failure; do not
+  proceed to model loading, version changes, concurrency, or performance.
+
+Only if these two gates cannot locate the boundary, perform fresh-process
+Manager probes at one initialization checkpoint per run: stage entry,
+accelerator-environment preparation, SGLang NPU backend initialization, model
+load before ready, and request-builder entry. A probe process ends immediately
+after its result. Load the complete model in a standalone reproducer only if
+this bisection first changes from pass to fail at model loading.
 
 Do not run performance or realtime measurements until the functional gates are
 green. A server-side diagnostic edit is not a deliverable fix; any confirmed
@@ -248,7 +302,9 @@ For each remote run, add a row here after reviewing its redacted result:
 | Run | Server commit | Local equivalent | Stack fingerprint | Gate | Result | First failure or key metric |
 |---|---|---|---|---|---|---|
 | 910B-000 | pending | `e7d876b2` | pending | target-hardware baseline | pending | Original 910B target has not been run |
-| 910C-000 | diagnostic edit pending | `e7d876b2` | A3; CANN 9.0.1; torch 2.10.0; torch_npu 2.10.0.post2; SGLang 0.5.18 (Git HEAD missing); triton-ascend 3.2.1 | default startup, then eager batch 1 | failed | Default decode graph: `PagedAttentionOperation`; eager request: GE Manager EC0009 -> error 500001 |
+| 910C-000 | `e7d876b2` | `e7d876b2` | A3; CANN 9.0.1; torch 2.10.0; torch_npu 2.10.0.post2; SGLang 0.5.18 (Git HEAD missing); triton-ascend 3.2.1 | default startup, then eager batch 1 | failed | Default decode graph: `PagedAttentionOperation`; eager request: GE Manager EC0009 -> error 500001 |
+| 910C-001 | no diagnostic commit; edits reverted; final HEAD `fa27495d` | not applicable | Same A3 stack as 910C-000 | daemon process A/B, eager batch 1 | failed; daemon hypothesis rejected | Confirmed stage `daemon=False`; unchanged Manager EC0009 -> GE failure -> error 500001 after stale-process cleanup |
+| 910C-002 | pending | pending | Same A3 stack required | capture raw Manager failure; exact-thread plain Manager control | pending | pending |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
@@ -267,5 +323,8 @@ or proprietary profiler captures.
 - [`torch_npu` compatibility matrix](https://github.com/Ascend/pytorch/blob/master/COMPATIBILITY.en.md)
 - [CANN 9.0.1 release notes](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/900/releasenote/9.0.1release-notes.md)
 - [Public `cann_kb_init` Manager/GE failure report](https://gitee.com/ascend/pytorch/issues/ICVT2X)
+- [Public CANN Manager spawn-bootstrapping report](https://gitee.com/ascend/pytorch/issues/I9KIW7)
 - [vLLM Ascend device-family mapping](https://github.com/vllm-project/vllm-ascend/blob/main/setup.py)
 - [SGLang A3 installation examples](https://github.com/sgl-project/sglang/blob/main/docs/docs/hardware-platforms/ascend-npus/getting-started/installation.mdx)
+- [CANN 9.0 process-log path](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/900/maintenref/envvar/envref_07_0120.html)
+- [CANN 9.0 application log level](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/900/maintenref/envvar/envref_07_0122.html)
