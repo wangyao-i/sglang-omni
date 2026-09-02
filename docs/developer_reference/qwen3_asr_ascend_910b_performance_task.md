@@ -26,8 +26,11 @@ status; this page owns the measurement procedure.
   layout and links, record the archive SHA-256 and dependency versions, and
   transfer it through the approved channel. The isolated run must verify the
   hash and repeat the prepare command fully offline before starting a server.
-  Do not replace the pinned corpus with repeated test clips or an unmanifested
-  local dataset.
+  A smaller local Parquet snapshot is acceptable only when the handoff fixes
+  its upstream revision, file layout, byte size, and content SHA-256 and the
+  benchmark's local-directory loader validates the expected split and sample
+  count fully offline. Do not replace the pinned corpus with repeated test
+  clips or an unmanifested local dataset.
 
 The current SeedTTS benchmark is useful for public accuracy and concurrency
 comparisons, but it does not enforce exact 10 s clips and its resource monitor

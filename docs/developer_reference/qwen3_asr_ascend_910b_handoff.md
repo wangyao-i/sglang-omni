@@ -507,11 +507,35 @@ the run blocked. The cache archive, audio, paths, and transcripts remain local;
 returned evidence contains only the repo ID, revision, archive hash, package
 versions, split/sample counts, and benchmark evaluation-input hash.
 
+For the English-only `910C-013` ladder, a smaller verified local Parquet
+snapshot is also approved. Download from that exact revision, not `main`, and
+preserve this layout:
+
+```text
+seed-tts-eval-arrow-27f4c1ad/
+  README.md
+  data/
+    en-00000-of-00001.parquet
+```
+
+The English Parquet must be exactly 247,555,423 bytes with SHA-256
+`5849b41b49cae996328c06d2c5791717c3bafc369bddfa1ec4f86761bb8bc0ca`.
+Transfer the directory or a hash-recorded archive through the approved channel.
+On the server, verify size and SHA-256, then pass the snapshot root to the
+benchmark as `--meta <snapshot-root>` with `--lang en`; do not pass a different
+dataset revision or rename the Parquet split. Before service startup, call
+`load_seedtts_samples(<snapshot-root>, max_samples=70, split="en")` in a
+short-lived process and require exactly 70 samples plus 70 readable, distinct
+audio inputs. Record the upstream repo/revision and Parquet hash separately,
+because local-path benchmark provenance does not infer a Hub revision.
+
 The benchmark also accepts a local `meta.lst`, but that fallback is not approved
 for this recovery because the current repository has no pinned export command
-that records upstream identity and per-file integrity. Repeated repository test
-clips cannot replace the dataset: cache hits and absent corpus references would
-invalidate cold-input concurrency and WER evidence.
+that records upstream identity and per-file integrity. The verified Parquet
+snapshot above is not that fallback: its exact upstream LFS SHA-256 and split
+layout are fixed. Repeated repository test clips cannot replace the dataset:
+cache hits and absent corpus references would invalidate cold-input concurrency
+and WER evidence.
 
 ### Independent encoder graph failure
 
@@ -572,16 +596,20 @@ Archive the complete directory with a link-preserving tool and record its
 SHA-256. After approved transfer and extraction, the isolated server must point
 `HF_HOME` at that directory and run the second, fully offline command. Do not
 resume step 1 until it succeeds and reports the pinned revision from cache.
+Alternatively, use the exact English-only Parquet snapshot and preflight
+defined in the staging-blocker section; that path does not require an HF cache.
 
 1. Keep the repaired A3 stack, torch compile disabled, encoder graph explicitly
    disabled, prefill graph explicitly disabled, decode graph captured through
    bucket 70, `max_running_requests=70`, `request_build_max_workers=8`, and the
    `910C-012` cache, pending-build, coalescing, memory, and version settings.
-   Use the pinned SeedTTS EN dataset already supported by the repository with
-   `HF_HUB_OFFLINE=1` and `HF_DATASETS_OFFLINE=1` retained for the entire run.
-   If the transferred cache cannot satisfy the documented command, stop rather
-   than enabling network access, installing an ad-hoc dependency, or
-   substituting private data.
+   Use the pinned SeedTTS EN dataset already supported by the repository. For a
+   transferred HF cache, retain `HF_HUB_OFFLINE=1` and
+   `HF_DATASETS_OFFLINE=1` for the entire run. For the verified Parquet path,
+   pass its snapshot root via `--meta` at every level and retain both offline
+   variables to prohibit an accidental network fallback. If neither approved
+   source passes its offline preflight, stop rather than enabling network
+   access, installing an ad-hoc dependency, or substituting private data.
 2. Run concurrency levels 8, 16, 32, 64, and 70 in order. Use a fresh server
    process for every level so a prior level cannot warm measured embeddings.
    Before every startup require a clean worktree, free port, no worker/orphan,
