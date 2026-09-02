@@ -18,7 +18,8 @@ Target topology: one Ascend 910B, one Qwen3-ASR-1.7B stage, BF16, no model
 quantization, and no tensor or data parallelism.
 
 Status at base commit `e7d876b28326c55d777ae62e1c3650b816785d8c`:
-**first failure captured; CANN Manager child failure detail pending**.
+**A3 eager functional baseline passed; decode graph qualification blocked at
+ATB `PagedAttentionOperation` setup**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. It is therefore recorded as the derived run
@@ -28,10 +29,10 @@ remains unstarted until the same gates run on the intended device class.
 | Area | Repository state | 910B evidence |
 |---|---|---|
 | Ascend installation | NPU manifest, precheck, and installation guide are implemented | Precheck passed on A3; not yet run on the target 910B |
-| Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager service became ready, but its first request failed; not yet started on 910B |
-| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | A3 prefill capture succeeded and decode capture failed at `PagedAttentionOperation`; not yet verified on 910B |
+| Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager batch 1, two-concurrent, ten-sequential, health, shutdown, and restart gates passed after repairing the OpenCV environment; not yet started on 910B |
+| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | A3 prefill capture succeeded and decode capture failed independently at ATB `PagedAttentionOperation`; not yet verified on 910B |
 | Encoder graph | Implemented with `torch.cuda.Stream`, `torch.cuda.CUDAGraph`, and `torch.cuda.graph`; enabled by default | Incompatible by inspection; the first baseline run must preserve the complete failure evidence |
-| Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 first request failed while GE initialized for the first audio-tower `conv2d`; functionality is not established |
+| Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; graph mode remains blocked before serving |
 | SSE transcription | Emits decoder-token deltas after the complete upload has entered one engine request | Not continuous audio-input realtime |
 | Realtime WebSocket | Buffers PCM16 until VAD stops, then runs a response pass followed by a transcription pass | Does not meet the incremental-ASR target by inspection; not yet verified on 910B |
 
@@ -113,7 +114,7 @@ or convert a failed graph path into an unreported eager fallback. A fallback is
 acceptable only when it is explicit in configuration and independently
 qualified.
 
-## Derived A3 baseline: run 910C-000
+## Derived A3 qualification record
 
 The isolated operator executed steps 1 through 4 of the first validation task.
 The full logs remain in the server-local `qwen3-asr-910c-000` evidence
@@ -156,7 +157,7 @@ closer standalone probes passed, including BF16 `conv2d`, non-JIT compile mode,
 a thread-pool worker, and a spawn child process whose worker thread executed
 the operator. Those probes rule out a general A3 `conv2d` failure.
 
-### Current diagnosis and ownership
+### Resolved eager root cause and ownership
 
 The daemon-process diagnosis recorded in commit `fa27495d` is rejected by run
 `910C-001`. The operator first confirmed the Python invariant independently:
@@ -169,21 +170,22 @@ with the unchanged CANN Manager EC0009, `GEInitializeV2`, and error-500001
 chain. The checkout was restored to `daemon=True` and a clean worktree after
 the diagnostic run.
 
-Therefore the current classification is **CANN GE/TBE knowledge-bank
-initialization failure in a full service process; owning component unresolved**.
-The failure may be a CANN defect, or a CANN compatibility defect triggered by
-process state established by SGLang/SGLang-Omni. It is not currently evidence
-for an Omni daemon-lifecycle fix, a CANN version mismatch, or an unsupported
-`conv2d`.
+Run `910C-002` resolved the previously unknown boundary. The CANN wrapper hid
+an `EOFError` in the Manager parent. Its `SyncManager` server child exited while
+the spawn bootstrap re-imported the `sgl-omni` main module: the import chain
+reached `cv2.typing`, then `cv2.mat_wrapper`, which failed because
+`libGL.so.1` was absent. The child closed its bootstrap pipe without returning
+the Manager address, the parent raised `EOFError`, and CANN converted it to
+EC0009 before the outer GE and `AclSetCompileopt` failures.
 
-The EC0009 text is not a root cause. CANN wraps exceptions from
-`multiprocessing.Manager()` with that message. In the closely matching public
-issue ICVT2X, the underlying exception is an `EOFError` while the Manager
-parent waits for the server child to return its address, meaning the short-lived
-Manager child exited before completing its startup handshake. A separate
-public case shows the same CANN wrapper around Python's spawn bootstrapping
-`RuntimeError`. The next gate must capture this run's original Python exception
-and Manager-child exit reason before assigning ownership or changing versions.
+This was an environment dependency collision, not a CANN, `torch_npu`,
+SGLang, SGLang-Omni, daemon-process, or `conv2d` defect. Both OpenCV wheel
+variants had been installed into the same `cv2` namespace, and the later
+non-headless installation won. The operator removed `opencv-python` and
+force-reinstalled `opencv-python-headless` 5.0.0 without dependencies. This is
+the exact validated A3 repair, not a repository-wide version pin. Afterward
+`cv2` imported successfully and its binary had no unresolved `libGL`
+dependency; the CANN Manager/GE failure signature disappeared.
 
 The operator also found and force-stopped a stage process orphaned from the
 initial validation for more than 12 hours, with PPID 1 and approximately 55 GiB
@@ -192,88 +194,104 @@ cause: after removal, HBM returned to the approximately 3 GiB idle baseline and
 a fresh non-daemon run reproduced the same failure. The orphan is retained as
 a separate shutdown/reap defect relevant to the later stability gate.
 
-### Runtime and workaround conclusions
+### A3 eager qualification after environment repair
 
-- A3 does not imply a CANN 8.x requirement. CANN 9.0.x is used by documented
-  A3 stacks, and CANN 9.0.1 with `torch_npu` 2.10.0.post2 is a plausible matched
-  ecosystem stack. The present evidence does not identify version mismatch as
-  the cause.
-- A CANN KB/GE integration defect is now the leading candidate, but is not yet
-  confirmed as a CANN 9.0.1-specific bug. The public ICVT2X report exhibits the
-  same Manager/EC0009/GE failure class on a different CANN and PyTorch stack and
-  has no public patch, so it supports the failure class rather than an exact
-  version conclusion.
-- Do not downgrade or upgrade CANN/`torch_npu` as the next variable. If a later
-  version experiment is needed, replace the complete vendor-supported stack
-  and record every component, rather than changing only one package.
-- No verified environment-variable workaround is accepted. `TASK_QUEUE_ENABLE`
-  changes task dispatch and is disabled by synchronous launch; HCCL controls do
-  not address this pre-communication single-device failure; no authoritative
-  `GE_NO_NEED_*` bypass has been established. Changing
-  `jit_compile=True` is also not the next experiment because it still requires
-  GE initialization.
-- Installing a headless OpenCV package merely to unlock direct SGLang serving
-  is lower priority and must not mutate the frozen environment. Use a cloned
-  environment only if separation remains necessary after the Manager failure
-  is classified.
+- The NPU installer suite passed 22 tests and the focused Qwen3-ASR suite passed
+  588 tests with 3 skipped after the repair, matching the pre-repair counts.
+- Eager batch 1 returned HTTP 200. Its approximately 30.2-second latency
+  included first compilation and is not a performance measurement.
+- Two concurrent requests both returned HTTP 200 in approximately 0.64 seconds
+  wall time, with different output hashes for different inputs and no observed
+  cross-request contamination.
+- Ten sequential requests all returned HTTP 200 in approximately 0.35--0.40
+  seconds each, with one stable output hash. These clips were functional smoke
+  inputs, not the frozen exact-10-second performance corpus.
+- Peak chip-0 HBM was 55,756 MiB of 65,536 MiB and remained stable. Health,
+  graceful shutdown, process cleanup, port release, and a fresh-process restart
+  all passed. The restart request reproduced the batch-1 output hash.
+- The only scanned `ERROR` was an unrelated optional NIXL import failure; there
+  was no traceback, OOM, NaN, device reset, or fallback marker.
+
+The eager result qualifies only this A3 environment and functional workload.
+It does not qualify the original 910B target, concurrency 70, exact-10-second
+latency, realtime ingress, or generation graph mode.
+
+### Independent decode graph failure
+
+Run `910C-003` repeated default startup after the OpenCV repair. Prefill graph
+capture succeeded, but decode graph capture failed on its first, largest bucket
+at batch size 64 with approximately 9.28 GiB available. The complete log had
+zero occurrences of EC0009, Manager instantiation, `GEInitializeV2`,
+`EOFError`, `AclSetCompileopt`, error 500001, `libGL`, or `cv2`. The first
+failure is instead ATB `PagedAttentionOperation setup failed` from
+`OpParamMaker.cpp` and `AtbCommon.cpp` during SGLang's decode NPU graph
+capture.
+
+This is a separate graph qualification item. SGLang owns the NPU graph runner,
+attention backend, capture buckets, and the call into the ATB operation;
+ATB/op-plugin owns the native operation setup result. Ownership between those
+components remains unresolved until the native diagnostic identifies whether
+the rejected input is a batch shape, memory/workspace budget, graph-capture
+constraint, or invalid operation parameter.
+
+### Installation hardening follow-up
+
+The repository should add a non-mutating NPU precheck and operator guidance for
+this failure class. The check should import `cv2` in a fresh spawn child, report
+the installed `opencv-python` and `opencv-python-headless` distributions, and
+reject the ambiguous state where both own the same `cv2` namespace. A missing
+`libGL` import should explain the two operator-owned remedies: provide the
+system library or use one compatible headless OpenCV distribution. The project
+installer must not automatically uninstall, replace, or pin an externally
+owned OpenCV stack. This is a local implementation task and is not part of the
+next server run.
 
 ## Next bounded diagnostic task
 
-Run identifier: `910C-002`. Keep the A3 hardware, runtime stack, model, eager
-flags, input, and batch-1 request fixed. Begin only after confirming no stale
-service/stage process, port owner, or non-baseline HBM allocation. Use a new
-server-local evidence directory and a fresh service process for every arm.
+Run identifier: `910C-004`. The only variable is **decode graph capacity**.
+Keep the repaired OpenCV environment, A3 hardware, runtime versions, model,
+prefill graph mode, torch-compile mode, memory fraction, and all other settings
+fixed. Use a fresh process and evidence subdirectory for each capacity.
 
-### Gate A: capture the CANN Manager exception without pre-initialization
+Before the first arm, record the exact SGLang Git HEAD, resolved ATB and
+op-plugin versions/library paths, `sgl-kernel-npu` version, confirmation that
+`opencv-python` is absent, the installed headless OpenCV version, and a
+successful fresh-process `cv2` import. Confirm no stale process, port owner, or
+non-baseline HBM allocation.
 
-1. Set `ASCEND_PROCESS_LOG_PATH` to a writable directory inside this run's
-   evidence directory, `ASCEND_GLOBAL_LOG_LEVEL=0`,
-   `PYTHONFAULTHANDLER=1`, and `PYTHONUNBUFFERED=1` before service startup.
-2. Use a diagnostic-only non-daemon ASR stage so Python permits a Manager
-   child. In that stage, enable `multiprocessing.util` DEBUG logging and wrap
-   `multiprocessing.Manager` only to log its full original exception before
-   re-raising it. Do not call Manager early, change its context, suppress the
-   exception, or edit CANN/`site-packages`.
-3. Immediately before the failing `conv2d`, from the same request-builder
-   thread, log the sanitized values of current-process daemon state,
-   `multiprocessing.get_start_method(allow_none=True)`, default-context start
-   method, thread name/main-thread status, `sys.executable`, `sys.argv[0]`,
-   current directory, `tempfile.gettempdir()`, and the SIGCHLD handler.
-4. Send exactly one smoke request. Preserve the service stderr, the complete
-   Python traceback intercepted around Manager, CANN plog for the stage PID and
-   any short-lived child PID, and any permitted kernel OOM/segfault record.
-   Record cgroup `pids.current` and `pids.max` in addition to shell ulimits.
-5. Stop after this request even if it succeeds. Restore all diagnostic source
-   edits and verify the checkout, processes, ports, and HBM baseline.
+1. Run paired capacities `1`, `16`, `32`, and `64` in that order. For capacity
+   `N`, set both `--asr.engine.max_running_requests N` and
+   `--asr.engine.cuda_graph_max_bs N`; Omni requires the graph cap to cover the
+   admission limit. Do not use the upstream `--cuda-graph-max-bs-decode` name
+   directly through the Omni CLI.
+2. For every arm, record the resolved capture-bucket list, first bucket
+   attempted, last bucket completed, available HBM immediately before capture,
+   capture duration, and the first complete failure. SGLang captures decode
+   buckets from largest to smallest, so a 0-progress failure identifies the
+   configured maximum bucket.
+3. Stop the ladder immediately if capacity 1 fails. If a larger capacity fails
+   after a smaller one passes, retain both logs and stop; that boundary is the
+   input for the next shape-versus-memory experiment. Do not compensate by
+   changing memory fraction in this run.
+4. On the first failing arm, rerun that same capacity once with ATB and ASDOPS
+   diagnostic logging enabled (`ATB_LOG_TO_STDOUT=1`,
+   `ATB_LOG_LEVEL=DEBUG`, `ASDOPS_LOG_TO_STDOUT=1`, and
+   `ASDOPS_LOG_LEVEL=DEBUG`) plus a writable CANN process-log directory. Do not
+   enable per-operation synchronization, alter task-queue policy, or patch
+   native libraries. Preserve the first native ATB/op-plugin error code and
+   message below `OperationSetup`, if any.
+5. If native logging still reports only the two wrapper frames, stop and return
+   the sanitized shapes, dtypes, strides, capture bucket, available HBM, exact
+   ATB/op-plugin versions, and full native stack. The next change then belongs
+   in the SGLang NPU backend as a minimal diagnostic/reproducer; do not edit
+   installed SGLang or CANN files in place.
+6. After every arm, stop normally and verify service processes, ports, device
+   health, and HBM return to baseline. A new orphan process is a gate failure.
 
-If the wrapper does not expose an exception more specific than EC0009, use one
-additional fresh process with `strace -ff` limited to process, signal, file,
-and IPC events to identify the Manager child exit/exec/permission failure. Do
-not return the full trace; retain it server-side and report only the relevant
-syscall, errno or terminating signal.
-
-### Gate B: plain Manager control in the exact service thread
-
-Use another fresh non-daemon diagnostic process. At the same request-thread
-location, run one ordinary `multiprocessing.Manager()` creation and a trivial
-proxy operation, record its original result, then deliberately stop before
-executing `conv2d`. Do not use the process for a subsequent functional claim,
-because the control can initialize or mutate global multiprocessing state.
-
-- Plain Manager fails: preserve its raw traceback and child exit reason. The
-  service process state, rather than CANN alone, is sufficient to reproduce the
-  failure.
-- Plain Manager passes while Gate A's CANN Manager fails: classify the boundary
-  as CANN KB integration/embedded-Python state and prepare a vendor reproducer.
-- Either arm reports a new first failure: stop and return that failure; do not
-  proceed to model loading, version changes, concurrency, or performance.
-
-Only if these two gates cannot locate the boundary, perform fresh-process
-Manager probes at one initialization checkpoint per run: stage entry,
-accelerator-environment preparation, SGLang NPU backend initialization, model
-load before ready, and request-builder entry. A probe process ends immediately
-after its result. Load the complete model in a standalone reproducer only if
-this bisection first changes from pass to fail at model loading.
+Do not run concurrency, performance, realtime, version-stack A/B, or memory
+fraction A/B in `910C-004`. Passing capacity 64 restores the default graph gate
+only; capacity 70 and the performance workload remain later qualification
+steps.
 
 Do not run performance or realtime measurements until the functional gates are
 green. A server-side diagnostic edit is not a deliverable fix; any confirmed
@@ -289,7 +307,8 @@ mapped in the evidence table.
    server commit.
 3. Repeat minimal import, startup, batch 1, two-request, sequential, bounded
    concurrency, health, and memory gates in new processes.
-4. Only after eager correctness is stable, run the
+4. After eager correctness is stable, qualify the default generation graph
+   before running the
    [performance and realtime task](qwen3_asr_ascend_910b_performance_task.md).
 5. Compare one variable at a time against the frozen eager-NPU baseline. Retain
    only changes that pass correctness, stability, and repeated performance
@@ -304,7 +323,9 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910B-000 | pending | `e7d876b2` | pending | target-hardware baseline | pending | Original 910B target has not been run |
 | 910C-000 | `e7d876b2` | `e7d876b2` | A3; CANN 9.0.1; torch 2.10.0; torch_npu 2.10.0.post2; SGLang 0.5.18 (Git HEAD missing); triton-ascend 3.2.1 | default startup, then eager batch 1 | failed | Default decode graph: `PagedAttentionOperation`; eager request: GE Manager EC0009 -> error 500001 |
 | 910C-001 | no diagnostic commit; edits reverted; final HEAD `fa27495d` | not applicable | Same A3 stack as 910C-000 | daemon process A/B, eager batch 1 | failed; daemon hypothesis rejected | Confirmed stage `daemon=False`; unchanged Manager EC0009 -> GE failure -> error 500001 after stale-process cleanup |
-| 910C-002 | pending | pending | Same A3 stack required | capture raw Manager failure; exact-thread plain Manager control | pending | pending |
+| 910C-002 | no diagnostic commit; final HEAD `aba09fe3` | not applicable | Same A3 stack as 910C-000 | capture raw Manager failure | passed; root cause found | Manager parent `EOFError`; spawn child failed importing `cv2` because `libGL.so.1` was absent |
+| 910C-003 | `aba09fe3`; environment-only repair | not applicable | Same A3 stack; `opencv-python` removed; `opencv-python-headless` 5.0.0 reinstalled | eager functional gates, restart, default graph retry | eager passed; graph failed | Eager gates and cleanup passed; independent decode ATB `PagedAttentionOperation` setup failure at batch 64 |
+| 910C-004 | pending | pending | Same repaired A3 stack required | decode graph capacity ladder and native ATB diagnostics | pending | pending |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
@@ -328,3 +349,5 @@ or proprietary profiler captures.
 - [SGLang A3 installation examples](https://github.com/sgl-project/sglang/blob/main/docs/docs/hardware-platforms/ascend-npus/getting-started/installation.mdx)
 - [CANN 9.0 process-log path](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/900/maintenref/envvar/envref_07_0120.html)
 - [CANN 9.0 application log level](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/900/maintenref/envvar/envref_07_0122.html)
+- [SGLang Ascend graph-capacity controls](https://github.com/sgl-project/sglang/blob/main/docs/docs/hardware-platforms/ascend-npus/model-deployment/tutorials/mimo_v2_flash.mdx)
+- [Ascend ATB and ASDOPS diagnostic logging example](https://gitee.com/ascend/MindSpeed-LLM/blob/59408f7f7520266976599912f8e35b97fb0c74d/mindie_ref/mindie_llm/atb_models/README.md)
