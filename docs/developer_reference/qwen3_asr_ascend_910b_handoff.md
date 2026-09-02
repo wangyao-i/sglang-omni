@@ -23,7 +23,9 @@ with torch compile disabled passed capture and single-request replay; the named
 encoder-eager candidate passes two concurrent requests after both inputs are
 warmed but hangs only when uncached encoder work overlaps enabled generation
 graph execution; disabling generation graph removes the hang, while compiled
-generation and encoder graph remain unqualified**.
+generation and encoder graph remain unqualified. Synchronous request building
+also removes the hang, and prefill-versus-decode graph scope is the next
+isolation gate**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. It is therefore recorded as the derived run
@@ -426,6 +428,30 @@ generation, and insertion-ordered future draining can amplify a blocked first
 build, so one further serialization A/B is required before selecting a source
 fix.
 
+### Synchronous request-build pass
+
+Run `910C-011` retained the graph-enabled `910C-010` Arm A profile and changed
+only `request_build_max_workers` from 8 to 1. The resolved scheduler reported
+one worker and no asynchronous build-pending or backlog growth. Generation
+captured through bucket 70, while torch compile and encoder graph remained
+explicitly disabled.
+
+After warming only clip A, the warm-A/cold-B wave completed in 1.88 seconds.
+Both requests returned HTTP 200 with their respective frozen hashes, generation
+logged `npu graph: True`, fallback and forbidden-error counts were zero, and
+all state drained. The two requests used serial `#new-seq: 1` prefills, as
+expected when request construction and the blocking encode execute on the
+scheduler thread.
+
+This establishes asynchronous request-building overlap as another necessary
+condition for the observed hang. The tested failure requires enabled generation
+graph, asynchronous request building, and an uncached encoder operation at the
+same time; removing any one avoids it. Insertion-ordered future draining can
+propagate the blocked build to later requests, but is not an independent root
+cause. One build worker is a diagnostic result, not a performance candidate:
+it removes request-build parallelism and encoder batching that the measured
+GPU profile needs at higher concurrency.
+
 ### Independent encoder graph failure
 
 The same run produced hardware evidence for the encoder boundary previously
@@ -462,51 +488,50 @@ next server run.
 
 ## Next bounded diagnostic task
 
-Run identifier: `910C-011`. Retain the graph-enabled `910C-010` Arm A profile
-and change only `request_build_max_workers` from 8 to 1. At one worker the
-scheduler does not construct a request-build thread pool, so request building
-and its blocking pre-LM encode execute synchronously on the scheduler thread.
-This tests whether asynchronous encoder/generation overlap is necessary for
-the hang; it is a correctness diagnostic, not a performance candidate.
+Run identifier: `910C-012`. Return to the asynchronous, graph-enabled
+`910C-010` Arm A profile and change only **prefill graph enablement**. Disable
+prefill graph while retaining decode graph through bucket 70. The failed arm
+logged one prefill graph replay and no decode, so this gate determines whether
+the unsafe overlap is specific to prefill graph and whether a zero-source-change
+prefill-eager/decode-graph candidate can preserve the important decode path.
 
-1. Use one fresh process with the repaired A3 stack, generation graph capacity
-   70, torch compile disabled, encoder graph explicitly disabled,
-   `max_running_requests=70`, and `request_build_max_workers=1`. Retain the
-   exact cache, pending-build limit where accepted, prefill coalescing, memory,
-   versions, frozen clips, expected hashes, request timing, 120-second timeout,
-   and no-retry policy from `910C-010` Arm A.
-2. Before startup require a clean tracked worktree, no process or port owner,
-   healthy device state, and idle-baseline HBM. Verify the resolved profile has
-   one request-build worker, no request-build executor, generation capture
-   through bucket 70, and zero encoder capture/fallback/error signatures. If
-   the runtime does not expose executor state, the worker count plus the
-   absence of asynchronous build-pending growth is acceptable evidence.
+1. Use one fresh process with the repaired A3 stack, torch compile disabled,
+   encoder graph explicitly disabled, `max_running_requests=70`,
+   `request_build_max_workers=8`, and decode graph capacity 70. Retain the exact
+   cache, pending-build, prefill coalescing, memory, versions, frozen clips,
+   expected hashes, request timing, 120-second timeout, and no-retry policy from
+   `910C-010` Arm A.
+2. Set only `--asr.engine.disable_prefill_cuda_graph true`. Before startup
+   require a clean tracked worktree, no process or port owner, healthy device
+   state, and idle-baseline HBM. Verify prefill graph is explicitly disabled
+   with zero prefill capture/replay attempts, decode graph still captures all
+   buckets through exactly 70, request-build workers resolve to 8, and encoder
+   graph has zero capture/fallback/error signatures.
 3. Warm clip A only, wait for coordinator, admission, build, waiting, and
    running state to drain, confirm one cache entry, and leave clip B uncached.
-   Then submit exactly one synchronized A+B wave with the same ordering and
-   client harness as `910C-010`.
+   Submit exactly one synchronized A+B wave using the `910C-010` harness.
 4. Poll health and `GET /model_info` at submission and approximately 1, 5, 15,
    30, 60, and 120 seconds until completion or timeout. Preserve request-build
-   start/end, encoder batch, prefill/decode, coordinator and scheduler state,
-   NPU utilization/HBM, hashes, and latencies. Do not retry or run larger load.
-5. Pass requires two HTTP 200 responses with the respective frozen hashes,
-   generation `npu graph: True`, zero graph fallback/forbidden errors, and all
-   state drained. A pass establishes asynchronous request-building overlap as
-   another necessary condition and authorizes local design of an NPU-specific
-   encoder/generation exclusion protocol before a hardware fix run.
-6. A hang shows that moving encode onto the scheduler thread is insufficient;
-   preserve the first complete timeline and stop. The next local diagnostic
-   must then instrument device-operation boundaries rather than altering build
-   ordering or worker count.
+   and encoder events, prefill/decode batch logs, graph counters, coordinator
+   and scheduler state, NPU utilization/HBM, hashes, and latencies.
+5. Pass requires two HTTP 200 responses with their frozen hashes, prefill
+   `npu graph: False`, positive decode-graph replay evidence (`Decode batch`
+   with `npu graph: True` or an equivalent decode replay counter), zero graph
+   fallback/forbidden errors, and all state drained. A pass establishes prefill
+   graph as a necessary condition and promotes prefill-eager/decode-graph with
+   eight build workers to the next bounded-concurrency candidate.
+6. If the wave hangs, preserve the first complete state timeline and stop. Do
+   not run a complementary decode-off arm or edit source. That result means
+   prefill graph alone is not the full boundary and the next step is a locally
+   reviewed encoder/generation exclusion protocol with device-boundary
+   instrumentation.
 7. Stop normally when possible; after a hang use bounded forced cleanup.
    Confirm process/port release, device health, idle HBM, and no orphan process.
 
-Do not treat `request_build_max_workers=1` as the performance solution, patch a
-dedicated NPU stream on the server, change generation/encoder graph settings,
-change admission capacity, cache, coalescing, or pending-build policy, or run
-performance/realtime in `910C-011`. A dedicated NPU stream needs locally
-reviewed cross-stream ordering and tensor-lifetime semantics before hardware
-execution; raw stream diagnostics alone are not a safe fix.
+Do not patch a dedicated NPU stream, alter request-build workers, disable decode
+graph, change admission capacity, cache, coalescing, or pending-build policy, or
+run larger concurrency, performance, or realtime in `910C-012`. The task is a
+single-variable graph-scope qualification, not a performance run.
 
 Formal performance prerequisites are not yet met. Maximum-bucket concurrent
 replay is unproven, and the named encoder-eager mode is not stable when an
@@ -557,7 +582,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-008 | `4e5befe6`; no runtime edit | not applicable | Repaired A3 stack; SGLang `71de97b2`; compile disabled; encoder graph explicitly disabled | named candidate functional and bounded-concurrency ladder | failed at two concurrent | Startup and one request passed; A+B wave timed out at 120 s with two coordinator-running requests, one prefill, no decode, stable HBM, and no error/fallback |
 | 910C-009 | `0452d9de`; no runtime edit | not applicable | Exact `910C-008` named-candidate stack | sequentially warm A/B, then one A+B wave with state polling | passed | Both-warm wave completed in 1.87 s; 2/2 HTTP 200 with frozen hashes, prefill `#new-seq: 2` and `npu graph: True`, zero fallback, and drained state; uncached encoder work is necessary for the `910C-008` hang under the tested ordering |
 | 910C-010 | `2336ccff`; no runtime edit | not applicable | Exact `910C-008` named-candidate stack; only generation graph enablement varied | warm-A/cold-B two-request A/B with generation graph enabled versus explicitly disabled | Arm A reproduced hang; Arm B passed | Graph on timed out at 120 s with two running requests and no decode; graph off completed 2/2 in 0.44 s with frozen hashes and `npu graph: False`; generation graph execution is necessary for the cold-encoder hang |
-| 910C-011 | pending | pending | Exact graph-enabled `910C-010` Arm A stack required except one request-build worker | warm-A/cold-B two-request wave with synchronous request building | pending | Tests whether asynchronous encoder/generation overlap is also necessary before choosing a source fix |
+| 910C-011 | `a67b2859`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except `request_build_max_workers=1` | warm-A/cold-B two-request wave with synchronous request building | passed | Completed 2/2 in 1.88 s with frozen hashes and `npu graph: True`; one worker with zero build pending/backlog; asynchronous request-building overlap is also necessary for the hang |
+| 910C-012 | pending | pending | Exact graph-enabled `910C-010` Arm A stack except prefill graph explicitly disabled | warm-A/cold-B two-request wave with prefill eager and decode graph retained | pending | Tests whether prefill graph is the unsafe overlap boundary and a decode-graph performance candidate remains viable |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
