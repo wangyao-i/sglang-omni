@@ -18,8 +18,8 @@ Target topology: one Ascend 910B, one Qwen3-ASR-1.7B stage, BF16, no model
 quantization, and no tensor or data parallelism.
 
 Status at base commit `e7d876b28326c55d777ae62e1c3650b816785d8c`:
-**A3 eager functional baseline passed; decode graph qualification blocked at
-ATB `PagedAttentionOperation` setup**.
+**A3 eager functional baseline passed; decode graph qualification has separate
+small-batch torch-compile and large-batch ATB blockers**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. It is therefore recorded as the derived run
@@ -30,7 +30,7 @@ remains unstarted until the same gates run on the intended device class.
 |---|---|---|
 | Ascend installation | NPU manifest, precheck, and installation guide are implemented | Precheck passed on A3; not yet run on the target 910B |
 | Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager batch 1, two-concurrent, ten-sequential, health, shutdown, and restart gates passed after repairing the OpenCV environment; not yet started on 910B |
-| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | A3 prefill capture succeeded and decode capture failed independently at ATB `PagedAttentionOperation`; not yet verified on 910B |
+| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | A3 prefill capture succeeded; decode capture failed at Dynamo/triton-ascend for compiled batch 1 and independently at ATB `PagedAttentionOperation` for non-compiled batch 64; not yet verified on 910B |
 | Encoder graph | Implemented with `torch.cuda.Stream`, `torch.cuda.CUDAGraph`, and `torch.cuda.graph`; enabled by default | Incompatible by inspection; the first baseline run must preserve the complete failure evidence |
 | Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; graph mode remains blocked before serving |
 | SSE transcription | Emits decoder-token deltas after the complete upload has entered one engine request | Not continuous audio-input realtime |
@@ -127,9 +127,10 @@ directory; this section contains only the reviewable, redacted result.
   qualification topology used one device.
 - Runtime fingerprint: CANN toolkit 9.0.1, PyTorch 2.10.0+cpu,
   `torch_npu` 2.10.0.post2, SGLang package 0.5.18,
-  `triton-ascend` 3.2.1, and SGLang-Omni 0.1.3 at `e7d876b2`. The exact SGLang
-  Git HEAD was not returned and remains required for a reproducible final
-  runtime matrix.
+  `triton-ascend` 3.2.1, and SGLang-Omni 0.1.3 at `e7d876b2`. The initial runs
+  did not return the exact SGLang Git HEAD. Run `910C-004` later recorded
+  `71de97b264b04dcd514cf904003028aefe9775c8`; that commit is required unchanged
+  for subsequent comparison but is not retroactive proof of the initial state.
 - The NPU installer suite passed 22 tests. The focused Qwen3-ASR suite passed
   588 tests with 3 skipped. An earlier collection failure came from an old
   editable SGLang 0.5.16 fork and disappeared after the operator installed the
@@ -234,6 +235,44 @@ components remains unresolved until the native diagnostic identifies whether
 the rejected input is a batch shape, memory/workspace budget, graph-capture
 constraint, or invalid operation parameter.
 
+### Capacity-one torch-compile failure
+
+Run `910C-004` followed the stop rule and ended at capacity 1; capacities 16,
+32, and 64 were not run. The resolved profile was `cuda_graph=True`, decode
+capture buckets `[1]`, `enable_torch_compile=True`,
+`max_running_requests=1`, and `mem_fraction_static=0.837`. Prefill capture
+succeeded in 7.80 seconds. Decode capture then failed at zero progress in
+TorchDynamo before reaching ATB attention setup:
+
+```text
+torch._dynamo.exc.Unsupported: Attempted to call function marked as skipped
+triton/backends/ascend/driver.py: NPUUtils.get_device_properties
+```
+
+The batch-1 log contains no `PagedAttentionOperation`, `OpParamMaker`, or
+`AtbCommon` signature. Conversely, the earlier first failure at batch 64 did
+not contain the Dynamo skipped-function signature. These are distinct first
+failures, not evidence of a capacity threshold.
+
+The shared configuration flag does not establish a shared torch-compile
+execution path. At the exact SGLang commit used by the server,
+`get_batch_sizes_to_capture()` places only capture buckets less than or equal
+to `torch_compile_max_bs` in `compile_bs`. Qwen3-ASR currently defaults that
+threshold to 2. Therefore the batch-1 arm is a compiled bucket, while the
+first, largest batch-64 bucket from `910C-003` is non-compiled under the
+reported unchanged defaults. The batch-64 ATB failure must remain an
+independent graph-capture blocker.
+
+The immediate unsupported call is implemented by `triton-ascend`, but final
+fix ownership is not established by the stack alone. SGLang owns the compiled
+forward boundary and should avoid tracing device discovery if the value can be
+resolved and cached before compilation. A minimal reproducer against the exact
+SGLang and triton-ascend revisions must determine whether that integration
+change is sufficient or whether the driver must make the query safely usable
+by compiler consumers. Do not apply Dynamo trace-forcing decorators as a
+diagnostic workaround: they can bypass safety checks or introduce graph breaks
+without proving capture/replay correctness.
+
 ### Installation hardening follow-up
 
 The repository should add a non-mutating NPU precheck and operator guidance for
@@ -248,50 +287,46 @@ next server run.
 
 ## Next bounded diagnostic task
 
-Run identifier: `910C-004`. The only variable is **decode graph capacity**.
-Keep the repaired OpenCV environment, A3 hardware, runtime versions, model,
-prefill graph mode, torch-compile mode, memory fraction, and all other settings
-fixed. Use a fresh process and evidence subdirectory for each capacity.
+Run identifier: `910C-005`. The only variable relative to the failed
+capacity-1 arm of `910C-004` is **torch compile disabled**. This gate separates
+decode graph capture from the small-batch Dynamo/triton-ascend failure; it does
+not attempt to qualify compile performance or the batch-64 ATB path.
 
-Before the first arm, record the exact SGLang Git HEAD, resolved ATB and
-op-plugin versions/library paths, `sgl-kernel-npu` version, confirmation that
-`opencv-python` is absent, the installed headless OpenCV version, and a
-successful fresh-process `cv2` import. Confirm no stale process, port owner, or
-non-baseline HBM allocation.
+1. Start from a fresh process with the repaired OpenCV environment and the
+   exact hardware, model, SGLang/SGLang-Omni commits, package versions, memory
+   fraction, capacity 1, and graph settings from `910C-004`. Keep
+   `--asr.engine.max_running_requests 1` and
+   `--asr.engine.cuda_graph_max_bs 1`; change only
+   `--asr.engine.enable_torch_compile false`.
+2. Before startup, confirm no stale process or port owner, device HBM is at the
+   idle baseline, and the tracked worktree is clean. Record the resolved
+   profile and require `cuda_graph=True`, decode buckets `[1]`, and
+   `torch_compile=False`; a different profile invalidates the arm.
+3. Record prefill capture and decode capture separately, including first bucket,
+   completed bucket count, available HBM, duration, and the first complete
+   failure. Scan for both known signatures: Dynamo
+   `NPUUtils.get_device_properties` and ATB `PagedAttentionOperation`.
+4. If decode capture fails, preserve the first complete traceback and stop. If
+   it reaches ATB setup, rerun the same arm once with
+   `ATB_LOG_TO_STDOUT=1`, `ATB_LOG_LEVEL=DEBUG`,
+   `ASDOPS_LOG_TO_STDOUT=1`, and `ASDOPS_LOG_LEVEL=DEBUG`, plus a writable CANN
+   process-log directory, then stop. Do not change task-queue or synchronous
+   launch policy, patch installed packages, or force Dynamo tracing.
+5. If capture succeeds, send exactly one smoke request. Return an explicit
+   decode graph replay/runtime marker, HTTP status, output-validity result,
+   latency as diagnostic data, fallback count, and forbidden-error counts.
+   Success without proof of graph replay is inconclusive. Then stop; do not run
+   capacities 16, 32, or 64 in this task.
+6. Stop normally and verify all service processes and ports are released,
+   device health is normal, and HBM returns to baseline. A new orphan process
+   is a gate failure.
 
-1. Run paired capacities `1`, `16`, `32`, and `64` in that order. For capacity
-   `N`, set both `--asr.engine.max_running_requests N` and
-   `--asr.engine.cuda_graph_max_bs N`; Omni requires the graph cap to cover the
-   admission limit. Do not use the upstream `--cuda-graph-max-bs-decode` name
-   directly through the Omni CLI.
-2. For every arm, record the resolved capture-bucket list, first bucket
-   attempted, last bucket completed, available HBM immediately before capture,
-   capture duration, and the first complete failure. SGLang captures decode
-   buckets from largest to smallest, so a 0-progress failure identifies the
-   configured maximum bucket.
-3. Stop the ladder immediately if capacity 1 fails. If a larger capacity fails
-   after a smaller one passes, retain both logs and stop; that boundary is the
-   input for the next shape-versus-memory experiment. Do not compensate by
-   changing memory fraction in this run.
-4. On the first failing arm, rerun that same capacity once with ATB and ASDOPS
-   diagnostic logging enabled (`ATB_LOG_TO_STDOUT=1`,
-   `ATB_LOG_LEVEL=DEBUG`, `ASDOPS_LOG_TO_STDOUT=1`, and
-   `ASDOPS_LOG_LEVEL=DEBUG`) plus a writable CANN process-log directory. Do not
-   enable per-operation synchronization, alter task-queue policy, or patch
-   native libraries. Preserve the first native ATB/op-plugin error code and
-   message below `OperationSetup`, if any.
-5. If native logging still reports only the two wrapper frames, stop and return
-   the sanitized shapes, dtypes, strides, capture bucket, available HBM, exact
-   ATB/op-plugin versions, and full native stack. The next change then belongs
-   in the SGLang NPU backend as a minimal diagnostic/reproducer; do not edit
-   installed SGLang or CANN files in place.
-6. After every arm, stop normally and verify service processes, ports, device
-   health, and HBM return to baseline. A new orphan process is a gate failure.
-
-Do not run concurrency, performance, realtime, version-stack A/B, or memory
-fraction A/B in `910C-004`. Passing capacity 64 restores the default graph gate
-only; capacity 70 and the performance workload remain later qualification
-steps.
+Do not resume the old capacity ladder, or run concurrency, performance,
+realtime, version-stack, memory-fraction, compile-threshold, or source-patch
+A/Bs in `910C-005`. If this arm passes, the next task may repeat the capacity
+ladder with torch compile disabled. Compile qualification remains a separate
+upstream integration task; disabling it is an explicit diagnostic/configured
+mode, not permission for a silent runtime fallback.
 
 Do not run performance or realtime measurements until the functional gates are
 green. A server-side diagnostic edit is not a deliverable fix; any confirmed
@@ -325,7 +360,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-001 | no diagnostic commit; edits reverted; final HEAD `fa27495d` | not applicable | Same A3 stack as 910C-000 | daemon process A/B, eager batch 1 | failed; daemon hypothesis rejected | Confirmed stage `daemon=False`; unchanged Manager EC0009 -> GE failure -> error 500001 after stale-process cleanup |
 | 910C-002 | no diagnostic commit; final HEAD `aba09fe3` | not applicable | Same A3 stack as 910C-000 | capture raw Manager failure | passed; root cause found | Manager parent `EOFError`; spawn child failed importing `cv2` because `libGL.so.1` was absent |
 | 910C-003 | `aba09fe3`; environment-only repair | not applicable | Same A3 stack; `opencv-python` removed; `opencv-python-headless` 5.0.0 reinstalled | eager functional gates, restart, default graph retry | eager passed; graph failed | Eager gates and cleanup passed; independent decode ATB `PagedAttentionOperation` setup failure at batch 64 |
-| 910C-004 | pending | pending | Same repaired A3 stack required | decode graph capacity ladder and native ATB diagnostics | pending | pending |
+| 910C-004 | `bb456255`; no runtime edit | not applicable | Repaired A3 stack; SGLang `71de97b2`; headless OpenCV 5.0.0.93 | capacity-1 decode graph capture with compile enabled | failed; ladder stopped as required | Batch 1 failed before ATB: Dynamo rejected skipped triton-ascend `NPUUtils.get_device_properties`; 16/32/64 not run |
+| 910C-005 | pending | pending | Exact 910C-004 stack required | capacity-1 graph capture with torch compile disabled | pending | pending |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
@@ -339,6 +375,8 @@ or proprietary profiler captures.
 - [Qwen3-ASR usage and current SSE behavior](../cookbook/qwen3_asr.md)
 - [Qwen3-ASR concurrency profile](qwen3_asr_concurrency_profile.md)
 - [SGLang Ascend NPU guide](https://docs.sglang.io/docs/hardware-platforms/ascend-npus/ascend_npu)
+- [SGLang compile-bucket selection at server commit](https://github.com/sgl-project/sglang/blob/71de97b264b04dcd514cf904003028aefe9775c8/python/sglang/srt/model_executor/runner/base_cuda_graph_runner.py)
+- [PyTorch fine-grained compiler controls](https://docs.pytorch.org/docs/main/user_guide/torch_compiler/torch.compiler_fine_grain_apis.html)
 - [Qwen3-ASR-1.7B model card](https://huggingface.co/Qwen/Qwen3-ASR-1.7B)
 - [Python multiprocessing daemon-process contract](https://docs.python.org/3/library/multiprocessing.html)
 - [`torch_npu` compatibility matrix](https://github.com/Ascend/pytorch/blob/master/COMPATIBILITY.en.md)
