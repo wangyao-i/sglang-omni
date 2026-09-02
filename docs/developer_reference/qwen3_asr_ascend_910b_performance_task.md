@@ -31,6 +31,12 @@ status; this page owns the measurement procedure.
   benchmark's local-directory loader validates the expected split and sample
   count fully offline. Do not replace the pinned corpus with repeated test
   clips or an unmanifested local dataset.
+- Keep benchmark-only data-reader repairs out of the serving environment. When
+  the handoff identifies a compatible `pyarrow` patch wheel, install it offline
+  in a separate benchmark-client virtual environment, scan the complete pinned
+  Parquet and validate the requested samples there, and run only the HTTP client
+  from that environment. Record both client and server dependency fingerprints;
+  launch the server with its original interpreter and verify it is unchanged.
 
 The current SeedTTS benchmark is useful for public accuracy and concurrency
 comparisons, but it does not enforce exact 10 s clips and its resource monitor

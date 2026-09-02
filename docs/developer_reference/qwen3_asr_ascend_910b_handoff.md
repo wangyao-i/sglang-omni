@@ -537,6 +537,37 @@ layout are fixed. Repeated repository test clips cannot replace the dataset:
 cache hits and absent corpus references would invalidate cold-input concurrency
 and WER evidence.
 
+The verified English Parquet subsequently exposed a second client-environment
+blocker before service startup: the existing `pyarrow 25.0.0` reader raised
+`ArrowInvalid: Index not in dictionary bounds` while decoding its dictionary-
+encoded pages. Do not classify this as a general incompatibility between a file
+written by Arrow 24 and a reader at Arrow 25. Apache Arrow issue GH-50503 records
+the same deterministic `pyarrow 25.0.0` aarch64 dictionary-decode failure on an
+affected SVE CPU path, with 24.0.0 unaffected; the 25.0.1 patch release includes
+GH-50503's fix. Record `uname -m`, the relevant `lscpu` model/part fields,
+glibc version, wheel filename, and exact traceback category to establish whether
+the isolated host matches that failure class.
+
+Do not downgrade or upgrade `pyarrow` in the serving environment. Create a
+separate benchmark-client virtual environment with access to the existing eval
+dependencies, install only the offline `pyarrow 25.0.1` wheel appropriate for
+the host, and run dataset loading plus the HTTP benchmark from that environment;
+launch the server with its unchanged interpreter. For the current CPython 3.11
+aarch64 stack, the approved wheel is
+`pyarrow-25.0.1-cp311-cp311-manylinux_2_28_aarch64.whl`, size 46,834,633 bytes,
+SHA-256
+`880523be3d29efcf83d3998835d206118ccf35e3871dbd2fb60408cf6b007a80`.
+Verify architecture, ABI, glibc compatibility, file size, and hash before an
+offline `pip install --no-index --no-deps` into that virtual environment.
+
+Before resuming `910C-013`, require all of the following: the client environment
+imports `pyarrow==25.0.1`; `pip check` succeeds; a full single-threaded
+`ParquetFile.iter_batches` scan reads all 1,088 English rows; the repository
+loader returns exactly 70 requested samples with readable, distinct audio; and
+the original serving interpreter still reports its unchanged package set. If
+25.0.1 fails any check, stop and preserve evidence; a pyarrow-24 client-only A/B
+requires a new recorded decision, not an in-place serving-environment downgrade.
+
 ### Independent encoder graph failure
 
 The same run produced hardware evidence for the encoder boundary previously
@@ -598,6 +629,11 @@ SHA-256. After approved transfer and extraction, the isolated server must point
 resume step 1 until it succeeds and reports the pinned revision from cache.
 Alternatively, use the exact English-only Parquet snapshot and preflight
 defined in the staging-blocker section; that path does not require an HF cache.
+If the server's existing client packages reproduce the documented Arrow 25.0.0
+dictionary-decode failure, perform the isolated 25.0.1 benchmark-client virtual-
+environment recovery from that section and repeat the full scan and 70-sample
+loader preflight. The service must not start until one approved client
+environment passes.
 
 1. Keep the repaired A3 stack, torch compile disabled, encoder graph explicitly
    disabled, prefill graph explicitly disabled, decode graph captured through
@@ -702,7 +738,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-010 | `2336ccff`; no runtime edit | not applicable | Exact `910C-008` named-candidate stack; only generation graph enablement varied | warm-A/cold-B two-request A/B with generation graph enabled versus explicitly disabled | Arm A reproduced hang; Arm B passed | Graph on timed out at 120 s with two running requests and no decode; graph off completed 2/2 in 0.44 s with frozen hashes and `npu graph: False`; generation graph execution is necessary for the cold-encoder hang |
 | 910C-011 | `a67b2859`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except `request_build_max_workers=1` | warm-A/cold-B two-request wave with synchronous request building | passed | Completed 2/2 in 1.88 s with frozen hashes and `npu graph: True`; one worker with zero build pending/backlog; asynchronous request-building overlap is also necessary for the hang |
 | 910C-012 | `97769286`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except prefill graph explicitly disabled | warm-A/cold-B two-request wave with prefill eager and decode graph retained | wave passed; decode replay not attested | Completed 2/2 in 0.19 s with frozen hashes, prefill `npu graph: False`, zero fallback, and drained state; prefill graph is necessary for the hang; short outputs and absent decode counter left decode replay unproven |
-| 910C-013 | `73d6d6bc`; no runtime service started | not applicable | Exact `910C-012` prefill-eager/decode-graph stack planned; isolated host has no SeedTTS cache | fresh-process SeedTTS EN cold-input ladder at concurrency 8/16/32/64/70 | blocked before startup; offline-cache resume pending | Default endpoint failed with proxy 504 and mirror TLS closed; no ladder level ran; resume only after exact-revision standard HF cache transfer and successful fully offline prepare |
+| 910C-013 | `73d6d6bc`; no runtime service started | not applicable | Exact `910C-012` prefill-eager/decode-graph stack planned; pinned EN Parquet transferred but existing pyarrow 25.0.0 client cannot decode it | fresh-process SeedTTS EN cold-input ladder at concurrency 8/16/32/64/70 | blocked before startup; isolated client-environment repair pending | Network staging failed first; verified local Parquet then raised dictionary-index bounds during 25.0.0 decode; no ladder level ran; resume only after the isolated pyarrow 25.0.1 client passes full scan and loader preflight while service packages remain unchanged |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
