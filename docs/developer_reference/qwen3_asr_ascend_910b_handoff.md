@@ -29,7 +29,9 @@ graph remains captured, making prefill-eager/decode-graph the bounded-
 concurrency candidate. The dataset/client-environment blocker is resolved, but
 that candidate hung at the first concurrency-8 cold-input level even though
 prefill graph was disabled; decode graph replay was positively attested before
-the hang. The next task isolates decode graph enablement at the same workload**.
+the hang. The graph-off comparison completed all requests, proving decode graph
+execution is necessary for this concurrency-8 failure. Local observability work
+is now required before another graph-enabled hardware run**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. It is therefore recorded as the derived run
@@ -779,6 +781,52 @@ normally content-distinct, so prewarming the measured corpus would replace the
 target workload with cache-hit performance and cannot close this stability
 gate.
 
+### `910C-014` result and client preparation
+
+The graph-disabled Arm B completed all 70 HTTP requests at concurrency 8 and
+drained coordinator state. Startup and runtime evidence showed no graph capture
+and `npu graph: False`; request-build pending peaked at 1 without admission or
+backlog growth, and running batch size peaked at 7. Compared with the otherwise
+identical graph-enabled `910C-013` Arm A, this establishes decode graph execution
+as a necessary condition for the observed cold-input hang.
+
+Classify this as a passed stability-isolation arm, not a complete benchmark
+pass. The client raised after all responses while constructing English WER
+because `whisper.normalizers.EnglishTextNormalizer` was unavailable, so it did
+not write the result JSON or accuracy/latency aggregates. The latest periodic
+encoder statistic reported 68 misses; it demonstrates progress but is not a
+final 70-miss attestation. Do not reconstruct missing metrics from access logs
+or call the incomplete result a performance measurement.
+
+`openai-whisper==20250625` is an exact dependency declared by this repository,
+so installing that exact distribution in the isolated benchmark-client virtual
+environment is approved and is not an ad-hoc dependency. Do not install it in
+the serving interpreter. Use an offline artifact or approved wheelhouse, retain
+pyarrow 25.0.1 in the client environment, run `pip check`, and require this
+probe to pass:
+
+```bash
+"${BENCHMARK_PYTHON}" -c \
+  'from whisper.normalizers import EnglishTextNormalizer; EnglishTextNormalizer()'
+```
+
+If the exact package requires a build artifact or a declared transitive
+dependency that is absent, stop and stage that repository-declared dependency;
+do not enable network access or select a different Whisper version. Installing
+the dependency does not authorize another model-server run by itself.
+
+Do not rerun graph-disabled Arm B solely to recover WER or latency: its eager
+timings are not the performance candidate, and the isolation conclusion is
+already established. Do not scan concurrency 3 through 7 yet; a numerical
+threshold would be workload-sensitive and would not identify the blocked device
+operation. The next development task is a local, reviewable diagnostic change
+that exposes encoder enqueue/batch start/encode return/batch finish and the
+corresponding request-build/admission state, with timestamps and bounded logging.
+Where decode replay begin/end visibility requires an SGLang change, keep that
+patch in the SGLang repository and record its actual HEAD and commit mapping.
+Only after the diagnostic change has focused tests and a handoff commit may a
+new graph-enabled concurrency-8 cold-input run be issued.
+
 Formal performance prerequisites are not yet met. The prefill-eager/decode-
 graph candidate passed one two-request cold-overlap wave but failed the first
 bounded concurrency level; maximum-bucket replay also remains unproven. The performance contract
@@ -831,7 +879,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-011 | `a67b2859`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except `request_build_max_workers=1` | warm-A/cold-B two-request wave with synchronous request building | passed | Completed 2/2 in 1.88 s with frozen hashes and `npu graph: True`; one worker with zero build pending/backlog; asynchronous request-building overlap is also necessary for the hang |
 | 910C-012 | `97769286`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except prefill graph explicitly disabled | warm-A/cold-B two-request wave with prefill eager and decode graph retained | wave passed; decode replay not attested | Completed 2/2 in 0.19 s with frozen hashes, prefill `npu graph: False`, zero fallback, and drained state; prefill graph is necessary for the hang; short outputs and absent decode counter left decode replay unproven |
 | 910C-013 | `9bae2619`; no runtime edit | not applicable | Exact `910C-012` candidate plus decode log interval 1; serving pyarrow 25.0.0; isolated benchmark client pyarrow 25.0.1 | SeedTTS EN 70 content-distinct inputs at concurrency 8, no benchmark warm-up | failed; hung at first level | Preflight passed; eight requests remained outstanding beyond 90 s and none completed; HBM stayed stable with no error/fallback; 66 decode records with `npu graph: True` attest replay but do not qualify stability; levels 16/32/64/70 did not run |
-| 910C-014 | pending | not applicable | Exact `910C-013` stack; only decode graph disabled | Arm B: same 70 content-distinct inputs at concurrency 8 | pending | Compare with `910C-013` Arm A; stop after this one arm and classify whether decode graph is necessary |
+| 910C-014 | `d69c5d3f`; no runtime edit | not applicable | Exact `910C-013` stack; only decode graph disabled; serving pyarrow 25.0.0; isolated client pyarrow 25.0.1 | Arm B: same 70 content-distinct inputs at concurrency 8 | stability-isolation arm passed; benchmark post-processing incomplete | Warm A plus 70 measured requests returned HTTP 200 with `npu graph: False` and state drained; pending peaked at 8 and running batch at 7; missing declared `openai-whisper` caused WER post-processing failure and no result JSON; decode graph is necessary for the graph-enabled Arm A hang |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
