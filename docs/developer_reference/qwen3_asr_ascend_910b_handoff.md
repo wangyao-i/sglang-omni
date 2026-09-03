@@ -560,13 +560,55 @@ SHA-256
 Verify architecture, ABI, glibc compatibility, file size, and hash before an
 offline `pip install --no-index --no-deps` into that virtual environment.
 
+The approved loader decision is to use the repository's local-Parquet path,
+not a `sitecustomize`/monkeypatch redirect, fabricated Hub API cache, generated
+`meta.lst`, or substituted corpus. The repository loader recognizes a snapshot
+directory, resolves only `data/<split>-*.parquet`, and invokes the local
+`parquet` dataset builder without a Hub repo ID. The benchmark's
+`--unique-audio` option hashes staged audio bytes, preserves the first sample
+for each content hash, and applies `--max-samples` after deduplication. This is
+required for `910C-013`: path or sample-ID uniqueness is insufficient evidence
+for 70 encoder-cache misses.
+
+The operator temporarily changed the serving interpreter from pyarrow 25.0.0
+to 24.0.0 during diagnosis. Before any model server is started, restore that
+interpreter to its exact pre-diagnostic package set (including pyarrow 25.0.0),
+run `pip check`, and record the restored freeze hash. Pyarrow 25.0.1 belongs
+only in the separate benchmark-client environment; a passing ASR unit-test
+collection while the global package set is changed does not qualify the
+serving environment.
+
 Before resuming `910C-013`, require all of the following: the client environment
 imports `pyarrow==25.0.1`; `pip check` succeeds; a full single-threaded
 `ParquetFile.iter_batches` scan reads all 1,088 English rows; the repository
-loader returns exactly 70 requested samples with readable, distinct audio; and
+loader invoked through the benchmark with `--unique-audio --max-samples 70`
+returns exactly 70 requested samples with readable, distinct audio; and
 the original serving interpreter still reports its unchanged package set. If
 25.0.1 fails any check, stop and preserve evidence; a pyarrow-24 client-only A/B
 requires a new recorded decision, not an in-place serving-environment downgrade.
+
+Set `BENCHMARK_PYTHON` to the benchmark-client virtual environment's Python,
+then run this preflight after the full Parquet scan and before starting the
+service:
+
+```bash
+HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 "${BENCHMARK_PYTHON}" - <<'PY'
+from pathlib import Path
+
+from benchmarks.dataset.seedtts import (
+    load_seedtts_samples,
+    select_unique_audio_samples,
+)
+
+samples = load_seedtts_samples(
+    "/home/w00984239/seed-tts-eval-arrow", split="en"
+)
+samples = select_unique_audio_samples(samples, 70)
+assert len(samples) == 70
+assert all(Path(sample.ref_audio).is_file() for sample in samples)
+print("SeedTTS local snapshot preflight: 70 distinct audio inputs")
+PY
+```
 
 ### Independent encoder graph failure
 
@@ -654,9 +696,11 @@ environment passes.
 3. In each fresh process, send the existing frozen clip A once to complete
    first-use encoder compilation, then wait for all state to drain. Clip A must
    not belong to the measured SeedTTS subset. Run exactly one repeat over the
-   first 70 pinned SeedTTS EN samples at that level with
-   `benchmark_asr_seedtts --max-samples 70 --concurrencies <level> --repeats 1`
-   and **without** `--warmup`. Every measured audio sample must appear once;
+   first 70 content-distinct pinned SeedTTS EN samples at that level with
+   `benchmark_asr_seedtts --meta /home/w00984239/seed-tts-eval-arrow --lang en
+   --unique-audio --max-samples 70 --concurrencies <level> --repeats 1`
+   and **without** `--warmup`. Every measured audio byte sequence must appear
+   once;
    require the encoder-cache statistics delta to show 70 measured misses and
    zero measured hits or merged same-key requests.
 4. Set the upstream decode log interval to 1 for this qualification only, using
@@ -738,7 +782,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-010 | `2336ccff`; no runtime edit | not applicable | Exact `910C-008` named-candidate stack; only generation graph enablement varied | warm-A/cold-B two-request A/B with generation graph enabled versus explicitly disabled | Arm A reproduced hang; Arm B passed | Graph on timed out at 120 s with two running requests and no decode; graph off completed 2/2 in 0.44 s with frozen hashes and `npu graph: False`; generation graph execution is necessary for the cold-encoder hang |
 | 910C-011 | `a67b2859`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except `request_build_max_workers=1` | warm-A/cold-B two-request wave with synchronous request building | passed | Completed 2/2 in 1.88 s with frozen hashes and `npu graph: True`; one worker with zero build pending/backlog; asynchronous request-building overlap is also necessary for the hang |
 | 910C-012 | `97769286`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except prefill graph explicitly disabled | warm-A/cold-B two-request wave with prefill eager and decode graph retained | wave passed; decode replay not attested | Completed 2/2 in 0.19 s with frozen hashes, prefill `npu graph: False`, zero fallback, and drained state; prefill graph is necessary for the hang; short outputs and absent decode counter left decode replay unproven |
-| 910C-013 | `73d6d6bc`; no runtime service started | not applicable | Exact `910C-012` prefill-eager/decode-graph stack planned; pinned EN Parquet transferred but existing pyarrow 25.0.0 client cannot decode it | fresh-process SeedTTS EN cold-input ladder at concurrency 8/16/32/64/70 | blocked before startup; isolated client-environment repair pending | Network staging failed first; verified local Parquet then raised dictionary-index bounds during 25.0.0 decode; no ladder level ran; resume only after the isolated pyarrow 25.0.1 client passes full scan and loader preflight while service packages remain unchanged |
+| 910C-013 | `eb5bd9fd`; no runtime service started | not applicable | Exact `910C-012` prefill-eager/decode-graph stack planned; pinned EN Parquet transferred; local-Parquet and content-unique benchmark support prepared locally | fresh-process SeedTTS EN cold-input ladder at concurrency 8/16/32/64/70 | blocked before startup; repository/client-environment sync pending | Network staging failed first; verified local Parquet then exposed the Arrow 25.0.0 aarch64 reader failure; no ladder level ran; reject monkeypatch/fake-cache/meta export; resume only after syncing the loader commit, restoring the server package set, and passing the isolated pyarrow 25.0.1 full scan plus `--unique-audio` preflight |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak

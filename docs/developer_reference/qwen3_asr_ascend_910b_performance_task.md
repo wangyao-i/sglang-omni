@@ -37,6 +37,10 @@ status; this page owns the measurement procedure.
   Parquet and validate the requested samples there, and run only the HTTP client
   from that environment. Record both client and server dependency fingerprints;
   launch the server with its original interpreter and verify it is unchanged.
+- For a local snapshot, pass the snapshot root through `--meta` and use
+  `--unique-audio` before `--max-samples`. The local loader resolves only
+  `data/<lang>-*.parquet`, remains offline, and fails if the requested number
+  of distinct audio byte sequences is unavailable.
 
 The current SeedTTS benchmark is useful for public accuracy and concurrency
 comparisons, but it does not enforce exact 10 s clips and its resource monitor
