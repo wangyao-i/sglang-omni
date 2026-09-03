@@ -842,6 +842,120 @@ green. A server-side diagnostic edit is not a deliverable fix; any confirmed
 change must be rebuilt locally, tested, committed in this repository, and
 mapped in the evidence table.
 
+### `910C-015` local diagnostic review and `910C-016` task
+
+The server-only diagnostic commit `544b8cd9` was reviewed as design evidence,
+not accepted as proof that the code existed locally. Its local, reviewable
+replacement is `b64b16d6`. The local implementation keeps the proposed
+environment gate and decode graph counters, with three corrections:
+
+- `encoder_enqueue` is emitted from the common `_submit()` boundary because
+  Qwen3-ASR overrides `_enqueue()`; instrumenting only the base `_enqueue()`
+  would miss the target path;
+- the Qwen3-ASR multimodal item carries its request ID in model-specific data,
+  and every encoder batch event is emitted per request with the batch request
+  IDs in metadata, so encoder and scheduler events can be joined reliably;
+- `encoder_encode_return` is emitted immediately after `encode_batch()`
+  returns, before split, clone, host/device copy, synchronization, attachment,
+  and cache work. Its absence therefore isolates a block inside the device
+  encode call rather than the whole encoder batch lifecycle.
+
+`SGLANG_OMNI_ENCODER_DIAG` is off by default. Setting it to `1`, `true`, `yes`,
+or `on` only enables the call sites; the existing request-event recorder must
+also be started through `/start_request_profile`, otherwise no JSONL is
+written. Diagnostic metadata contains `CLOCK_MONOTONIC`, host boot ID, and
+`monotonic_ns`; raw audio, transcripts, tensors, and internal input paths are
+not recorded. `model_info.decode_cuda_graph` is always available and reports
+the configured backend, runner/backend types, capture buckets, replay count,
+standard eager count, and replay buckets without per-request logging.
+
+Local Windows verification passed 10 encoder/diagnostic tests, Python
+byte-compilation, focused Ruff fatal/import checks, and `git diff --check`.
+The model-worker graph test and the Qwen3-ASR collection could not run locally:
+the Windows interpreter lacks the Linux `resource` module and `torchaudio`.
+They remain mandatory on the server's exact SGLang `71de97b2` environment.
+No SGLang repository change is required by this diagnostic revision.
+
+Run identifier: `910C-016`. Before any hardware action, the server must check
+out the handoff commit containing this task, confirm that its sglang-omni code
+contains local diagnostic commit `b64b16d6` (or a byte-equivalent transferred
+commit), and return the actual sglang-omni and SGLang HEADs plus a clean-worktree
+attestation. Do not reuse server-only `544b8cd9` as the implementation under
+test. Preserve the repaired OpenCV environment, serving pyarrow 25.0.0,
+isolated benchmark-client pyarrow 25.0.1 plus the declared
+`openai-whisper==20250625`, and all `910C-013` workload and data-integrity
+constraints.
+
+Run the focused tests before service startup:
+
+```bash
+python -m pytest -q \
+  tests/unit_test/profiler/test_encoder_diag_events.py \
+  tests/unit_test/model_runner/test_prefill_cuda_graph_usage.py \
+  tests/unit_test/scheduling/test_pre_lm_encoder.py
+python -m pytest -q tests/unit_test/qwen3_asr
+```
+
+Stop on the first collection or test failure. If they pass, start one fresh
+service with the exact graph-enabled `910C-013` concurrency-8 profile: encoder
+graph disabled, prefill graph disabled, decode graph captured through bucket
+70, torch compile disabled, eight asynchronous request-build workers,
+`max_running_requests=70`, and decode log interval 1. The only diagnostic
+addition is:
+
+```bash
+export SGLANG_OMNI_ENCODER_DIAG=1
+```
+
+After startup and before warm-up, start request-event recording without the
+Torch profiler. Use a server-local evidence directory and verify the returned
+run ID and directory:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:8000/start_request_profile \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"910C-016","event_dir":"<server-local-evidence>/events"}'
+```
+
+Send frozen clip A once for first-use compilation and wait for all coordinator,
+request-build, admission, and scheduler state to drain. Before the measured
+wave, require at least one request-correlated sequence containing
+`encoder_enqueue`, `encoder_batch_start`, `encoder_encode_return`, and
+`encoder_batch_finish`; if it is absent, stop because the recorder contract is
+not active. Record the pre-wave `model_info.decode_cuda_graph` snapshot.
+
+Then run exactly the same pinned 70 content-distinct SeedTTS EN requests at
+concurrency 8, without benchmark warm-up or retry, as `910C-013`. Poll at
+bounded intervals using the same timestamp for coordinator state,
+request-build/admission/backlog state, encoder counters, HBM/device health, and
+the complete `model_info.decode_cuda_graph` object. Preserve the JSONL files
+server-local. A 90-second no-completion interval is the expected diagnostic
+stop condition, not permission to wait indefinitely; on timeout, take one
+final snapshot, stop request profiling, and perform bounded forced cleanup.
+Do not run another arm, scan concurrency, change graph settings, add stream
+synchronization, edit runtime packages, or attempt a fix in `910C-016`.
+
+Classify the first missing boundary for each outstanding request:
+
+1. no `encoder_enqueue`: blocked before encoder submission;
+2. enqueue without `encoder_batch_start`: encoder queue/worker dispatch;
+3. batch start without `encoder_encode_return`: inside `encode_batch()` or its
+   device execution;
+4. encode return without batch finish: split/copy/synchronize/attach/cache;
+5. batch finish without `scheduler_request_admit`: future completion,
+   insertion-ordered build drain, or deferred admission;
+6. scheduler admit without response: generation scheduling/replay or result
+   completion.
+
+For the same monotonic interval, report whether decode replay count advances,
+which replay buckets advance, and whether standard eager count changes. Return
+only the event-name/request-ID timing matrix, aggregate deltas, first missing
+boundary, state counters, sanitized errors, cleanup result, and commit/version
+mapping. Do not return raw JSONL, audio, transcript text, dataset paths, host
+identity, or proprietary traces. This is a diagnostic run only: even if all 70
+requests finish, do not report performance qualification and do not proceed to
+realtime or higher concurrency without a new handoff task.
+
 ## Qualification sequence
 
 1. Run the [first hardware validation task](qwen3_asr_ascend_910b_validation_task.md)
@@ -880,6 +994,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-012 | `97769286`; no runtime edit | not applicable | Exact graph-enabled `910C-010` Arm A stack except prefill graph explicitly disabled | warm-A/cold-B two-request wave with prefill eager and decode graph retained | wave passed; decode replay not attested | Completed 2/2 in 0.19 s with frozen hashes, prefill `npu graph: False`, zero fallback, and drained state; prefill graph is necessary for the hang; short outputs and absent decode counter left decode replay unproven |
 | 910C-013 | `9bae2619`; no runtime edit | not applicable | Exact `910C-012` candidate plus decode log interval 1; serving pyarrow 25.0.0; isolated benchmark client pyarrow 25.0.1 | SeedTTS EN 70 content-distinct inputs at concurrency 8, no benchmark warm-up | failed; hung at first level | Preflight passed; eight requests remained outstanding beyond 90 s and none completed; HBM stayed stable with no error/fallback; 66 decode records with `npu graph: True` attest replay but do not qualify stability; levels 16/32/64/70 did not run |
 | 910C-014 | `d69c5d3f`; no runtime edit | not applicable | Exact `910C-013` stack; only decode graph disabled; serving pyarrow 25.0.0; isolated client pyarrow 25.0.1 | Arm B: same 70 content-distinct inputs at concurrency 8 | stability-isolation arm passed; benchmark post-processing incomplete | Warm A plus 70 measured requests returned HTTP 200 with `npu graph: False` and state drained; pending peaked at 8 and running batch at 7; missing declared `openai-whisper` caused WER post-processing failure and no result JSON; decode graph is necessary for the graph-enabled Arm A hang |
+| 910C-015 | `544b8cd9`; server-only diagnostic draft | `b64b16d6`; locally reviewed replacement | No hardware run; local Windows environment lacks runnable SGLang/Linux dependencies | Env-gated encoder/build/admission timeline plus decode graph counters | local diagnostic change ready; server verification pending | Corrected Qwen `_enqueue()` override gap, added request correlation and exact encode-return boundary; 10 local diagnostic/encoder tests passed; server must run full focused and Qwen3-ASR suites |
+| 910C-016 | pending | handoff commit plus `b64b16d6` | Exact repaired A3 stack and `910C-013` graph-enabled profile | One instrumented SeedTTS EN cold-input run at concurrency 8 | pending | Must start request-event recorder explicitly, correlate six diagnostic events with decode replay counters, stop at first 90-second no-completion interval, and return the first missing operation boundary |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
