@@ -10,7 +10,11 @@ from sglang.srt.model_executor.runner.prefill_cuda_graph_runner import (
     PrefillCudaGraphRunner,
 )
 
-from sglang_omni.model_runner.model_worker import ModelWorker, _PrefillCudaGraphUsage
+from sglang_omni.model_runner.model_worker import (
+    ModelWorker,
+    _DecodeCudaGraphUsage,
+    _PrefillCudaGraphUsage,
+)
 
 
 def _forward_batch(
@@ -20,6 +24,7 @@ def _forward_batch(
 ) -> SimpleNamespace:
     return SimpleNamespace(
         input_ids=torch.zeros(num_tokens, dtype=torch.long),
+        batch_size=num_tokens,
         forward_mode=forward_mode,
     )
 
@@ -82,12 +87,14 @@ def test_model_worker_reports_actual_prefill_graph_replays_by_bucket(
 
     runner = SimpleNamespace(
         forward=forward,
+        decode_cuda_graph_runner=None,
         prefill_cuda_graph_runner=prefill_runner,
     )
     worker = object.__new__(ModelWorker)
     worker.dllm_algorithm = None
     worker.model_runner = runner
     worker._prefill_cuda_graph_usage = _PrefillCudaGraphUsage()
+    worker._decode_cuda_graph_usage = _DecodeCudaGraphUsage()
     monkeypatch.setattr(
         "sglang.srt.runtime_context.get_model",
         lambda: SimpleNamespace(model_path="model", load_format="auto"),
@@ -99,6 +106,7 @@ def test_model_worker_reports_actual_prefill_graph_replays_by_bucket(
     worker.server_args = SimpleNamespace(
         tp_size=1,
         cuda_graph_config=SimpleNamespace(
+            decode=SimpleNamespace(backend="disabled"),
             prefill=SimpleNamespace(
                 backend="breakable",
                 bs=[16, 32],
@@ -131,4 +139,78 @@ def test_model_worker_reports_actual_prefill_graph_replays_by_bucket(
     assert stats["standard_eager_count"] == 1
     assert stats["custom_eager_count"] == 1
     assert stats["replay_buckets"] == {"16": 1, "32": 1}
+    assert json.loads(json.dumps(stats)) == stats
+
+
+def test_model_worker_reports_actual_decode_graph_replays_by_bucket(
+    monkeypatch,
+) -> None:
+    decode_runner = SimpleNamespace(
+        capture_bs=[1, 2, 4],
+        bs=2,
+        backend=SimpleNamespace(),
+    )
+    outcomes = iter(
+        [
+            SimpleNamespace(
+                logits_output="graph-2",
+                can_run_graph=True,
+                expert_distribution_metrics=None,
+            ),
+            SimpleNamespace(
+                logits_output="eager",
+                can_run_graph=False,
+                expert_distribution_metrics=None,
+            ),
+        ]
+    )
+
+    runner = SimpleNamespace(
+        forward=lambda *, forward_batch: next(outcomes),
+        decode_cuda_graph_runner=decode_runner,
+        prefill_cuda_graph_runner=None,
+    )
+    worker = object.__new__(ModelWorker)
+    worker.dllm_algorithm = None
+    worker.model_runner = runner
+    worker._prefill_cuda_graph_usage = _PrefillCudaGraphUsage()
+    worker._decode_cuda_graph_usage = _DecodeCudaGraphUsage()
+    worker.server_args = SimpleNamespace(
+        tp_size=1,
+        cuda_graph_config=SimpleNamespace(
+            decode=SimpleNamespace(backend="full"),
+            prefill=SimpleNamespace(backend="disabled"),
+        ),
+    )
+    worker.tp_rank = 0
+    worker.model_arch_override = None
+    monkeypatch.setattr(
+        "sglang.srt.runtime_context.get_model",
+        lambda: SimpleNamespace(model_path="model", load_format="auto"),
+    )
+    monkeypatch.setattr(
+        "sglang.srt.runtime_context.get_serving",
+        lambda: SimpleNamespace(weight_version=None),
+    )
+
+    ModelWorker.forward_batch_generation(
+        worker,
+        _forward_batch(2, forward_mode=ForwardMode.DECODE),
+    )
+    ModelWorker.forward_batch_generation(
+        worker,
+        _forward_batch(3, forward_mode=ForwardMode.DECODE),
+    )
+
+    stats = ModelWorker.model_info(worker)["decode_cuda_graph"]
+
+    assert stats == {
+        "backend": "full",
+        "runner": "SimpleNamespace",
+        "backend_runner": "SimpleNamespace",
+        "capture_bs": [1, 2, 4],
+        "replay_count": 1,
+        "standard_eager_count": 1,
+        "replay_buckets": {"2": 1},
+    }
     assert json.loads(json.dumps(stats)) == stats
