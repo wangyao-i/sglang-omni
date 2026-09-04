@@ -1078,6 +1078,124 @@ runtime packages, attempt a fix, report performance qualification, or proceed
 to realtime. Return the bounded redacted event matrix and aggregates, not raw
 JSONL, audio, transcripts, private paths, host identity, or proprietary logs.
 
+### `910C-018` result and `910C-019` SGLang graph-dispatch gate
+
+The isolated-server `910C-018` run passed 25 focused tests and the complete
+Qwen3-ASR unit-test directory (588 passed, 3 skipped), then reproduced the
+concurrency-8 cold-input hang. Warm-up produced 16 paired standard generation
+forward boundaries and 15 completed decode graph replays. During the measured
+wave, one `forward_id` had `generation_forward_start` with `phase=decode` and
+no matching return. Its same request had previously completed an eager prefill
+forward. The completed decode replay count remained at the warm-up value.
+
+This locates the first observable blocker inside
+`tp_worker.forward_batch_generation()` for a standard decode call. It does not
+yet establish whether the call blocked while evaluating graph eligibility,
+loading static replay buffers, executing the backend graph, publishing a
+shared-read fence, shaping graph output, or running the SGLang forward epilogue.
+The outer replay counter still cannot distinguish those cases because it is
+updated only after the complete call returns.
+
+The failing boundary is owned by the SGLang repository. A separate local
+SGLang worktree was created from the exact server dependency commit
+`71de97b264b04dcd514cf904003028aefe9775c8` on branch
+`codex/qwen3-asr-decode-graph-diag`. Diagnostic commit `f86279db9` extends the
+existing `SGLANG_LOG_DECODE_GRAPH_KEY` switch with ordered stage markers:
+
+```text
+eligibility_begin
+eligibility_return (includes can_run_graph)
+execute_begin
+runner_enter
+replay_session_enter
+load_batch_return (includes selected graph key)
+backend_replay_begin
+backend_replay_return
+replay_session_return
+execute_return
+forward_raw_return
+model_forward_return
+```
+
+The change only emits sanitized INFO records when the pre-existing switch is
+enabled. It does not import sglang-omni, include request content, synchronize a
+device stream, alter graph eligibility, or change graph execution order. The
+outer sglang-omni `forward_id` remains the request-correlated boundary; on this
+single-card, single-target-worker run, ordered SGLang records between its start
+and the final snapshot identify the last completed inner stage.
+
+Run identifier: `910C-019`. Check out the sglang-omni handoff commit containing
+this task and require a clean worktree. In the SGLang checkout, use exactly
+`f86279db9` (parent `71de97b2`) and require a clean worktree; do not reproduce
+the patch in site-packages. Preserve the established editable-install mapping,
+serving/client dependency split, hardware/runtime stack, and all `910C-018`
+profile and corpus settings.
+
+Before startup, run the SGLang-owned focused test followed by the unchanged
+sglang-omni gates:
+
+```bash
+python -m pytest -q \
+  test/registered/unit/model_executor/runner/test_decode_cuda_graph_runner.py
+
+python -m pytest -q \
+  tests/unit_test/profiler/test_encoder_diag_events.py \
+  tests/unit_test/scheduling/test_pre_lm_encoder.py \
+  tests/unit_test/model_runner/test_prefill_cuda_graph_usage.py \
+  tests/unit_test/model_runner/test_base_hooks.py
+python -m pytest -q tests/unit_test/qwen3_asr
+```
+
+Run each command from its owning repository. Stop on the first collection or
+test failure and do not edit either checkout on the server.
+
+Only after all tests pass, start one fresh service with the exact `910C-018`
+configuration plus the single diagnostic variable:
+
+```bash
+export SGLANG_LOG_DECODE_GRAPH_KEY=1
+```
+
+Keep `SGLANG_OMNI_ENCODER_DIAG=1`, request-event recording, decode log interval
+1, warm clip, pinned 70-input SeedTTS EN wave at concurrency 8, no retry,
+polling, 90-second no-completion stop, final snapshot, and bounded cleanup
+unchanged. Before the measured wave, require one warm decode call to show the
+complete ordered SGLang stage sequence through `model_forward_return`, a paired
+outer generation forward, and a positive completed replay count. Otherwise
+stop as a diagnostic-contract failure.
+
+For the first unmatched outer decode `forward_id`, report the last observed
+ordered SGLang stage and classify it as follows:
+
+- no `eligibility_return`: graph eligibility;
+- eligibility returned `can_run_graph=False`: eager decode path, not replay;
+- `execute_begin` without `runner_enter`: graph runner call boundary;
+- `runner_enter` without `replay_session_enter`: replay context preparation;
+- `replay_session_enter` without `load_batch_return`: static replay input load;
+- `load_batch_return` without `backend_replay_begin`: pre-replay shared-read
+  publication;
+- `backend_replay_begin` without `backend_replay_return`: backend graph replay;
+- `backend_replay_return` without `replay_session_return`: shared-read
+  publication or replay-session exit;
+- `replay_session_return` without `execute_return`: graph output shaping;
+- `execute_return` without `forward_raw_return`: `_forward_raw()` return path;
+- `forward_raw_return` without `model_forward_return`: SGLang forward epilogue;
+- `model_forward_return` without outer `generation_forward_return`: the
+  SGLang worker/wrapper path after `ModelRunner.forward()`.
+
+Return the redacted unmatched `forward_id`, phase, batch size, ordered stage
+names, relative timestamps, `can_run_graph`, graph key size, completed
+replay/eager deltas, coarse encoder/scheduler states, health/HBM, cleanup, and
+both repository commit mappings. Do not return raw logs, request content,
+audio, transcripts, dataset or host paths, host identity, or proprietary
+traces.
+
+This is still diagnostic-only. Do not change graph settings or concurrency,
+add stream synchronization or a mutex, enable vendor profilers, modify runtime
+packages, attempt a fix, claim performance qualification, or begin realtime.
+The next code change must be selected from the first missing inner stage found
+by this run.
+
 ## Qualification sequence
 
 1. Run the [first hardware validation task](qwen3_asr_ascend_910b_validation_task.md)
@@ -1119,7 +1237,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-015 | `544b8cd9`; server-only diagnostic draft | `b64b16d6`; locally reviewed replacement | No hardware run; local Windows environment lacks runnable SGLang/Linux dependencies | Env-gated encoder/build/admission timeline plus decode graph counters | local diagnostic change ready; server verification pending | Corrected Qwen `_enqueue()` override gap, added request correlation and exact encode-return boundary; 10 local diagnostic/encoder tests passed; server must run full focused and Qwen3-ASR suites |
 | 910C-016 | `6057bdb3`; includes faulty `b64b16d6` instrumentation | `b64b16d6`; superseded by `144316fe` | Exact repaired A3 stack; SGLang `71de97b2`; clean worktree; serving/client dependency split verified | Focused tests before instrumented cold-input run | failed at preflight; no service run | Decode usage test expected one replay and one eager decode but both counters stayed zero because the local guard excluded `ForwardMode.DECODE`; operator stopped before startup as required |
 | 910C-017 | `bd4dca13`; includes `144316fe` | `144316fe` plus prior diagnostic change | Exact repaired A3 stack; SGLang `71de97b2`; `910C-013` graph-enabled profile | Instrumented SeedTTS EN cold-input run at concurrency 8 | completed; hang reproduced and coarse boundaries classified | Focused 13 and Qwen3-ASR 588 passed; eight outstanding: one inside encoder encode, five admitted before prefill, two after prefill; decode completed-replay count stayed at warm value 15; this does not exclude a replay entered but not returned |
-| 910C-018 | pending | `4c25482e` plus handoff commit | Exact `910C-017` stack and profile | Repeat concurrency-8 cold-input diagnostic with standard generation forward start/return events | pending | Stop at tests or 90-second no-completion; identify unmatched prefill/decode forward before any stream, lock, scheduling, or performance change |
+| 910C-018 | `39ec921b`; includes `4c25482e` | `4c25482e` plus handoff commit | Exact `910C-017` stack and profile | Repeat concurrency-8 cold-input diagnostic with standard generation forward start/return events | completed; first blocker inside standard decode forward | Focused 25 and Qwen3-ASR 588 passed; one unmatched decode `generation_forward_start` after a completed eager prefill for the same request; completed replay count stayed at warm value 15 |
+| 910C-019 | pending | sglang-omni handoff commit; SGLang `f86279db9` based on `71de97b2` | Exact `910C-018` stack profile; only SGLang graph-stage logging enabled | Repeat concurrency-8 cold-input diagnostic with inner decode graph dispatch markers | pending | Stop at tests or 90-second no-completion; use the first missing ordered inner stage to distinguish eligibility, input load, backend replay, fence/session exit, output shaping, and forward epilogue |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
