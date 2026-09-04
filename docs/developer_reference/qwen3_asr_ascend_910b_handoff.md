@@ -1196,6 +1196,131 @@ packages, attempt a fix, claim performance qualification, or begin realtime.
 The next code change must be selected from the first missing inner stage found
 by this run.
 
+### `910C-019` result and `910C-020` NPU update/replay gate
+
+The isolated-server `910C-019` run passed the SGLang-owned test (13 passed),
+the sglang-omni focused set (25 passed), and the complete Qwen3-ASR unit-test
+directory (588 passed, 3 skipped). It reproduced the concurrency-8 cold-input
+hang. Of 63 decode dispatches, 62 reached `execute_return`; the final batch-size
+2 dispatch emitted `execute_begin` but no return, while the completed replay
+counter remained at its warm-up value 15.
+
+The absence of the generic runner markers is now explained by code ownership,
+not logging loss: Ascend selects `NPUGraphRunner`, whose NPU-specific
+`execute()` overrides `DecodeCudaGraphRunner.execute()`. The generic
+`ModelRunner` markers executed, while the overridden implementation bypassed
+the instrumented generic body. Therefore `910C-019` proves that the standard
+decode call entered the selected NPU graph runner and did not return, but it
+does not yet isolate the NPU implementation's device boundary.
+
+Code inspection of the exact SGLang dependency identifies the remaining
+ordered operations:
+
+1. load/copy the selected static graph inputs;
+2. copy `seq_lens` from NPU to the host;
+3. start a background thread which calls `graph.update(...)` after binding the
+   NPU device;
+4. call `graph.replay()` concurrently on the main thread;
+5. join the update thread and return the captured outputs.
+
+The update/replay overlap is a strong mechanism candidate because the hang
+also requires cold encoder device work and asynchronous request building in
+the established matrix. It is not yet a confirmed defect: torch_npu's graph
+dispatch implementation uses a dedicated update stream plus event ordering,
+so serializing update and replay without observing both lanes could violate
+the intended API contract.
+
+SGLang diagnostic commit `9dbc4f89c`, on top of `f86279db9` and exact parent
+`71de97b2`, adds NPU-specific markers under the same existing
+`SGLANG_LOG_DECODE_GRAPH_KEY` gate. The markers cover:
+
+```text
+npu_execute_begin
+load_batch_begin / load_batch_return
+input_copy_begin / input_copy_return
+seq_lens_host_begin / seq_lens_host_return
+input_update_replay_begin / input_update_replay_return
+backend_enter / cpu_update_input_ready
+update_thread_start_begin / update_thread_start_return
+update_thread_enter / update_device_set
+graph_update_begin / graph_update_return
+graph_replay_begin / graph_replay_return
+update_thread_join_begin / update_thread_join_return
+```
+
+The diagnostic change emits only stage names and graph/batch sizes. It does not
+alter stream selection, thread ordering, graph inputs, synchronization, or
+request data.
+
+`910C-019` also exposed a repeatable environment hazard. Installing the new
+SGLang editable checkout with dependency resolution reintroduced
+`opencv-python` 4.10.0.84, overwrote the headless `cv2` namespace, and restored
+the already closed `libGL.so.1` -> Manager EOF -> GE initialization failure.
+The operator restored the established single headless OpenCV distribution and
+the subsequent warm request passed. Because that repair happened before the
+accepted measured run, the graph diagnosis remains usable, but every future
+checkout/editable-install transition must verify the OpenCV invariant before
+tests or service startup. Do not reinstall the already mapped editable SGLang
+checkout with dependency resolution merely to change its Git commit.
+
+Run identifier: `910C-020`. Check out the sglang-omni handoff commit containing
+this task and SGLang `9dbc4f89c`; require both worktrees clean. First verify:
+
+- `opencv-python` is not installed;
+- exactly one intended `opencv-python-headless` distribution owns `cv2`;
+- a fresh process imports `cv2` successfully;
+- the loaded `cv2` extension has zero `libGL.so.1` dependencies;
+- editable SGLang resolves to the checkout at `9dbc4f89c` without another
+  dependency-resolving install.
+
+If any invariant fails, stop and report an environment-preflight failure. Do
+not mutate packages and continue under the same run ID. After a separately
+authorized repair, restart the task from a fresh process and new run ID.
+
+If the environment passes, rerun the exact SGLang, sglang-omni focused, and
+complete Qwen3-ASR test commands from `910C-019`. Stop on the first collection
+or test failure. Then start one fresh service and repeat the exact `910C-019`
+warm-up and measured concurrency-8 cold-input diagnostic with both
+`SGLANG_OMNI_ENCODER_DIAG=1` and `SGLANG_LOG_DECODE_GRAPH_KEY=1`. Preserve all
+graph, compile, encoder, request-builder, corpus, timeout, polling, no-retry,
+evidence, and cleanup settings. No other variable is permitted.
+
+Before the measured wave, require one warm decode to show the complete NPU
+main-thread and update-thread marker sets through
+`update_thread_join_return`, followed by the outer paired generation return
+and a positive completed replay counter. Missing markers are a diagnostic
+contract failure.
+
+At the first 90-second no-completion interval, report the unmatched outer
+`forward_id` and the last marker independently for the NPU main and update
+lanes. Classify the first missing boundary:
+
+- `load_batch_begin` without return: static graph input load;
+- `seq_lens_host_begin` without return: NPU-to-host sequence-length copy or
+  synchronization;
+- `update_thread_start_begin` without return: Python update-thread startup;
+- update thread entered but did not reach `update_device_set`: NPU device bind;
+- `graph_update_begin` without return: NPUGraph input update;
+- `graph_replay_begin` without return: NPUGraph replay;
+- replay returned, then join began without return: update thread still blocked;
+- both graph operations returned but `input_update_replay_return` is absent:
+  backend post-operation/return path;
+- NPU runner returned but the outer SGLang markers did not: retain the
+  corresponding `910C-019` outer-stage classification.
+
+If both `graph_update_begin` and `graph_replay_begin` lack returns, report both
+lanes as jointly outstanding; do not choose one as causal from log order. If
+all 70 requests unexpectedly finish, classify the issue as timing-sensitive
+under diagnostic logging and stop; do not claim stability or performance.
+
+Return only commit mappings, test totals, OpenCV invariant results, the bounded
+stage/timestamp matrix, batch/key sizes, completed replay/eager deltas,
+coarse encoder/scheduler state, health/HBM, and cleanup. Keep raw logs, audio,
+transcripts, dataset/host paths, host identity, and proprietary traces on the
+server. Do not change graph settings or concurrency, add synchronization or a
+mutex, run vendor profilers, modify runtime packages, attempt a fix, claim
+performance qualification, or begin realtime.
+
 ## Qualification sequence
 
 1. Run the [first hardware validation task](qwen3_asr_ascend_910b_validation_task.md)
@@ -1238,7 +1363,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-016 | `6057bdb3`; includes faulty `b64b16d6` instrumentation | `b64b16d6`; superseded by `144316fe` | Exact repaired A3 stack; SGLang `71de97b2`; clean worktree; serving/client dependency split verified | Focused tests before instrumented cold-input run | failed at preflight; no service run | Decode usage test expected one replay and one eager decode but both counters stayed zero because the local guard excluded `ForwardMode.DECODE`; operator stopped before startup as required |
 | 910C-017 | `bd4dca13`; includes `144316fe` | `144316fe` plus prior diagnostic change | Exact repaired A3 stack; SGLang `71de97b2`; `910C-013` graph-enabled profile | Instrumented SeedTTS EN cold-input run at concurrency 8 | completed; hang reproduced and coarse boundaries classified | Focused 13 and Qwen3-ASR 588 passed; eight outstanding: one inside encoder encode, five admitted before prefill, two after prefill; decode completed-replay count stayed at warm value 15; this does not exclude a replay entered but not returned |
 | 910C-018 | `39ec921b`; includes `4c25482e` | `4c25482e` plus handoff commit | Exact `910C-017` stack and profile | Repeat concurrency-8 cold-input diagnostic with standard generation forward start/return events | completed; first blocker inside standard decode forward | Focused 25 and Qwen3-ASR 588 passed; one unmatched decode `generation_forward_start` after a completed eager prefill for the same request; completed replay count stayed at warm value 15 |
-| 910C-019 | pending | sglang-omni handoff commit; SGLang `f86279db9` based on `71de97b2` | Exact `910C-018` stack profile; only SGLang graph-stage logging enabled | Repeat concurrency-8 cold-input diagnostic with inner decode graph dispatch markers | pending | Stop at tests or 90-second no-completion; use the first missing ordered inner stage to distinguish eligibility, input load, backend replay, fence/session exit, output shaping, and forward epilogue |
+| 910C-019 | `a949960c`; no runtime edit | SGLang `f86279db9` based on `71de97b2` | Exact `910C-018` stack/profile plus generic SGLang graph-stage logging; repaired headless OpenCV invariant | Repeat concurrency-8 cold-input diagnostic with inner decode graph dispatch markers | completed; selected NPU runner did not return | SGLang 13, omni focused 25, and Qwen3-ASR 588 passed; final batch-size 2 decode emitted `execute_begin` without return; generic inner markers were bypassed by `NPUGraphRunner.execute()` override; editable install had reintroduced non-headless OpenCV and was repaired before the accepted run |
+| 910C-020 | pending | sglang-omni handoff commit; SGLang `9dbc4f89c` on `f86279db9` | Exact `910C-019` stack/profile; NPU-specific stage logging only | Repeat concurrency-8 cold-input diagnostic with NPU load, host-copy, graph-update, replay, and join markers | pending | Stop on OpenCV invariant/test failure or 90-second no-completion; classify the independently observed update and replay lanes before selecting a fix |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
@@ -1260,6 +1386,7 @@ or proprietary profiler captures.
 - [CANN 9.0.1 release notes](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/900/releasenote/9.0.1release-notes.md)
 - [Public `cann_kb_init` Manager/GE failure report](https://gitee.com/ascend/pytorch/issues/ICVT2X)
 - [Public CANN Manager spawn-bootstrapping report](https://gitee.com/ascend/pytorch/issues/I9KIW7)
+- [torch_npu NPUGraph update-stream implementation](https://gitee.com/ascend/pytorch/blob/master/torch_npu/npu/graphs.py)
 - [vLLM Ascend device-family mapping](https://github.com/vllm-project/vllm-ascend/blob/main/setup.py)
 - [SGLang A3 installation examples](https://github.com/sgl-project/sglang/blob/main/docs/docs/hardware-platforms/ascend-npus/getting-started/installation.mdx)
 - [CANN 9.0 process-log path](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/900/maintenref/envvar/envref_07_0120.html)
