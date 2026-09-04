@@ -28,10 +28,12 @@ also removes the hang; disabling only prefill graph removes it while decode
 graph remains captured, making prefill-eager/decode-graph the bounded-
 concurrency candidate. The dataset/client-environment blocker is resolved, but
 that candidate hung at the first concurrency-8 cold-input level even though
-prefill graph was disabled; decode graph replay was positively attested before
-the hang. The graph-off comparison completed all requests, proving decode graph
-execution is necessary for this concurrency-8 failure. Local observability work
-is now required before another graph-enabled hardware run**.
+prefill graph was disabled. Successive diagnostics localized the unmatched
+decode forward to the NPU graph input-update lane: `graph.replay()` returned at
+the host API boundary, but the update thread never returned from
+`graph.update()` and the main thread remained in its join. A local Qwen3-ASR-
+and-NPU-specific mutual-exclusion fix is now ready for the single-variable
+`910C-021` treatment run; no performance or realtime qualification has run**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. It is therefore recorded as the derived run
@@ -44,7 +46,7 @@ remains unstarted until the same gates run on the intended device class.
 | Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager batch 1, two-concurrent, ten-sequential, health, shutdown, and restart gates passed after repairing the OpenCV environment; not yet started on 910B |
 | Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | With torch compile disabled, A3 capacities 1/16/32/64/70 captured and each passed one decode replay smoke; disabling prefill graph removed the two-request cold-overlap hang but did not prevent the concurrency-8 cold-input hang; with compile enabled, batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; maximum-bucket concurrent replay remains untested |
 | Encoder graph | Implemented with `torch.cuda.Stream`, `torch.cuda.CUDAGraph`, and `torch.cuda.graph`; enabled by default | A3 capture failed for every attempted bucket because captured-stream synchronization memcpy is unsupported; each bucket explicitly stayed eager |
-| Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; prefill eager with decode graph retained passed one-cold/two-request but hung at eight concurrent cold inputs; the exact encoder/request-build/graph interaction remains under isolation |
+| Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; concurrency-8 cold input with decode graph blocked one graph-update thread. Local commit `29ca236f` adds a FIFO device-execution guard shared only by the Qwen3-ASR encoder batch and generation forward when NPU generation graph is enabled; hardware verification is pending |
 | SSE transcription | Emits decoder-token deltas after the complete upload has entered one engine request | Not continuous audio-input realtime |
 | Realtime WebSocket | Buffers PCM16 until VAD stops, then runs a response pass followed by a transcription pass | Does not meet the incremental-ASR target by inspection; not yet verified on 910B |
 
@@ -1321,6 +1323,157 @@ server. Do not change graph settings or concurrency, add synchronization or a
 mutex, run vendor profilers, modify runtime packages, attempt a fix, claim
 performance qualification, or begin realtime.
 
+### `910C-020` result and `910C-021` mutual-exclusion treatment
+
+The isolated-server `910C-020` run passed the SGLang diagnostic tests (13),
+the sglang-omni focused tests (25), and the complete Qwen3-ASR unit-test
+directory (588 passed, 3 skipped). The warm request completed all NPU graph
+markers and incremented the completed decode-replay counter to 15. The same
+70-input SeedTTS EN workload at concurrency 8 then reproduced the hang.
+
+The final decode forward selected raw batch size 6 and graph bucket 8. Its
+static input load and NPU-to-host `seq_lens` copy returned. The update thread
+entered `graph.update()`, while the main thread called `graph.replay()` and the
+host replay call returned. The main thread then waited in the update-thread
+join for almost five minutes. Marker totals were:
+
+```text
+graph_update:            begin 34, return 33
+graph_replay:            begin 34, return 34
+update_thread_join:      begin 34, return 33
+```
+
+This proves the Python update call did not return. It does **not** prove that
+all replay device work completed independently: the replay host API may return
+after enqueue while device-side event ordering still depends on the update
+lane. Therefore the repository must not reorder or serialize torch_npu's
+internal update/replay protocol based only on this observation.
+
+Local implementation commit `29ca236f` instead addresses the already proven
+cross-thread overlap at the integration boundary. It constructs one shared
+FIFO device-execution guard only when all of the following are true:
+
+- the Qwen3-ASR pre-LM encoder is enabled;
+- the model device is NPU;
+- generation graph execution is enabled.
+
+The encoder holds the guard for its complete batch execution, including the
+blocking CPU cache copy that establishes completion of its NPU work. The model
+runner holds the same guard around each standard prefill or decode generation
+forward, through the graph update-thread join. Request building remains at
+eight workers and decode graph remains enabled. CPU, CUDA, graph-disabled, and
+pre-LM-encoder-disabled paths receive no guard. FIFO ticket ordering prevents a
+tight decode loop from indefinitely overtaking an encoder batch that is
+already waiting. Under `SGLANG_OMNI_ENCODER_DIAG=1`, wait, acquired, and
+released events identify the owner, FIFO ticket, phase or encoder batch size,
+wait time, and hold time.
+
+Local Windows validation ran `git diff --check`, import/order checks, and the
+standalone FIFO concurrency test (1 passed). Tests importing SGLang could not
+be collected because SGLang is not installed in the local Windows interpreter;
+they are mandatory server preconditions below, not claimed local passes.
+
+Run identifier: `910C-021`. This is a single treatment run against the failed
+`910C-020` control. Check out the sglang-omni handoff commit containing this
+task and verify that it contains implementation parent `29ca236f`. Keep the
+exact SGLang diagnostic checkout `9dbc4f89c` and the same editable mapping used
+by `910C-020`. Both tracked worktrees must be clean; an install-generated
+tracked edit is still a dirty worktree and is not exempted as an environment
+side effect.
+
+Before running tests, repeat the `910C-020` environment preflight: no
+`opencv-python`, exactly one intended `opencv-python-headless` owner, fresh-
+process `cv2` import success, zero `libGL.so.1` dependencies, serving pyarrow
+25.0.0, isolated benchmark-client pyarrow 25.0.1 plus the declared
+`openai-whisper`, idle device/HBM, no server worker or orphan, and a free port.
+Stop on any discrepancy. Do not repair an environment and continue under the
+same run ID.
+
+Run these gates from their owning repositories, stopping at the first
+collection or test failure:
+
+```bash
+# SGLang checkout at 9dbc4f89c
+python -m pytest -q \
+  test/registered/unit/model_executor/runner/test_decode_cuda_graph_runner.py
+
+# sglang-omni checkout at the 910C-021 handoff commit
+python -m pytest -q \
+  tests/unit_test/utils/test_execution_guard.py \
+  tests/unit_test/model_runner/test_base_hooks.py \
+  tests/unit_test/profiler/test_encoder_diag_events.py \
+  tests/unit_test/scheduling/test_pre_lm_encoder.py \
+  tests/unit_test/model_runner/test_prefill_cuda_graph_usage.py
+python -m pytest -q tests/unit_test/qwen3_asr
+```
+
+Only after all tests pass, start a fresh service with the exact accepted
+`910C-020` configuration and environment. In particular retain:
+
+```text
+enable_encoder_cuda_graph=false
+disable_prefill_cuda_graph=true
+disable_cuda_graph=false
+enable_torch_compile=false
+cuda_graph_max_bs=70
+max_running_requests=70
+request_build_max_workers=8
+decode_log_interval=1
+SGLANG_OMNI_ENCODER_DIAG=1
+SGLANG_LOG_DECODE_GRAPH_KEY=1
+```
+
+Do not introduce a guard enable/disable environment flag: presence of local
+commit `29ca236f` is the sole treatment variable relative to `910C-020`.
+Require decode graph capture buckets to end at 70, zero prefill/encoder graph
+capture attempts, and no unexpected eager fallback. Run the same single warm
+clip A and wait for full drain. The warm precheck must show a successful
+decode replay plus complete generation and guard event pairs.
+
+Then run exactly the same pinned, content-distinct 70-input SeedTTS EN set at
+closed-loop concurrency 8, with no benchmark warm-up, retry, input
+substitution, graph/configuration change, or service reuse from another run.
+Poll the same coordinator, scheduler, encoder-cache, decode-graph, health, HBM,
+and diagnostic counters. Preserve raw artifacts server-locally.
+
+The treatment passes only if all of the following hold:
+
+- all 70 measured requests return HTTP 200 with non-empty valid output and the
+  repository SeedTTS accuracy gate passes;
+- the workload preflight and cache deltas prove the measured inputs remained
+  cold and content-distinct; any unexplained hit/merge delta invalidates the
+  workload rather than being waived after the run;
+- decode graph completed-replay count increases during the measured wave,
+  `npu graph: True` is observed, and graph fallback/error counts remain zero;
+- every acquired guard interval has one release, encoder and generation
+  acquired intervals do not overlap, and at least one encoder acquisition
+  after generation contention proves the FIFO path made progress;
+- request-build/admission queues and all request states drain, HBM stays
+  bounded, the device remains healthy, and shutdown leaves no process, port,
+  or device-memory residue.
+
+Stop at the first test failure, startup/capture discrepancy, forbidden error,
+wrong or empty result, timeout, 90-second no-completion interval, guard-event
+imbalance/overlap, OOM, device reset, fallback, state leak, or orphan. On a
+hang, return the last guard owner/ticket ordering and the last NPU graph marker
+for the unmatched generation forward; do not add another synchronization,
+stream, timeout, worker-count, or graph change on the server.
+
+This is a functional stability qualification of the fix, not a performance or
+realtime result. Record the preliminary latency/throughput and guard wait/hold
+distributions for regression triage, but do not compare them with the 500 ms
+target. If `910C-021` passes, the next handoff will restore the bounded
+concurrency ladder under this same guarded graph profile before the exact-10 s
+performance task. If it fails, the first unmatched guard or graph boundary
+selects the next local change.
+
+Return only the two repository commits, package/test totals, environment
+invariants, aggregate dataset identity, request/accuracy/cache results,
+completed graph replay and fallback deltas, guard event counts and aggregate
+wait/hold statistics, scheduler/health/HBM/cleanup state, and the first
+sanitized failure boundary. Do not return raw audio, transcripts, request IDs,
+host or dataset paths, host identity, full logs, or proprietary traces.
+
 ## Qualification sequence
 
 1. Run the [first hardware validation task](qwen3_asr_ascend_910b_validation_task.md)
@@ -1364,7 +1517,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-017 | `bd4dca13`; includes `144316fe` | `144316fe` plus prior diagnostic change | Exact repaired A3 stack; SGLang `71de97b2`; `910C-013` graph-enabled profile | Instrumented SeedTTS EN cold-input run at concurrency 8 | completed; hang reproduced and coarse boundaries classified | Focused 13 and Qwen3-ASR 588 passed; eight outstanding: one inside encoder encode, five admitted before prefill, two after prefill; decode completed-replay count stayed at warm value 15; this does not exclude a replay entered but not returned |
 | 910C-018 | `39ec921b`; includes `4c25482e` | `4c25482e` plus handoff commit | Exact `910C-017` stack and profile | Repeat concurrency-8 cold-input diagnostic with standard generation forward start/return events | completed; first blocker inside standard decode forward | Focused 25 and Qwen3-ASR 588 passed; one unmatched decode `generation_forward_start` after a completed eager prefill for the same request; completed replay count stayed at warm value 15 |
 | 910C-019 | `a949960c`; no runtime edit | SGLang `f86279db9` based on `71de97b2` | Exact `910C-018` stack/profile plus generic SGLang graph-stage logging; repaired headless OpenCV invariant | Repeat concurrency-8 cold-input diagnostic with inner decode graph dispatch markers | completed; selected NPU runner did not return | SGLang 13, omni focused 25, and Qwen3-ASR 588 passed; final batch-size 2 decode emitted `execute_begin` without return; generic inner markers were bypassed by `NPUGraphRunner.execute()` override; editable install had reintroduced non-headless OpenCV and was repaired before the accepted run |
-| 910C-020 | pending | sglang-omni handoff commit; SGLang `9dbc4f89c` on `f86279db9` | Exact `910C-019` stack/profile; NPU-specific stage logging only | Repeat concurrency-8 cold-input diagnostic with NPU load, host-copy, graph-update, replay, and join markers | pending | Stop on OpenCV invariant/test failure or 90-second no-completion; classify the independently observed update and replay lanes before selecting a fix |
+| 910C-020 | `45bbd120`; no runtime edit | SGLang `9dbc4f89c` on `f86279db9` | Exact `910C-019` stack/profile; NPU-specific stage logging only | Repeat concurrency-8 cold-input diagnostic with NPU load, host-copy, graph-update, replay, and join markers | completed; update lane blocked | Tests passed; final raw batch 6/bucket 8 had `graph_update` 34/33, `graph_replay` 34/34, and update-thread join 34/33; host replay returned but update never returned, so the main thread remained in join and the wave made no completion progress |
+| 910C-021 | pending | local implementation `29ca236f` plus this handoff commit; SGLang `9dbc4f89c` | Exact `910C-020` stack/profile; Qwen3-ASR NPU FIFO execution guard is the only variable | Repeat the same 70 content-distinct SeedTTS EN inputs at concurrency 8 | pending | Require all 70 completions, cold-input integrity, positive decode replay, non-overlapping balanced guard events with encoder progress, zero fallback/error, drained state, bounded HBM, and clean shutdown; stop at first failure |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
