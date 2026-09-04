@@ -7,6 +7,7 @@ pass, sampling, logit post-processing, and output extraction.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -14,6 +15,8 @@ import torch
 
 from sglang_omni.model_runner.prefill_inputs import clear_omni_prefill_inputs
 from sglang_omni.platforms import current_platform
+from sglang_omni.profiler.event_recorder import diag_emit as _diag_emit
+from sglang_omni.profiler.event_recorder import get_active_stage as _get_active_stage
 from sglang_omni.sampling.seed import (
     SAMPLING_SEED_MASK,
     derive_sampling_seed,
@@ -450,7 +453,34 @@ class ModelRunner:
                     forward_batch, schedule_batch, requests
                 )
             if batch_result is None:
-                batch_result = self.tp_worker.forward_batch_generation(forward_batch)
+                phase = "prefill" if is_prefill else "decode"
+                forward_id = time.monotonic_ns()
+                self._emit_generation_forward_boundary(
+                    requests,
+                    event_name="generation_forward_start",
+                    phase=phase,
+                    forward_id=forward_id,
+                )
+                try:
+                    batch_result = self.tp_worker.forward_batch_generation(
+                        forward_batch
+                    )
+                except Exception as exc:
+                    self._emit_generation_forward_boundary(
+                        requests,
+                        event_name="generation_forward_return",
+                        phase=phase,
+                        forward_id=forward_id,
+                        error_class=type(exc).__name__,
+                    )
+                    raise
+                self._emit_generation_forward_boundary(
+                    requests,
+                    event_name="generation_forward_return",
+                    phase=phase,
+                    forward_id=forward_id,
+                    can_run_graph=bool(batch_result.can_run_cuda_graph),
+                )
 
             if (
                 not schedule_batch.is_prefill_only
@@ -476,6 +506,39 @@ class ModelRunner:
             if is_prefill:
                 clear_omni_prefill_inputs(forward_batch)
                 self.cleanup_prefill(forward_batch, schedule_batch, requests)
+
+    @staticmethod
+    def _emit_generation_forward_boundary(
+        requests,
+        *,
+        event_name: str,
+        phase: str,
+        forward_id: int,
+        can_run_graph: bool | None = None,
+        error_class: str | None = None,
+    ) -> None:
+        """Expose the standard generation device-call boundary for diagnostics.
+
+        One event is correlated to each request in the batch. ``diag_emit`` is
+        a no-op unless the existing encoder diagnostic gate and request-event
+        recorder are both enabled, so normal serving does not pay per-step
+        recorder cost.
+        """
+        metadata = {
+            "phase": phase,
+            "forward_id": forward_id,
+            "batch_size": len(requests),
+            "can_run_graph": can_run_graph,
+            "error_class": error_class,
+        }
+        stage = _get_active_stage()
+        for request in requests:
+            _diag_emit(
+                request_id=request.request_id,
+                stage=stage,
+                event_name=event_name,
+                metadata=metadata,
+            )
 
     def finalize_skip_rids(self, scheduler_output) -> set[str]:
         """Request ids whose ``generation_steps`` must NOT advance this step.
