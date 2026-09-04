@@ -956,6 +956,42 @@ identity, or proprietary traces. This is a diagnostic run only: even if all 70
 requests finish, do not report performance qualification and do not proceed to
 realtime or higher concurrency without a new handoff task.
 
+### `910C-016` preflight failure and `910C-017` retry
+
+The first `910C-016` attempt stopped correctly at its focused-test gate before
+service startup. On the exact SGLang `71de97b2` environment,
+`test_model_worker_reports_actual_decode_graph_replays_by_bucket` observed zero
+decode replay and eager counts. The local implementation had treated
+`ForwardMode.is_cuda_graph()` as proof that a batch was already represented by
+a graph wrapper and returned early. In SGLang, `ForwardMode.DECODE` itself
+satisfies both `is_decode()` and `is_cuda_graph()`; the per-forward
+`can_run_graph` result distinguishes replay from eager execution. The faulty
+guard therefore excluded every decode forward.
+
+Local fix `144316fe` removes the `is_cuda_graph()` exclusion and adds explicit
+test assertions for the SGLang mode contract. Ten locally runnable
+encoder/diagnostic tests, Python byte-compilation, focused Ruff fatal/import
+checks, and `git diff --check` passed. The SGLang-dependent test remains a
+mandatory server gate because the local Windows interpreter cannot import the
+Linux-only SGLang dependency chain.
+
+Run identifier: `910C-017`. This is a clean retry of the previously authorized
+diagnostic task, not a continuation in the failed process. Before executing,
+check out the handoff commit containing this section and confirm that
+sglang-omni contains `144316fe` on top of `b64b16d6`, while SGLang remains at
+`71de97b2`; require a clean worktree and the same serving/client dependency
+split. Rerun all focused tests and the complete Qwen3-ASR unit-test directory
+from the `910C-016` task. Stop again at the first failure.
+
+Only after every test passes, start a fresh service and execute the unchanged
+`910C-016` graph-enabled concurrency-8 cold-input diagnostic procedure under
+the new run ID `910C-017`. Keep every profile, corpus, concurrency, timeout,
+polling, request-recorder, cleanup, evidence, and prohibited-action requirement
+unchanged. In the warm-up precheck, additionally require
+`model_info.decode_cuda_graph.replay_count > 0` after observed decode graph
+execution; zero or absent counts are a diagnostic-contract failure and must
+stop the run before the measured SeedTTS wave.
+
 ## Qualification sequence
 
 1. Run the [first hardware validation task](qwen3_asr_ascend_910b_validation_task.md)
@@ -995,7 +1031,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-013 | `9bae2619`; no runtime edit | not applicable | Exact `910C-012` candidate plus decode log interval 1; serving pyarrow 25.0.0; isolated benchmark client pyarrow 25.0.1 | SeedTTS EN 70 content-distinct inputs at concurrency 8, no benchmark warm-up | failed; hung at first level | Preflight passed; eight requests remained outstanding beyond 90 s and none completed; HBM stayed stable with no error/fallback; 66 decode records with `npu graph: True` attest replay but do not qualify stability; levels 16/32/64/70 did not run |
 | 910C-014 | `d69c5d3f`; no runtime edit | not applicable | Exact `910C-013` stack; only decode graph disabled; serving pyarrow 25.0.0; isolated client pyarrow 25.0.1 | Arm B: same 70 content-distinct inputs at concurrency 8 | stability-isolation arm passed; benchmark post-processing incomplete | Warm A plus 70 measured requests returned HTTP 200 with `npu graph: False` and state drained; pending peaked at 8 and running batch at 7; missing declared `openai-whisper` caused WER post-processing failure and no result JSON; decode graph is necessary for the graph-enabled Arm A hang |
 | 910C-015 | `544b8cd9`; server-only diagnostic draft | `b64b16d6`; locally reviewed replacement | No hardware run; local Windows environment lacks runnable SGLang/Linux dependencies | Env-gated encoder/build/admission timeline plus decode graph counters | local diagnostic change ready; server verification pending | Corrected Qwen `_enqueue()` override gap, added request correlation and exact encode-return boundary; 10 local diagnostic/encoder tests passed; server must run full focused and Qwen3-ASR suites |
-| 910C-016 | pending | handoff commit plus `b64b16d6` | Exact repaired A3 stack and `910C-013` graph-enabled profile | One instrumented SeedTTS EN cold-input run at concurrency 8 | pending | Must start request-event recorder explicitly, correlate six diagnostic events with decode replay counters, stop at first 90-second no-completion interval, and return the first missing operation boundary |
+| 910C-016 | `6057bdb3`; includes faulty `b64b16d6` instrumentation | `b64b16d6`; superseded by `144316fe` | Exact repaired A3 stack; SGLang `71de97b2`; clean worktree; serving/client dependency split verified | Focused tests before instrumented cold-input run | failed at preflight; no service run | Decode usage test expected one replay and one eager decode but both counters stayed zero because the local guard excluded `ForwardMode.DECODE`; operator stopped before startup as required |
+| 910C-017 | pending | handoff commit plus `144316fe` | Exact repaired A3 stack and `910C-013` graph-enabled profile | Fresh retry of instrumented SeedTTS EN cold-input run at concurrency 8 | pending | Rerun all tests; require a positive warm-up decode replay counter; then correlate six diagnostic events with replay deltas and stop at the first 90-second no-completion interval |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
