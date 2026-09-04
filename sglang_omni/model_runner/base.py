@@ -28,6 +28,7 @@ from sglang_omni.scheduling.types import (
     SchedulerRequest,
     sampled_logprobs_to_list,
 )
+from sglang_omni.utils.execution_guard import FairDeviceExecutionGuard
 
 
 def _current_sglang_sampling_backend() -> str | None:
@@ -99,11 +100,18 @@ class ModelRunner:
       - decode hooks for single-step autoregressive decode processing
     """
 
-    def __init__(self, tp_worker: Any, output_processor: Any):
+    def __init__(
+        self,
+        tp_worker: Any,
+        output_processor: Any,
+        *,
+        device_execution_guard: FairDeviceExecutionGuard | None = None,
+    ):
         self.tp_worker = tp_worker
         self.output_processor = output_processor
         self.device = current_platform.get_device(tp_worker.gpu_id)
         self.model = tp_worker.model_runner.model
+        self._device_execution_guard = device_execution_guard
         self._execution_bridge: Any | None = None
 
         # Async decode (one-step lookahead). Inert unless ``_async_enabled`` is set.
@@ -462,9 +470,55 @@ class ModelRunner:
                     forward_id=forward_id,
                 )
                 try:
-                    batch_result = self.tp_worker.forward_batch_generation(
-                        forward_batch
-                    )
+                    guard = getattr(self, "_device_execution_guard", None)
+                    if guard is None:
+                        batch_result = self.tp_worker.forward_batch_generation(
+                            forward_batch
+                        )
+                    else:
+                        for request in requests:
+                            _diag_emit(
+                                request_id=request.request_id,
+                                stage=_get_active_stage(),
+                                event_name="npu_execution_guard_wait",
+                                metadata={"owner": "generation", "phase": phase},
+                            )
+                        with guard.hold() as (guard_ticket, wait_ns):
+                            acquired_ns = time.monotonic_ns()
+                            for request in requests:
+                                _diag_emit(
+                                    request_id=request.request_id,
+                                    stage=_get_active_stage(),
+                                    event_name="npu_execution_guard_acquired",
+                                    metadata={
+                                        "owner": "generation",
+                                        "phase": phase,
+                                        "ticket": guard_ticket,
+                                        "wait_ms": wait_ns / 1e6,
+                                    },
+                                )
+                            try:
+                                batch_result = (
+                                    self.tp_worker.forward_batch_generation(
+                                        forward_batch
+                                    )
+                                )
+                            finally:
+                                held_ms = (
+                                    time.monotonic_ns() - acquired_ns
+                                ) / 1e6
+                                for request in requests:
+                                    _diag_emit(
+                                        request_id=request.request_id,
+                                        stage=_get_active_stage(),
+                                        event_name="npu_execution_guard_released",
+                                        metadata={
+                                            "owner": "generation",
+                                            "phase": phase,
+                                            "ticket": guard_ticket,
+                                            "held_ms": held_ms,
+                                        },
+                                    )
                 except Exception as exc:
                     self._emit_generation_forward_boundary(
                         requests,
