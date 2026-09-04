@@ -992,6 +992,92 @@ unchanged. In the warm-up precheck, additionally require
 execution; zero or absent counts are a diagnostic-contract failure and must
 stop the run before the measured SeedTTS wave.
 
+### `910C-017` result and `910C-018` forward-boundary gate
+
+The isolated-server `910C-017` retry passed all preflight tests and reproduced
+the concurrency-8 cold-input hang. At the 90-second stop, eight requests were
+outstanding: one had entered `encode_batch()` without an encode return, five
+had been admitted without a first prefill start, and two had completed their
+first prefill forward without reaching `model_path_end`. The warm-up decode
+replay count was 15 and did not increase during the measured interval. Cleanup
+returned the server to its clean resource baseline.
+
+Do not interpret those observations as three independent blocking sites. The
+five admitted requests may simply be queued behind a scheduler thread blocked
+by an earlier model forward. `model_path_end` is a request-terminal event, so
+the two post-prefill requests may be anywhere in their decode lifetime. Also,
+the decode replay counter is updated only after
+`model_runner.forward()` returns. A count fixed at 15 proves that no additional
+decode graph forward returned successfully; it does **not** prove that no
+measured request entered a replay which then blocked.
+
+Local diagnostic commit `4c25482e` therefore adds one narrower boundary around
+the standard `tp_worker.forward_batch_generation()` call. With the existing
+`SGLANG_OMNI_ENCODER_DIAG` gate and request recorder active, every request in a
+batch receives:
+
+- `generation_forward_start`: call-local `forward_id`, `phase` (`prefill` or
+  `decode`), `batch_size`, and the existing monotonic clock metadata;
+- `generation_forward_return`: the same phase and batch size plus
+  the same `forward_id`, `can_run_graph`, and `error_class`.
+
+Normal serving remains unchanged because the event path is a no-op unless the
+diagnostic environment gate and request recorder are both enabled. The new
+events do not synchronize a stream, acquire a device lock, invoke graph
+eligibility twice, or change scheduling order.
+
+Run identifier: `910C-018`. Check out the handoff commit containing this task
+and confirm that sglang-omni contains `4c25482e` on top of `144316fe`, while
+SGLang remains exactly `71de97b2`. Require a clean worktree and the established
+serving/client dependency split. Before service startup, run:
+
+```bash
+python -m pytest -q \
+  tests/unit_test/profiler/test_encoder_diag_events.py \
+  tests/unit_test/scheduling/test_pre_lm_encoder.py \
+  tests/unit_test/model_runner/test_prefill_cuda_graph_usage.py \
+  tests/unit_test/model_runner/test_base_hooks.py
+python -m pytest -q tests/unit_test/qwen3_asr
+```
+
+Stop on the first collection or test failure. In particular, require the new
+prefill/decode forward-boundary test to pass; do not patch it on the server.
+
+Only after the tests pass, run one fresh service with the exact `910C-017`
+profile, corpus, warm-up, request recorder, concurrency 8, no-retry policy,
+polling, 90-second no-completion stop, and bounded cleanup. Keep
+`SGLANG_OMNI_ENCODER_DIAG=1` and decode log interval 1. Before the measured
+wave, require the warm request to contain paired
+`generation_forward_start`/`generation_forward_return` events and a positive
+decode replay count; otherwise stop as a diagnostic-contract failure.
+
+For the measured wave, group generation events by `forward_id`, then report:
+
+1. every unmatched `generation_forward_start`, including phase, batch size,
+   and the redacted request-ID set;
+2. the last successfully paired forward before the hang, including phase and
+   returned `can_run_graph`;
+3. encoder boundary state for each outstanding request;
+4. scheduler admission/prefill/terminal state for each outstanding request;
+5. decode replay/eager counter deltas, explicitly described as completed
+   forward counts rather than graph-entry counts;
+6. coordinator/build/admission/HBM state and cleanup result.
+
+If an unmatched decode start is present, classify the first blocker as inside
+the standard decode generation forward; a later task may then add begin/end
+visibility at the exact SGLang graph-dispatch call. If an unmatched prefill
+start is present, classify it inside the eager prefill generation forward. If
+all starts have returns, classify the blocker after the device forward and use
+the surrounding events to choose the next boundary. Do not infer a separate
+scheduler defect merely from admitted requests that never receive prefill
+while another forward is unmatched.
+
+This remains a diagnostic run. Do not change graph settings, scan concurrency,
+enable stream diagnostics, add synchronization or mutual exclusion, edit
+runtime packages, attempt a fix, report performance qualification, or proceed
+to realtime. Return the bounded redacted event matrix and aggregates, not raw
+JSONL, audio, transcripts, private paths, host identity, or proprietary logs.
+
 ## Qualification sequence
 
 1. Run the [first hardware validation task](qwen3_asr_ascend_910b_validation_task.md)
@@ -1032,7 +1118,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-014 | `d69c5d3f`; no runtime edit | not applicable | Exact `910C-013` stack; only decode graph disabled; serving pyarrow 25.0.0; isolated client pyarrow 25.0.1 | Arm B: same 70 content-distinct inputs at concurrency 8 | stability-isolation arm passed; benchmark post-processing incomplete | Warm A plus 70 measured requests returned HTTP 200 with `npu graph: False` and state drained; pending peaked at 8 and running batch at 7; missing declared `openai-whisper` caused WER post-processing failure and no result JSON; decode graph is necessary for the graph-enabled Arm A hang |
 | 910C-015 | `544b8cd9`; server-only diagnostic draft | `b64b16d6`; locally reviewed replacement | No hardware run; local Windows environment lacks runnable SGLang/Linux dependencies | Env-gated encoder/build/admission timeline plus decode graph counters | local diagnostic change ready; server verification pending | Corrected Qwen `_enqueue()` override gap, added request correlation and exact encode-return boundary; 10 local diagnostic/encoder tests passed; server must run full focused and Qwen3-ASR suites |
 | 910C-016 | `6057bdb3`; includes faulty `b64b16d6` instrumentation | `b64b16d6`; superseded by `144316fe` | Exact repaired A3 stack; SGLang `71de97b2`; clean worktree; serving/client dependency split verified | Focused tests before instrumented cold-input run | failed at preflight; no service run | Decode usage test expected one replay and one eager decode but both counters stayed zero because the local guard excluded `ForwardMode.DECODE`; operator stopped before startup as required |
-| 910C-017 | pending | handoff commit plus `144316fe` | Exact repaired A3 stack and `910C-013` graph-enabled profile | Fresh retry of instrumented SeedTTS EN cold-input run at concurrency 8 | pending | Rerun all tests; require a positive warm-up decode replay counter; then correlate six diagnostic events with replay deltas and stop at the first 90-second no-completion interval |
+| 910C-017 | `bd4dca13`; includes `144316fe` | `144316fe` plus prior diagnostic change | Exact repaired A3 stack; SGLang `71de97b2`; `910C-013` graph-enabled profile | Instrumented SeedTTS EN cold-input run at concurrency 8 | completed; hang reproduced and coarse boundaries classified | Focused 13 and Qwen3-ASR 588 passed; eight outstanding: one inside encoder encode, five admitted before prefill, two after prefill; decode completed-replay count stayed at warm value 15; this does not exclude a replay entered but not returned |
+| 910C-018 | pending | `4c25482e` plus handoff commit | Exact `910C-017` stack and profile | Repeat concurrency-8 cold-input diagnostic with standard generation forward start/return events | pending | Stop at tests or 90-second no-completion; identify unmatched prefill/decode forward before any stream, lock, scheduling, or performance change |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
