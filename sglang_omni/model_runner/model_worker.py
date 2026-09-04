@@ -344,7 +344,11 @@ class ModelWorker:
         can_run_graph: bool,
     ) -> None:
         mode = forward_batch.forward_mode
-        if not mode.is_decode() or mode.is_cuda_graph():
+        # ForwardMode.DECODE itself satisfies is_cuda_graph() in SGLang. That
+        # predicate identifies graph-eligible execution modes; it does not say
+        # whether this particular forward replayed a captured graph. The
+        # ModelRunner result's can_run_graph flag carries the latter fact.
+        if not mode.is_decode():
             return
 
         usage = self._decode_cuda_graph_usage

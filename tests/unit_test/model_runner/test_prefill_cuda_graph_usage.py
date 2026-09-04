@@ -145,6 +145,12 @@ def test_model_worker_reports_actual_prefill_graph_replays_by_bucket(
 def test_model_worker_reports_actual_decode_graph_replays_by_bucket(
     monkeypatch,
 ) -> None:
+    # SGLang classifies DECODE as a CUDA-graph execution mode even when a
+    # particular batch falls back to eager; can_run_graph distinguishes those
+    # two outcomes for usage accounting.
+    assert ForwardMode.DECODE.is_decode()
+    assert ForwardMode.DECODE.is_cuda_graph()
+
     decode_runner = SimpleNamespace(
         capture_bs=[1, 2, 4],
         bs=2,
