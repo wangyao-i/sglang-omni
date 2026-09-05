@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,15 +15,25 @@ from benchmarks.manifest.exact10s import (
     fingerprint_manifest,
     load_exact10s_manifest,
 )
-from benchmarks.manifest.prepare_seedtts_exact10s import build_exact10s_corpus
+from benchmarks.manifest.prepare_seedtts_exact10s import (
+    FFMPEG_RESAMPLE_FILTER,
+    build_exact10s_corpus,
+)
 
 
-def _source(tmp_path: Path, sample_id: str, frames: int, fill: int) -> SampleInput:
+def _source(
+    tmp_path: Path,
+    sample_id: str,
+    frames: int,
+    fill: int,
+    *,
+    sample_rate: int = 16_000,
+) -> SampleInput:
     path = tmp_path / f"{sample_id}.wav"
     with wave.open(str(path), "wb") as wav_file:
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
-        wav_file.setframerate(16_000)
+        wav_file.setframerate(sample_rate)
         wav_file.writeframes(bytes([fill]) * frames * 2)
     return SampleInput(
         sample_id=sample_id,
@@ -116,6 +128,91 @@ def test_builder_excludes_overlong_sources_before_count_gate(
         _source(tmp_path, "long", TARGET_FRAMES + 1, 2),
     ]
     with pytest.raises(ValueError, match="usable"):
+        build_exact10s_corpus(
+            sources,
+            tmp_path / "derived",
+            total_clips=2,
+            warmup_clips=1,
+        )
+
+
+def test_builder_resamples_24khz_sources_with_pinned_ffmpeg_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs) -> SimpleNamespace:
+        calls.append(command)
+        assert kwargs["stdout"] is subprocess.PIPE
+        assert kwargs["stderr"] is subprocess.PIPE
+        if command[-1] == "-version":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=b"ffmpeg version test-build\nconfiguration test\n",
+                stderr=b"",
+            )
+        source_name = Path(command[command.index("-i") + 1]).stem
+        fill = 1 if source_name == "s0" else 2
+        return SimpleNamespace(
+            returncode=0,
+            stdout=bytes([fill]) * 70_000 * 2,
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(
+        "benchmarks.manifest.prepare_seedtts_exact10s.shutil.which",
+        lambda executable: "/usr/bin/ffmpeg",
+    )
+    monkeypatch.setattr(
+        "benchmarks.manifest.prepare_seedtts_exact10s.subprocess.run",
+        fake_run,
+    )
+    sources = [
+        _source(
+            tmp_path,
+            f"s{index}",
+            105_000,
+            index + 1,
+            sample_rate=24_000,
+        )
+        for index in range(2)
+    ]
+
+    provenance = build_exact10s_corpus(
+        sources,
+        tmp_path / "derived",
+        total_clips=2,
+        warmup_clips=1,
+    )
+
+    assert provenance["source_sample_rate_counts"] == {"24000": 2}
+    assert provenance["resampled_source_count"] == 2
+    assert provenance["resampler"]["backend"] == "ffmpeg-swresample"
+    assert provenance["resampler"]["version_first_line"] == (
+        "ffmpeg version test-build"
+    )
+    assert len(provenance["resampler"]["version_output_sha256"]) == 64
+    assert provenance["resampler"]["command_template"][-1] == "pipe:1"
+    resample_calls = [command for command in calls if "-i" in command]
+    assert len(resample_calls) == 2
+    assert all(
+        command[command.index("-af") + 1] == FFMPEG_RESAMPLE_FILTER
+        for command in resample_calls
+    )
+
+
+def test_builder_rejects_unapproved_source_sample_rate(tmp_path: Path) -> None:
+    sources = [
+        _source(
+            tmp_path,
+            f"s{index}",
+            70_000,
+            index + 1,
+            sample_rate=22_050,
+        )
+        for index in range(2)
+    ]
+    with pytest.raises(ValueError, match="sample rate must be one of"):
         build_exact10s_corpus(
             sources,
             tmp_path / "derived",

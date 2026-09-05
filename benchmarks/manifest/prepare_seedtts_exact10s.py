@@ -8,8 +8,10 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import wave
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -30,6 +32,12 @@ DEFAULT_TOTAL_CLIPS = 770
 DEFAULT_WARMUP_CLIPS = 70
 DEFAULT_SILENCE_MS = 100
 MIN_SPEECH_FRACTION = 0.80
+SUPPORTED_SOURCE_SAMPLE_RATES = (SAMPLE_RATE, 24_000)
+FFMPEG_TIMEOUT_S = 120
+FFMPEG_RESAMPLE_FILTER = (
+    "aresample=16000:filter_size=32:phase_shift=10:linear_interp=0:"
+    "exact_rational=1:dither_method=none"
+)
 
 
 @dataclass(frozen=True)
@@ -38,17 +46,115 @@ class _SourcePcm:
     ref_text: str
     pcm: bytes
     num_frames: int
+    source_sample_rate: int
+    resampled: bool
 
 
-def _read_source(sample: SampleInput) -> _SourcePcm:
+class _FfmpegResampler:
+    def __init__(self, executable: str = "ffmpeg") -> None:
+        self.requested_executable = executable
+        self.executable: str | None = None
+        self._identity: dict | None = None
+
+    def _resolve(self) -> str:
+        if self.executable is None:
+            self.executable = shutil.which(self.requested_executable)
+            if self.executable is None:
+                raise RuntimeError(
+                    "ffmpeg is required to resample pinned 24 kHz SeedTTS audio"
+                )
+        return self.executable
+
+    def identity(self) -> dict:
+        if self._identity is None:
+            executable = self._resolve()
+            result = subprocess.run(
+                [executable, "-version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=FFMPEG_TIMEOUT_S,
+            )
+            if result.returncode != 0 or not result.stdout:
+                stderr = result.stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"ffmpeg -version failed: {stderr}")
+            version_text = result.stdout.decode("utf-8", errors="replace")
+            self._identity = {
+                "backend": "ffmpeg-swresample",
+                "resolved_executable": executable,
+                "version_first_line": version_text.splitlines()[0],
+                "version_output_sha256": hashlib.sha256(result.stdout).hexdigest(),
+                "command_template": self.command_template(),
+            }
+        return dict(self._identity)
+
+    def command_template(self) -> list[str]:
+        return [
+            "ffmpeg",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "<input-wav>",
+            "-map_metadata",
+            "-1",
+            "-vn",
+            "-sn",
+            "-dn",
+            "-ac",
+            "1",
+            "-af",
+            FFMPEG_RESAMPLE_FILTER,
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "s16le",
+            "pipe:1",
+        ]
+
+    def resample(self, wav_path: str, sample_id: str) -> bytes:
+        # Query and freeze the backend identity before accepting any output.
+        self.identity()
+        command = self.command_template()
+        command[command.index("<input-wav>")] = wav_path
+        command[0] = self._resolve()
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=FFMPEG_TIMEOUT_S,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"ffmpeg resampling failed for {sample_id}: {stderr}"
+            )
+        if not result.stdout or len(result.stdout) % SAMPLE_WIDTH_BYTES:
+            raise RuntimeError(
+                f"ffmpeg produced invalid PCM16 output for {sample_id}"
+            )
+        return result.stdout
+
+
+def _read_source(
+    sample: SampleInput,
+    *,
+    resampler: _FfmpegResampler,
+) -> _SourcePcm:
     try:
         with wave.open(sample.ref_audio, "rb") as wav_file:
             if wav_file.getcomptype() != "NONE":
                 raise ValueError("source must use uncompressed PCM")
             if wav_file.getnchannels() != CHANNELS:
                 raise ValueError("source must be mono")
-            if wav_file.getframerate() != SAMPLE_RATE:
-                raise ValueError(f"source must be {SAMPLE_RATE} Hz")
+            source_sample_rate = wav_file.getframerate()
+            if source_sample_rate not in SUPPORTED_SOURCE_SAMPLE_RATES:
+                supported = ", ".join(
+                    str(rate) for rate in SUPPORTED_SOURCE_SAMPLE_RATES
+                )
+                raise ValueError(f"source sample rate must be one of: {supported}")
             if wav_file.getsampwidth() != SAMPLE_WIDTH_BYTES:
                 raise ValueError("source must be PCM16")
             num_frames = wav_file.getnframes()
@@ -60,10 +166,21 @@ def _read_source(sample: SampleInput) -> _SourcePcm:
         raise ValueError(f"truncated source WAV for {sample.sample_id}")
     if num_frames <= 0:
         raise ValueError(f"source {sample.sample_id} must not be empty")
+    resampled = source_sample_rate != SAMPLE_RATE
+    if resampled:
+        pcm = resampler.resample(sample.ref_audio, sample.sample_id)
+        num_frames = len(pcm) // (CHANNELS * SAMPLE_WIDTH_BYTES)
     ref_text = sample.ref_text.strip()
     if not ref_text:
         raise ValueError(f"empty source reference for {sample.sample_id}")
-    return _SourcePcm(sample.sample_id, ref_text, pcm, num_frames)
+    return _SourcePcm(
+        sample.sample_id,
+        ref_text,
+        pcm,
+        num_frames,
+        source_sample_rate,
+        resampled,
+    )
 
 
 def _compose_clip(
@@ -152,6 +269,7 @@ def build_exact10s_corpus(
     warmup_clips: int = DEFAULT_WARMUP_CLIPS,
     silence_ms: int = DEFAULT_SILENCE_MS,
     source_identity: dict | None = None,
+    ffmpeg_executable: str = "ffmpeg",
 ) -> dict:
     if total_clips <= 0:
         raise ValueError("total_clips must be > 0")
@@ -175,8 +293,12 @@ def build_exact10s_corpus(
         ids = [sample.sample_id for sample in source_samples]
         if len(ids) != len(set(ids)):
             raise ValueError("source sample IDs must be unique")
+        resampler = _FfmpegResampler(ffmpeg_executable)
         all_sources = sorted(
-            (_read_source(sample) for sample in source_samples),
+            (
+                _read_source(sample, resampler=resampler)
+                for sample in source_samples
+            ),
             key=lambda item: item.sample_id,
         )
         sources = [
@@ -239,11 +361,23 @@ def build_exact10s_corpus(
                 handle.write(
                     json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
                 )
+        source_sample_rate_counts = Counter(
+            source.source_sample_rate for source in all_sources
+        )
+        resampled_source_count = sum(source.resampled for source in all_sources)
         provenance = {
-            "schema_version": 1,
+            "schema_version": 2,
             "generator": "benchmarks.manifest.prepare_seedtts_exact10s",
             "source": source_identity or {},
             "source_sample_count": len(source_samples),
+            "source_sample_rate_counts": {
+                str(rate): count
+                for rate, count in sorted(source_sample_rate_counts.items())
+            },
+            "resampled_source_count": resampled_source_count,
+            "resampler": (
+                resampler.identity() if resampled_source_count else None
+            ),
             "usable_source_count": len(sources),
             "excluded_too_long_source_ids": excluded_too_long,
             "total_count": info.total_count,
