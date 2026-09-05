@@ -9,7 +9,7 @@ import re
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
 _NPU_SMI_LOCK = threading.Lock()
@@ -145,6 +145,7 @@ def summarize_npu_resource_samples(
         "system_cpu_percent": _optional_series_summary(
             [sample.system_cpu_percent for sample in samples]
         ),
+        "raw_samples": [asdict(sample) for sample in samples],
         "error": error,
     }
 

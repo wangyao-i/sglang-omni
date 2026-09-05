@@ -50,6 +50,7 @@ class Exact10sRepeatResult:
     throughput_samples_per_s: float
     rtfx: float
     latency_mean_s: float | None
+    latency_p50_s: float | None
     latency_median_s: float | None
     latency_p90_s: float | None
     latency_p95_s: float | None
@@ -379,6 +380,7 @@ def _aggregate_repeat_metrics(
         "throughput_samples_per_s": len(samples) / wall_clock_s,
         "rtfx": sum(sample.duration_s for sample in samples) / wall_clock_s,
         "latency_mean_s": statistics.fmean(latencies) if latencies else None,
+        "latency_p50_s": _percentile(latencies, 0.50),
         "latency_median_s": statistics.median(latencies) if latencies else None,
         "latency_p90_s": _percentile(latencies, 0.90),
         "latency_p95_s": _percentile(latencies, 0.95),
@@ -462,6 +464,7 @@ def _aggregate_repeats(
         "throughput_samples_per_s",
         "rtfx",
         "latency_mean_s",
+        "latency_p50_s",
         "latency_median_s",
         "latency_p90_s",
         "latency_p95_s",

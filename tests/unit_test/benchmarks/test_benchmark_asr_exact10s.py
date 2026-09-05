@@ -146,6 +146,7 @@ def test_aggregate_retains_failure_latency_and_invalidates_repeat(
     assert summary["valid"] is False
     assert summary["failed_count"] == 1
     assert summary["timeout_count"] == 1
+    assert summary["latency_p50_s"] == 0.1
     assert summary["latency_p95_s"] == 120.0
     assert rows[1]["timeout"] is True
     assert rows[1]["latency_s"] == 120.0

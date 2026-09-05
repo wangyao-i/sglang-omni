@@ -64,6 +64,7 @@ def test_summarize_npu_samples_reports_required_metrics() -> None:
     assert result["available"] is True
     assert result["hbm_usage_percent"]["max"] == 90.0
     assert result["aicore_usage_percent"]["mean"] == 73.0
+    assert len(result["raw_samples"]) == 2
     assert result["error"] is None
 
 
