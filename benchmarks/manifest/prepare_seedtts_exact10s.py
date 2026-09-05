@@ -48,6 +48,15 @@ class _SourcePcm:
     num_frames: int
     source_sample_rate: int
     resampled: bool
+    pcm_sha256: str
+
+
+class _InsufficientSpeechOccupancy(ValueError):
+    pass
+
+
+class _NoMoreDistinctCompositions(ValueError):
+    pass
 
 
 class _FfmpegResampler:
@@ -180,6 +189,7 @@ def _read_source(
         num_frames,
         source_sample_rate,
         resampled,
+        hashlib.sha256(pcm).hexdigest(),
     )
 
 
@@ -188,35 +198,93 @@ def _compose_clip(
     start_index: int,
     *,
     silence_frames: int,
+    variant: int = 0,
 ) -> tuple[bytes, str, list[str], int]:
-    first = sources[start_index]
-    selected = [first]
-    used = {start_index}
-    occupied = first.num_frames
+    anchor = sources[start_index]
+    candidate_by_pcm_hash: dict[str, int] = {}
+    for index, source in enumerate(sources):
+        if index == start_index or source.pcm_sha256 == anchor.pcm_sha256:
+            continue
+        existing = candidate_by_pcm_hash.get(source.pcm_sha256)
+        if existing is None or (index - start_index) % len(sources) < (
+            existing - start_index
+        ) % len(sources):
+            candidate_by_pcm_hash[source.pcm_sha256] = index
+    candidate_indices = list(candidate_by_pcm_hash.values())
+    plans: list[tuple[int, ...]] = [(start_index,)]
 
-    # Greedily scan in stable cyclic order and append only whole utterances.
-    # No speech is cropped, so concatenating the references remains valid.
-    for offset in range(1, len(sources)):
-        candidate_index = (start_index + offset) % len(sources)
-        if candidate_index in used:
-            continue
-        candidate = sources[candidate_index]
-        required = silence_frames + candidate.num_frames
-        if occupied + required > TARGET_FRAMES:
-            continue
-        selected.append(candidate)
-        used.add(candidate_index)
-        occupied += required
-        if occupied == TARGET_FRAMES:
-            break
+    single_capacity = TARGET_FRAMES - anchor.num_frames - silence_frames
+    fitting_singles = [
+        index
+        for index in candidate_indices
+        if sources[index].num_frames <= single_capacity
+    ]
+    plans.extend((start_index, index) for index in fitting_singles)
+
+    pair_capacity = TARGET_FRAMES - anchor.num_frames - 2 * silence_frames
+    if pair_capacity >= 0 and len(candidate_indices) >= 2:
+        by_frames = sorted(
+            candidate_indices,
+            key=lambda index: (sources[index].num_frames, sources[index].sample_id),
+        )
+        left = 0
+        right = len(by_frames) - 1
+        best_pair: tuple[int, int] | None = None
+        best_pair_frames = -1
+        while left < right:
+            left_index = by_frames[left]
+            right_index = by_frames[right]
+            pair_frames = (
+                sources[left_index].num_frames + sources[right_index].num_frames
+            )
+            if pair_frames > pair_capacity:
+                right -= 1
+                continue
+            pair = tuple(
+                sorted(
+                    (left_index, right_index),
+                    key=lambda index: (index - start_index) % len(sources),
+                )
+            )
+            if pair_frames > best_pair_frames or (
+                pair_frames == best_pair_frames and pair < (best_pair or pair)
+            ):
+                best_pair = pair
+                best_pair_frames = pair_frames
+            left += 1
+        if best_pair is not None:
+            plans.append((start_index, *best_pair))
+
+    qualifying_plans = [
+        plan
+        for plan in plans
+        if sum(sources[index].num_frames for index in plan) / TARGET_FRAMES
+        >= MIN_SPEECH_FRACTION
+    ]
+    qualifying_plans.sort(
+        key=lambda plan: (
+            -sum(sources[index].num_frames for index in plan),
+            len(plan),
+            tuple((index - start_index) % len(sources) for index in plan[1:]),
+        )
+    )
+    if not qualifying_plans:
+        raise _InsufficientSpeechOccupancy(
+            f"anchor {anchor.sample_id} cannot reach "
+            f"{MIN_SPEECH_FRACTION:.1%} speech occupancy"
+        )
+    if variant >= len(qualifying_plans):
+        raise _NoMoreDistinctCompositions(
+            f"anchor {anchor.sample_id} exhausted "
+            f"{len(qualifying_plans)} qualifying compositions"
+        )
+    selected_indices = qualifying_plans[variant]
+    selected = [sources[index] for index in selected_indices]
+    occupied = sum(source.num_frames for source in selected) + silence_frames * (
+        len(selected) - 1
+    )
 
     speech_frames = sum(source.num_frames for source in selected)
-    if speech_frames / TARGET_FRAMES < MIN_SPEECH_FRACTION:
-        raise ValueError(
-            f"derived clip {start_index} has only "
-            f"{speech_frames / TARGET_FRAMES:.1%} speech occupancy"
-        )
-
     silence = b"\0" * silence_frames * SAMPLE_WIDTH_BYTES
     chunks: list[bytes] = []
     for index, source in enumerate(selected):
@@ -318,16 +386,42 @@ def build_exact10s_corpus(
         records = []
         exact_samples: list[Exact10sSample] = []
         source_membership = []
-        for index in range(total_clips):
-            pcm, ref_text, source_ids, speech_frames = _compose_clip(
-                sources,
-                index,
-                silence_frames=silence_frames,
-            )
-            relative_path = Path("audio") / f"exact10-{index:04d}.wav"
+        skipped_low_occupancy_anchor_ids = []
+        skipped_duplicate_derived_anchor_ids = []
+        derived_pcm_hashes: set[str] = set()
+        for anchor_index, anchor in enumerate(sources):
+            if len(records) == total_clips:
+                break
+            variant = 0
+            pcm_hash: str | None = None
+            while True:
+                try:
+                    pcm, ref_text, source_ids, speech_frames = _compose_clip(
+                        sources,
+                        anchor_index,
+                        silence_frames=silence_frames,
+                        variant=variant,
+                    )
+                except _InsufficientSpeechOccupancy:
+                    skipped_low_occupancy_anchor_ids.append(anchor.sample_id)
+                    pcm_hash = None
+                    break
+                except _NoMoreDistinctCompositions:
+                    skipped_duplicate_derived_anchor_ids.append(anchor.sample_id)
+                    pcm_hash = None
+                    break
+                pcm_hash = hashlib.sha256(pcm).hexdigest()
+                if pcm_hash not in derived_pcm_hashes:
+                    break
+                variant += 1
+            if pcm_hash is None:
+                continue
+            derived_pcm_hashes.add(pcm_hash)
+            output_index = len(records)
+            relative_path = Path("audio") / f"exact10-{output_index:04d}.wav"
             wav_path = temp_root / relative_path
             _write_wav(wav_path, pcm)
-            sample_id = f"seedtts-exact10-{index:04d}"
+            sample_id = f"seedtts-exact10-{output_index:04d}"
             exact_sample = validate_clip_duration_with_ref(
                 wav_path,
                 ref_text,
@@ -351,6 +445,14 @@ def build_exact10s_corpus(
                 }
             )
 
+        if len(records) != total_clips:
+            raise ValueError(
+                f"could build only {len(records)} distinct exact10 clips from "
+                f"{len(sources)} usable sources; speech occupancy failures="
+                f"{len(skipped_low_occupancy_anchor_ids)}, duplicate outputs="
+                f"{len(skipped_duplicate_derived_anchor_ids)}"
+            )
+
         info = fingerprint_manifest(
             exact_samples,
             min_distinct_count=total_clips,
@@ -364,12 +466,16 @@ def build_exact10s_corpus(
         source_sample_rate_counts = Counter(
             source.source_sample_rate for source in all_sources
         )
+        distinct_source_audio_count = len(
+            {source.pcm_sha256 for source in all_sources}
+        )
         resampled_source_count = sum(source.resampled for source in all_sources)
         provenance = {
             "schema_version": 2,
             "generator": "benchmarks.manifest.prepare_seedtts_exact10s",
             "source": source_identity or {},
             "source_sample_count": len(source_samples),
+            "distinct_source_audio_count": distinct_source_audio_count,
             "source_sample_rate_counts": {
                 str(rate): count
                 for rate, count in sorted(source_sample_rate_counts.items())
@@ -380,6 +486,12 @@ def build_exact10s_corpus(
             ),
             "usable_source_count": len(sources),
             "excluded_too_long_source_ids": excluded_too_long,
+            "skipped_low_occupancy_anchor_ids": (
+                skipped_low_occupancy_anchor_ids
+            ),
+            "skipped_duplicate_derived_anchor_ids": (
+                skipped_duplicate_derived_anchor_ids
+            ),
             "total_count": info.total_count,
             "warmup_count": warmup_clips,
             "measured_count": total_clips - warmup_clips,

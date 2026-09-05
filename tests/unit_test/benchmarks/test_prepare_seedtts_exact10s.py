@@ -219,3 +219,57 @@ def test_builder_rejects_unapproved_source_sample_rate(tmp_path: Path) -> None:
             total_clips=2,
             warmup_clips=1,
         )
+
+
+def test_builder_best_fit_avoids_cyclic_greedy_occupancy_failure(
+    tmp_path: Path,
+) -> None:
+    sources = [
+        _source(tmp_path, "s0", 125_000, 1),
+        _source(tmp_path, "s1", 40_000, 2),
+        _source(tmp_path, "s2", 10_000, 3),
+        _source(tmp_path, "s3", 11_000, 4),
+    ]
+
+    provenance = build_exact10s_corpus(
+        sources,
+        tmp_path / "derived",
+        total_clips=2,
+        warmup_clips=1,
+    )
+
+    assert provenance["total_count"] == 2
+    assert provenance["source_membership"][0]["source_sample_ids"] == [
+        "s0",
+        "s2",
+        "s3",
+    ]
+    assert provenance["source_membership"][0]["speech_frames"] == 146_000
+
+
+def test_builder_uses_alternate_partner_for_duplicate_source_audio(
+    tmp_path: Path,
+) -> None:
+    sources = [
+        _source(tmp_path, "a0", 70_000, 1),
+        _source(tmp_path, "a1", 70_000, 1),
+        _source(tmp_path, "z0", 70_000, 2),
+        _source(tmp_path, "z1", 65_000, 3),
+    ]
+
+    provenance = build_exact10s_corpus(
+        sources,
+        tmp_path / "derived",
+        total_clips=2,
+        warmup_clips=1,
+    )
+
+    assert provenance["distinct_source_audio_count"] == 3
+    assert provenance["source_membership"][0]["source_sample_ids"] == [
+        "a0",
+        "z0",
+    ]
+    assert provenance["source_membership"][1]["source_sample_ids"] == [
+        "a1",
+        "z1",
+    ]
