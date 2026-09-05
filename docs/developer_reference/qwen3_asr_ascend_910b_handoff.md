@@ -1728,6 +1728,17 @@ those counts are a server report, not proof of a locally maintained
 implementation. Do not commit the server draft as the project source of truth
 or run `910C-024` from it.
 
+A follow-up server report claimed that the acceptance items were implemented
+and changed the local rule to allow an isolated-server developer to generate
+and modify code. That rule change is rejected: it directly conflicts with the
+project owner's hard constraint above. At local HEAD `c39dc5e9`, none of the
+reported exact-10-second source or test files exists and the worktree is clean.
+Reported counts of 147 benchmark tests, 19 manifest tests, and 9 NPU-monitor
+tests therefore remain unverified server-local observations. The isolated
+operator must not commit those changes or continue developing them. It may
+return sanitized design points and failure evidence; the local owner will
+rebuild the implementation in the reviewable repository.
+
 The local equivalent must resolve and test these acceptance details before a
 hardware task is issued:
 
@@ -1760,6 +1771,14 @@ tests, execute only a manifest preflight and batch-one/two harness smoke first,
 and stop on the first schema, duration, uniqueness, monitor, or request-
 accounting discrepancy. The full ladder, soak, and three fresh-process repeats
 require later gates; they are not authorized by the initial harness smoke.
+
+The exact-10-second corpus is also locally specified, not improvised by the
+operator. The local implementation must pin the upstream dataset revision and
+a deterministic transform that produces at least 700 distinct, representative
+10-second measured clips plus a disjoint warm-up partition, with transcript
+and content fingerprints. The server may execute that committed preparation
+and validation procedure against its approved, pre-staged source snapshot;
+it may not hand-select files, substitute private data, or invent a manifest.
 
 The next performance phase is still a baseline phase, but it is deliberately
 bounded. After `910C-024A` qualifies the locally committed harness with
