@@ -138,11 +138,14 @@ python -m benchmarks.eval.benchmark_asr_exact10s \
   --save-raw-dir "${EVIDENCE}/raw"
 ```
 
-Local commit `2cb63b9e` provides that deterministic transform at
+Local commits `2cb63b9e` and `8d46ddec` provide that deterministic transform at
 `python -m benchmarks.manifest.prepare_seedtts_exact10s`. It accepts only the
 pinned SeedTTS English snapshot revision already named in this handoff, sorts
-stable source IDs, rejects invalid PCM input, excludes and records sources
-longer than 10 seconds, and requires at least 770 usable sources. Each derived
+stable source IDs, accepts only uncompressed mono PCM16 source WAVs at 16 kHz
+or 24 kHz, and converts the pinned 24 kHz sources to 16 kHz with one fixed
+ffmpeg/swresample contract before duration filtering or composition. It
+excludes and records sources longer than 10 seconds after conversion and
+requires at least 770 usable sources. Each derived
 clip starts from a different source, greedily appends only complete source
 utterances in stable cyclic order with 100 ms silence, and pads the remainder
 with PCM silence. It never crops speech. The joined references therefore
@@ -150,7 +153,26 @@ describe all retained speech. Every output must contain at least 80% speech
 frames, exactly 160000 frames, and a distinct whole-clip PCM hash. It writes
 `manifest.jsonl` plus server-local `provenance.json` containing source
 membership, exclusions, the pinned source identity, source-Parquet-set hash,
-and derived manifest hash.
+source-rate counts, resampled-source count, ffmpeg version-output SHA-256,
+fixed command template, and derived manifest hash.
+
+The only authorized 24 kHz conversion is the generator-owned command below.
+It uses ffmpeg's built-in swresample backend, disables dithering, and emits raw
+mono PCM16 for composition:
+
+```text
+ffmpeg -nostdin -hide_banner -loglevel error -i <input-wav> \
+  -map_metadata -1 -vn -sn -dn -ac 1 \
+  -af aresample=16000:filter_size=32:phase_shift=10:linear_interp=0:exact_rational=1:dither_method=none \
+  -c:a pcm_s16le -f s16le pipe:1
+```
+
+There is no torchaudio/scipy fallback and no operator-selected resampling
+backend. The generator resolves `ffmpeg` from `PATH`, requires `ffmpeg
+-version` to succeed, and fails closed on timeout, nonzero exit, empty output,
+or invalid PCM16 byte length. A missing or incompatible ffmpeg installation
+requires a new local decision; it does not authorize an isolated-server
+package install or manual preprocessing.
 
 The generator refuses an existing output directory rather than merging or
 overwriting prior evidence. The standard corpus command is:
@@ -163,8 +185,9 @@ python -m benchmarks.manifest.prepare_seedtts_exact10s \
   --total-clips 770 --warmup-clips 70 --silence-ms 100
 ```
 
-Do not replace this command with operator selection, clipping, resampling, or
-padding. If the pinned snapshot has fewer than 770 valid sources, a source
+Do not replace this command with operator selection, external clipping,
+external resampling, or padding. If the pinned snapshot has fewer than 770
+valid sources, an unsupported source
 format mismatch, insufficient speech occupancy, or duplicate derived audio,
 stop and return the first failure. Such a result requires a new locally
 reviewed transform; it does not authorize a server edit.

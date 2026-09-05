@@ -1690,27 +1690,41 @@ recorded as unexecuted coverage, not a pass. `python -m compileall` and
 `git diff --check` pass for the new files. The local environment does not
 provide `ruff`, Black, or isort, so those commands were not run.
 
-Local commit `2cb63b9e` adds the deterministic, revision-pinned SeedTTS corpus
-transform and five tests. It creates 70 disjoint warm-up plus 700 measured
+Local commits `2cb63b9e` and `8d46ddec` add the deterministic,
+revision-pinned SeedTTS corpus transform and seven tests. It creates 70
+disjoint warm-up plus 700 measured
 clips by concatenating only complete source utterances, inserting a fixed
 100 ms silence, and padding the tail; it never crops speech and requires at
-least 80% speech occupancy. Together with the 43 harness tests, the locally
-maintained exact10 toolchain now has 48 focused passes.
+least 80% speech occupancy. The pinned snapshot was subsequently observed to
+contain 1088 mono PCM16 sources at 24 kHz. Commit `8d46ddec` therefore adds a
+single generator-owned ffmpeg/swresample conversion to 16 kHz, with fixed
+filter arguments, no dithering, no fallback backend, and complete backend
+identity in provenance. Together with the 43 harness tests, the locally
+maintained exact10 toolchain now has 50 focused passes.
 
 ### Next isolated task: `910C-024A` harness and corpus qualification
 
-This section is the only newly authorized server task. The isolated operator
-must check out the handoff commit containing local parents `37f598f3`,
-`2cb63b9e`, and `63f235fa`, keep both repositories clean, and keep SGLang at
+The first authorization at `441b6db4` stopped correctly during corpus
+preflight because the source-rate contract rejected all 1088 pinned 24 kHz
+WAVs. It is superseded and must not be resumed from that commit. This section
+is the only newly authorized server task. The isolated operator must check out
+the handoff commit containing local parents `37f598f3`, `2cb63b9e`,
+`63f235fa`, and `8d46ddec`, keep both repositories clean, and keep SGLang at
 the previously
 qualified dependency commit unless this handoff names a replacement. The
 server may execute these files; it may not edit them, patch installed packages,
-hand-select data, or continue to a performance ladder.
+hand-select or manually preprocess data, install ffmpeg, or continue to a
+performance ladder.
 
 Before running code, repeat the established process/port/NPU-HBM health,
 OpenCV-headless/libGL, serving-pyarrow 25.0.0, benchmark-client pyarrow 25.0.1,
 `openai-whisper`, model, pinned English Parquet snapshot, editable checkout,
 and exact repository-HEAD preflight. Stop and report any material difference.
+Additionally require `command -v ffmpeg` and `ffmpeg -version` to succeed.
+Capture the resolved executable, the first version line, and the SHA-256 of the
+complete version output. Do not install, replace, or relink ffmpeg on the
+server. Stop if it is absent or if its fixed `aresample` invocation is not
+supported.
 Run these local tests from the benchmark-client environment:
 
 ```bash
@@ -1721,14 +1735,19 @@ python -m pytest -q \
   tests/unit_test/benchmarks/test_benchmark_asr_exact10s.py
 ```
 
-Require exactly 48 passes. Stop at the first collection or test failure. Then
+Require exactly 50 passes. Stop at the first collection or test failure. Then
 run the corpus command from the performance task against the already approved
 pinned local snapshot into a new server-local `910C-024A` evidence directory.
 Require exactly 770 manifest rows, 70 warm-up/700 measured in provenance,
 770 distinct PCM hashes, duration min/max within `10.000 +/- 1/16000` seconds,
-the pinned dataset revision, and no source-format, occupancy, duplicate, or
-overwrite failure. Preserve manifest, audio, source membership, transcripts,
-and paths on the server; return only counts, duration range, exclusions count,
+the pinned dataset revision, `source_sample_rate_counts={"24000": 1088}` as
+observed, `resampled_source_count=1088`, resampler backend
+`ffmpeg-swresample`, a 64-character ffmpeg version-output SHA-256, and no
+source-format, resampling, occupancy, duplicate, or overwrite failure. Every
+derived WAV must be PCM16 mono 16 kHz. Preserve manifest, audio, source
+membership, transcripts, paths, and full resampler provenance on the server;
+return only counts, duration range, exclusions count, source-rate counts,
+resampled count, ffmpeg first version line/version-output SHA-256,
 source-Parquet-set SHA-256, and derived manifest SHA-256.
 
 Start one fresh service with the exact accepted `910C-023` guarded
@@ -1941,7 +1960,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-021 | `e923d70c` plus server compatibility edit (hash not reported) | guard `29ca236f`; compatibility equivalent `d9df3a74`; SGLang `9dbc4f89c` | Exact `910C-020` stack/profile plus Qwen3-ASR NPU FIFO execution guard | Authorized concurrency-8 treatment; exploratory 16/32 extension | partial: functional 8 passed; diagnostic contract incomplete; exploratory 16 passed and 32 hung | Concurrency 8: 70/70, p95 0.61 s, WER 0.77%, replay 211/eager 0; concurrency 16: 70/70, p95 3.58 s, WER 0.77%, replay 118/eager 0; concurrency 32: ten-minute timeout, 64 pending and only two measured completions. Required guard events were absent, so the 32 failure boundary is unclassified |
 | 910C-022 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact guarded `910C-021` stack/profile after restoring a clean target-device baseline | One concurrency-32 cold-input diagnostic only | functional/guard stability passed; historical scoring denominator anomaly retained | Reported 70 HTTP completions but benchmark evaluated 65/70; WER 0.77%, p95 3.18 s, RTFx 57.3; decode replay 68/eager 0 with bucket 32 hit 27 times; guard wait/acquire/release each 1,303 and state drained. The earlier concurrency-32 hang is invalidated as environment-contaminated, not an intrinsic guard deadlock |
 | 910C-023 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact clean guarded candidate; compile, encoder graph, and prefill graph disabled; decode graph through 70 | Fresh functional capacities 64 and 70 | passed on A3 explicit profile | Both levels evaluated 70/70 with WER 0.77%, zero eager decode/fallback, balanced guard events and drain; concurrency 64 p95 4.94 s with bucket 64 replayed 12 times; concurrency 70 p95 4.49 s with bucket 70 replayed 11 times. Functional capacity passed; exact-10-second performance and realtime remain unstarted |
-| 910C-024A | pending | exact10 harness `37f598f3` + corpus transform `2cb63b9e` + accounting hardening `63f235fa` | Must retain the exact accepted `910C-023` stack/profile and pass the fresh environment preflight | Deterministic 770-clip corpus, NPU parser, batch-one and concurrency-two harness qualification | authorized; pending | Stop after the first discrepancy or after the two smokes and cleanup; no baseline ladder, acceleration experiment, soak, process repeats, or realtime is authorized |
+| 910C-024A | pending; original `441b6db4` authorization stopped on pinned 24 kHz source discovery and is superseded | exact10 harness `37f598f3` + corpus transform `2cb63b9e` + accounting hardening `63f235fa` + fixed 24-to-16 kHz transform `8d46ddec` | Must retain the exact accepted `910C-023` stack/profile, pass the fresh environment and ffmpeg preflight, and perform no manual preprocessing | Deterministic resampled 770-clip corpus, NPU parser, batch-one and concurrency-two harness qualification | reauthorized; pending | Require 50 focused passes and complete resampler provenance; stop after the first discrepancy or after the two smokes and cleanup; no baseline ladder, acceleration experiment, soak, process repeats, or realtime is authorized |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
