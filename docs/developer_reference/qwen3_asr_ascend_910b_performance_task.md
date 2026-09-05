@@ -51,6 +51,16 @@ as the hard gate.
 
 ## Progressive offline ladder
 
+The compatibility-profile baseline uses a bounded subset of this ladder: first
+qualify the harness with manifest preflight, batch one, and two concurrent
+requests; then collect 100 sequential requests and one 700-request
+concurrency-70 repeat in a fresh service. This establishes the before-state and
+dominant stage only. Skip the ten-minute soak and three fresh-process repeats
+for that known disabled-feature baseline.
+
+The full ladder below applies to the fully accelerated candidate and to later
+candidates that are being considered for the hard target.
+
 For each server variant, run these levels in order with no request retries:
 
 1. batch 1 and two concurrent requests;

@@ -12,6 +12,21 @@ server experiment mentioned only in chat is not an executable task. Each
 completed run must replace or close the previous task here before another
 server-side variable is introduced.
 
+**Server source-code authority rule (hard constraint):** the isolated server
+is an execution and evidence environment, not a development authority. Its
+operator may check out only the exact repository commits named by the current
+handoff, run the authorized commands, retain raw evidence locally, and perform
+the declared cleanup. The operator must not edit source, tests, configuration
+files, benchmark code, or documentation; create commits; apply unreviewed
+patches; or repair a failure in place. If execution indicates that code must
+change, stop at the first complete failure and return the affected repository,
+file/symbol or operation boundary, proposed change, supporting sanitized
+evidence, and required test coverage to the local Codex owner. The local owner
+implements, reviews, tests, and commits the change, updates this handoff, and
+only then authorizes a fresh-process server verification at that exact commit.
+Historical server-side diagnostic commits remain evidence records but are not
+precedent for future server edits.
+
 ## Scope and status
 
 Target topology: one Ascend 910B, one Qwen3-ASR-1.7B stage, BF16, no model
@@ -134,6 +149,11 @@ weight changes are outside this qualification.
   and compiler/runtime behavior. The server operator records exact versions
   chosen from the official compatibility matrices; this repository does not
   invent a second version matrix.
+
+Repository ownership identifies where the local change must land; it does not
+authorize the isolated operator to modify that repository. All future code
+changes, including diagnostic instrumentation and test-only changes, are made
+and committed locally before server execution.
 
 Do not patch `site-packages`, copy private model artifacts into the repository,
 or convert a failed graph path into an unreported eager fallback. A fallback is
@@ -1740,6 +1760,19 @@ tests, execute only a manifest preflight and batch-one/two harness smoke first,
 and stop on the first schema, duration, uniqueness, monitor, or request-
 accounting discrepancy. The full ladder, soak, and three fresh-process repeats
 require later gates; they are not authorized by the initial harness smoke.
+
+The next performance phase is still a baseline phase, but it is deliberately
+bounded. After `910C-024A` qualifies the locally committed harness with
+manifest preflight, batch one, two concurrent requests, failure accounting,
+and NPU monitoring, `910C-024B` may measure one exact-10-second diagnostic
+baseline on the qualified compatibility profile. It should collect 100
+sequential requests and one 700-request concurrency-70 repeat with stage and
+NPU metrics. Its purpose is to freeze the before-state and identify the
+dominant stage before acceleration work; it cannot satisfy the hard target.
+Do not spend a ten-minute soak or three fresh-process measured repeats on this
+known disabled-feature baseline. Reserve those expensive gates for the fully
+accelerated candidate after prefill graph, encoder graph, compile, and guard-
+scope work is complete.
 
 ## Qualification sequence
 
