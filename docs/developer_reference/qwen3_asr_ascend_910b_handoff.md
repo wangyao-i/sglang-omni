@@ -1671,20 +1671,121 @@ SeedTTS clips are not the frozen exact-10-second manifest and the run retained
 diagnostic settings. Treat that ratio only as a direction-of-travel signal,
 not as the hard-gate gap.
 
-### Next local task: exact-10-second performance harness
+### Exact-10-second performance harness: local implementation complete
 
-No new isolated-server run is authorized yet. The local developer must first
-implement and unit-test the NPU-aware exact-manifest harness required by the
-[performance task](qwen3_asr_ascend_910b_performance_task.md). It must validate
-the manifest's exact durations and distinct audio content, preserve failed and
-timed-out requests in latency/error aggregates, emit per-request machine-
-readable records, fingerprint the effective corpus and client/server
-environments, and obtain NPU utilization/HBM without relying on NVML.
+Local commits `37f598f3` and `63f235fa` implement and unit-test the NPU-aware
+exact-manifest
+harness required by the
+[performance task](qwen3_asr_ascend_910b_performance_task.md). It provides the
+strict JSONL/RIFF manifest loader, full content fingerprint, disjoint warm-up
+and measured partitions, all-outcome request accounting, post-upload latency
+timestamp, server-local raw JSONL, fail-closed `npu-smi` monitoring, NPU
+environment fingerprint, and one-repeat-per-service hard-gate enforcement.
 
-After local review and a committed handoff update, issue a fresh `910C-024`
-measurement baseline against the explicit qualified profile. That run exists
-to validate the harness and identify the dominant stage; it is not the final
-performance candidate and cannot close the hard target.
+The focused local suites pass 43 tests: 18 manifest, 10 NPU-monitor, and 15
+benchmark orchestration/accounting tests. The complete benchmark directory was
+also attempted but could not collect in the current Windows interpreter because
+pre-existing optional `torchaudio` and `scipy` dependencies are absent. This is
+recorded as unexecuted coverage, not a pass. `python -m compileall` and
+`git diff --check` pass for the new files. The local environment does not
+provide `ruff`, Black, or isort, so those commands were not run.
+
+Local commit `2cb63b9e` adds the deterministic, revision-pinned SeedTTS corpus
+transform and five tests. It creates 70 disjoint warm-up plus 700 measured
+clips by concatenating only complete source utterances, inserting a fixed
+100 ms silence, and padding the tail; it never crops speech and requires at
+least 80% speech occupancy. Together with the 43 harness tests, the locally
+maintained exact10 toolchain now has 48 focused passes.
+
+### Next isolated task: `910C-024A` harness and corpus qualification
+
+This section is the only newly authorized server task. The isolated operator
+must check out the handoff commit containing local parents `37f598f3`,
+`2cb63b9e`, and `63f235fa`, keep both repositories clean, and keep SGLang at
+the previously
+qualified dependency commit unless this handoff names a replacement. The
+server may execute these files; it may not edit them, patch installed packages,
+hand-select data, or continue to a performance ladder.
+
+Before running code, repeat the established process/port/NPU-HBM health,
+OpenCV-headless/libGL, serving-pyarrow 25.0.0, benchmark-client pyarrow 25.0.1,
+`openai-whisper`, model, pinned English Parquet snapshot, editable checkout,
+and exact repository-HEAD preflight. Stop and report any material difference.
+Run these local tests from the benchmark-client environment:
+
+```bash
+python -m pytest -q \
+  tests/unit_test/benchmarks/test_exact10s_manifest.py \
+  tests/unit_test/benchmarks/test_prepare_seedtts_exact10s.py \
+  tests/unit_test/benchmarks/test_npu_monitor.py \
+  tests/unit_test/benchmarks/test_benchmark_asr_exact10s.py
+```
+
+Require exactly 48 passes. Stop at the first collection or test failure. Then
+run the corpus command from the performance task against the already approved
+pinned local snapshot into a new server-local `910C-024A` evidence directory.
+Require exactly 770 manifest rows, 70 warm-up/700 measured in provenance,
+770 distinct PCM hashes, duration min/max within `10.000 +/- 1/16000` seconds,
+the pinned dataset revision, and no source-format, occupancy, duplicate, or
+overwrite failure. Preserve manifest, audio, source membership, transcripts,
+and paths on the server; return only counts, duration range, exclusions count,
+source-Parquet-set SHA-256, and derived manifest SHA-256.
+
+Start one fresh service with the exact accepted `910C-023` guarded
+compatibility profile: encoder graph and prefill graph disabled, decode graph
+enabled through bucket 70, torch compile disabled, eight request-build workers,
+maximum running requests 70, the accepted device-execution guard, and no
+diagnostic logging unless already required for positive graph evidence. Do not
+change model, precision, memory fraction, cache, batching, admission, graph,
+worker, stream, or timeout settings. Verify startup, decode capture through
+bucket 70, zero unexpected fallback/errors, and health before requests.
+
+Run two harness smokes in order, each once and without retry, writing separate
+result/raw directories:
+
+```bash
+python -m benchmarks.eval.benchmark_asr_exact10s \
+  --meta "${EXACT10_ROOT}/manifest.jsonl" \
+  --host 127.0.0.1 --port "${QWEN3_ASR_PORT}" \
+  --model Qwen/Qwen3-ASR-1.7B --lang en \
+  --concurrencies 1 --repeats 1 \
+  --warmup-samples 1 --max-samples 1 --min-distinct-audio 770 \
+  --npu-id 0 --npu-chip-id 0 --monitor-interval-s 1 \
+  --request-timeout-s 120 --launch-command "${DECLARED_SERVER_LAUNCH}" \
+  --output "${EVIDENCE}/batch1/result.json" \
+  --save-raw-dir "${EVIDENCE}/batch1/raw"
+
+python -m benchmarks.eval.benchmark_asr_exact10s \
+  --meta "${EXACT10_ROOT}/manifest.jsonl" \
+  --host 127.0.0.1 --port "${QWEN3_ASR_PORT}" \
+  --model Qwen/Qwen3-ASR-1.7B --lang en \
+  --concurrencies 2 --repeats 1 \
+  --warmup-samples 2 --max-samples 2 --min-distinct-audio 770 \
+  --npu-id 0 --npu-chip-id 0 --monitor-interval-s 1 \
+  --request-timeout-s 120 --launch-command "${DECLARED_SERVER_LAUNCH}" \
+  --output "${EVIDENCE}/conc2/result.json" \
+  --save-raw-dir "${EVIDENCE}/conc2/raw"
+```
+
+Both results must be valid with all requests present, no failure, timeout,
+empty response, missing/duplicate/unexpected result, or unscoreable output.
+Require full 64-character manifest hashes; raw record counts exactly one and
+two; all expected latency fields including p90/p95/p99; NPU monitor
+`available=true`, `error=null`, HBM samples, and AI Core or NPU utilization;
+service graph replay evidence; zero unexpected eager fallback; final request,
+scheduler, service, device, HBM, process, and port cleanup.
+
+Stop on the first discrepancy and return the first complete sanitized failure.
+Even if both smokes pass, stop after cleanup. Do not run 100 sequential, 700 at
+concurrency 70, soak, fresh-process repetitions, acceleration experiments, or
+realtime. `910C-024B` requires review of this evidence and a new committed
+handoff update.
+
+After `910C-024A` passes, a separately committed handoff may authorize
+`910C-024B`: 100 sequential requests and one 700-request concurrency-70
+baseline against the explicit qualified profile. That run exists to identify
+the dominant stage and freeze a before-state; it is not the final performance
+candidate and cannot close the hard target.
 
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
@@ -1840,6 +1941,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-021 | `e923d70c` plus server compatibility edit (hash not reported) | guard `29ca236f`; compatibility equivalent `d9df3a74`; SGLang `9dbc4f89c` | Exact `910C-020` stack/profile plus Qwen3-ASR NPU FIFO execution guard | Authorized concurrency-8 treatment; exploratory 16/32 extension | partial: functional 8 passed; diagnostic contract incomplete; exploratory 16 passed and 32 hung | Concurrency 8: 70/70, p95 0.61 s, WER 0.77%, replay 211/eager 0; concurrency 16: 70/70, p95 3.58 s, WER 0.77%, replay 118/eager 0; concurrency 32: ten-minute timeout, 64 pending and only two measured completions. Required guard events were absent, so the 32 failure boundary is unclassified |
 | 910C-022 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact guarded `910C-021` stack/profile after restoring a clean target-device baseline | One concurrency-32 cold-input diagnostic only | functional/guard stability passed; historical scoring denominator anomaly retained | Reported 70 HTTP completions but benchmark evaluated 65/70; WER 0.77%, p95 3.18 s, RTFx 57.3; decode replay 68/eager 0 with bucket 32 hit 27 times; guard wait/acquire/release each 1,303 and state drained. The earlier concurrency-32 hang is invalidated as environment-contaminated, not an intrinsic guard deadlock |
 | 910C-023 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact clean guarded candidate; compile, encoder graph, and prefill graph disabled; decode graph through 70 | Fresh functional capacities 64 and 70 | passed on A3 explicit profile | Both levels evaluated 70/70 with WER 0.77%, zero eager decode/fallback, balanced guard events and drain; concurrency 64 p95 4.94 s with bucket 64 replayed 12 times; concurrency 70 p95 4.49 s with bucket 70 replayed 11 times. Functional capacity passed; exact-10-second performance and realtime remain unstarted |
+| 910C-024A | pending | exact10 harness `37f598f3` + corpus transform `2cb63b9e` + accounting hardening `63f235fa` | Must retain the exact accepted `910C-023` stack/profile and pass the fresh environment preflight | Deterministic 770-clip corpus, NPU parser, batch-one and concurrency-two harness qualification | authorized; pending | Stop after the first discrepancy or after the two smokes and cleanup; no baseline ladder, acceleration experiment, soak, process repeats, or realtime is authorized |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
