@@ -71,6 +71,30 @@ size declared in the handoff, emit per-request machine-readable records, and
 aggregate failed requests rather than dropping them from percentiles. Add its
 unit tests before accepting its numbers.
 
+## Performance-candidate contract
+
+The compile-disabled, encoder-eager, prefill-eager, decode-graph profile is the
+qualified correctness and measurement baseline. It is not the intended final
+performance profile. Compile, encoder graph, and prefill graph are mandatory
+repair items; explicit disablement cannot close them. After the harness is
+validated, restore one acceleration at a time and compare it against that
+frozen baseline before combining changes:
+
+1. prefill graph with the Qwen3-ASR NPU execution guard enabled;
+2. an NPU-compatible encoder graph or a faster replacement that preserves the
+   same encoder outputs;
+3. torch compile after repairing the SGLang/triton-ascend capture boundary;
+4. a reduced execution-guard critical section or stream/event protocol if the
+   current whole-forward serialization is a measured bottleneck;
+5. the combined candidate with compile, encoder graph, prefill graph, and
+   decode graph enabled and all execution markers attested.
+
+Every currently failing path must pass its functional and stability gate even
+if a later A/B motivates a different optimized implementation. Do not call the
+disabled-feature baseline the final candidate merely because it is stable.
+The primary hard-target attempt uses the fully enabled combined profile, with
+positive execution evidence and zero unexpected fallback.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.

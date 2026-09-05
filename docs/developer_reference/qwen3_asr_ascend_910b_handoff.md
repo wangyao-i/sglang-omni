@@ -1662,11 +1662,40 @@ readable records, fingerprint the effective corpus and client/server
 environments, and obtain NPU utilization/HBM without relying on NVML.
 
 After local review and a committed handoff update, issue a fresh `910C-024`
-baseline against the explicit qualified profile. Do not block that baseline on
-the already known compile-enabled, encoder-graph, or prefill-graph failures.
-Do not start realtime in parallel: first establish the exact-10-second offline
-baseline and its dominant stage. Realtime remains a separate protocol and
-implementation gate after the offline measurement is trustworthy.
+measurement baseline against the explicit qualified profile. That run exists
+to validate the harness and identify the dominant stage; it is not the final
+performance candidate and cannot close the hard target.
+
+The project requires every currently failing acceleration path to be repaired;
+disabling it is not an acceptable close condition. Qualify these changes
+separately and then in combination:
+
+1. re-enable prefill graph with the execution guard present and verify whether
+   the guard fixes its former cold-input overlap failure;
+2. replace or repair the incompatible NPU encoder-graph capture path so host-
+   device copies and synchronization do not occur illegally inside capture;
+3. repair the compile-enabled generation path across the SGLang/triton-ascend
+   boundary and requalify every compiled and non-compiled decode bucket;
+4. profile the coarse encoder/generation execution guard and narrow or replace
+   its critical section if serialization limits throughput;
+5. run the fully combined profile with compile, encoder graph, prefill graph,
+   and decode graph enabled, positive execution markers, zero unexpected eager
+   fallback, and the exact-10-second gate.
+
+Repair qualification and final performance selection are separate decisions.
+Each path above must first become correct, stable, and observable. Only after
+that may a controlled A/B show whether an implementation should be replaced or
+tuned; a negative performance result does not waive the compatibility defect.
+The current evidence is far from supporting a disabled-feature final
+candidate: 70 SeedTTS requests in 4.58 s is about 15.3 requests/s versus the
+hard gate's derived 140 requests/s, while preliminary p95 is 4.49 s versus
+0.50 s. Because the corpora and duration distributions differ, these are only
+gap indicators, not a hard-gate comparison.
+
+Do not start realtime in parallel. First establish the exact-10-second offline
+baseline, repair and combine the viable acceleration paths, and determine
+whether the single-card target is feasible. Realtime remains a separate
+protocol and implementation gate after the offline path is trustworthy.
 
 ## Qualification sequence
 
