@@ -138,23 +138,31 @@ python -m benchmarks.eval.benchmark_asr_exact10s \
   --save-raw-dir "${EVIDENCE}/raw"
 ```
 
-Local commits `2cb63b9e` and `8d46ddec` provide that deterministic transform at
+Local commits `2cb63b9e`, `8d46ddec`, and `30b21522` provide that deterministic transform at
 `python -m benchmarks.manifest.prepare_seedtts_exact10s`. It accepts only the
 pinned SeedTTS English snapshot revision already named in this handoff, sorts
 stable source IDs, accepts only uncompressed mono PCM16 source WAVs at 16 kHz
 or 24 kHz, and converts the pinned 24 kHz sources to 16 kHz with one fixed
 ffmpeg/swresample contract before duration filtering or composition. It
 excludes and records sources longer than 10 seconds after conversion and
-requires at least 770 usable sources. Each derived
-clip starts from a different source, greedily appends only complete source
-utterances in stable cyclic order with 100 ms silence, and pads the remainder
-with PCM silence. It never crops speech. The joined references therefore
-describe all retained speech. Every output must contain at least 80% speech
-frames, exactly 160000 frames, and a distinct whole-clip PCM hash. It writes
+requires at least 770 usable source rows. Each derived clip starts from a
+stable anchor, excludes other rows with the same resampled PCM hash from that
+clip, and evaluates deterministic whole-utterance plans containing the anchor
+plus one or two distinct-audio partners. Plans are ranked by retained speech
+frames with stable tie-breaking. If a repeated source row would reproduce an
+already emitted whole-clip PCM hash, the generator tries its next qualifying
+plan. Anchors that cannot reach 80% speech or exhaust distinct alternatives
+are recorded and skipped; corpus creation succeeds only after 770 distinct
+outputs have been built. A fixed 100 ms silence separates utterances and only
+the remainder is padded with PCM silence. Speech is never cropped. The joined
+references therefore describe all retained speech. Every output must contain
+at least 80% speech frames, exactly 160000 frames, and a distinct whole-clip
+PCM hash. It writes
 `manifest.jsonl` plus server-local `provenance.json` containing source
 membership, exclusions, the pinned source identity, source-Parquet-set hash,
-source-rate counts, resampled-source count, ffmpeg version-output SHA-256,
-fixed command template, and derived manifest hash.
+source-rate counts, distinct source-audio count, resampled-source count,
+skipped-anchor categories, ffmpeg version-output SHA-256, fixed command
+template, and derived manifest hash.
 
 The only authorized 24 kHz conversion is the generator-owned command below.
 It uses ffmpeg's built-in swresample backend, disables dithering, and emits raw
