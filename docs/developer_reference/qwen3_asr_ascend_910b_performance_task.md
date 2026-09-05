@@ -232,9 +232,16 @@ until operator-approved runtime recovery and a separately authorized clean
 post-recovery preflight.
 
 The project owner subsequently reported terminating PID 2043369 without a
-driver restart or host reboot. The handoff authorizes only a read-only recovery
-verification next; acceleration remains blocked until repeated healthy HBM
-snapshots prove that the context and allocation are gone.
+driver restart or host reboot, then requested a grouped campaign to shorten
+performance-qualification turnaround. `910C-025` therefore begins with the
+same three-snapshot recovery gate and, only if it passes, continues directly
+through independent fresh-process E0, prefill-graph, encoder-graph, compile,
+and conditionally fully accelerated arms. A clean feature failure stops only
+that arm so the other independent paths still produce evidence; any device,
+OOM, retained-context, forced-cleanup, or HBM-recovery failure stops the whole
+campaign. Each qualified arm receives batch one plus one 700-request C70
+exact10 measurement. This screening campaign intentionally omits sequential,
+soak, and three-repeat acceptance work.
 
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
