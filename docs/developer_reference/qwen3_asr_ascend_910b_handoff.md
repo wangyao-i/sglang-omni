@@ -2024,22 +2024,36 @@ baseline. This is prioritization evidence, not proof that the guard alone is
 the root cause: the encoder counters are cumulative/coarse and there is no
 paired pre/post snapshot.
 
-### Blocked recovery boundary after `910C-024C`
+### Next isolated task: `910C-024D` recovery verification
 
-There is currently no authorized isolated-server task. The project owner or
-host operator must explicitly choose and approve a recovery under the site's
-operational policy, after confirming impact on every card and other user of
-the host. Candidate classes are an operator-managed NPU driver/runtime restart
-or a host reboot; this repository does not prescribe commands for either.
-Until that external recovery is approved and completed, do not start a model,
-benchmark, acceleration experiment, or realtime task, and do not kill
-PID 2043369, `hdc`, `tsd`, or another runtime process.
+The project owner reports that PID 2043369 has already been terminated and
+does not require a driver restart or host reboot. That operator action is
+recorded, but process termination alone does not attest released HBM or a
+healthy device. This section is the only newly authorized isolated-server
+task. It is a read-only recovery verification and must not start Qwen3-ASR,
+run a benchmark, allocate NPU memory, kill another process, reset a device,
+restart a driver/service, install a tool, or modify repository/environment
+state.
 
-After recovery, report only the chosen recovery class and sanitized completion
-status. A later local handoff must authorize a read-only post-recovery gate
-requiring healthy devices, no unexpected NPU holders, port/process cleanliness,
-and chip-0/chip-1 HBM back at the established approximately 4% baseline. Passing
-that gate will permit, but not combine with, the first acceleration experiment.
+Check out the handoff commit containing this section. Capture three complete
+`npu-smi info` and usages snapshots ten seconds apart, plus read-only process,
+device-node-owner, port 8000, and repository-status evidence using the same
+commands already approved for `910C-024C`. Require all of the following:
+
+- chip 0 and chip 1 are healthy in every snapshot;
+- chip 0 and chip 1 HBM are both at the established idle range, no more than
+  5%, in every snapshot;
+- PID 2043369 and every other unexpected compute/context holder are absent;
+- no sgl-omni, SGLang, model worker, benchmark client, or orphan Python process
+  remains;
+- port 8000 is free and both repositories are at the exact declared clean
+  commits.
+
+If every condition passes, classify recovery as verified and stop. If any
+condition fails, retain the first complete sanitized discrepancy and stop;
+do not repair it in place. In either case, do not combine this verification
+with an acceleration run. Only a later committed handoff may authorize the
+first prefill-graph experiment.
 
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
@@ -2198,6 +2212,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-024A | `94dec6e0`; clean | exact10 harness `37f598f3` + corpus transform `2cb63b9e` + accounting hardening `63f235fa` + fixed 24-to-16 kHz transform `8d46ddec` + deterministic best-fit packing `30b21522` | Exact accepted `910C-023` profile; pinned local SeedTTS snapshot; ffmpeg 6.1.1 aarch64 | Deterministic resampled corpus, NPU parser, batch-one and concurrency-two harness qualification | passed | 52/52 tests; 770 distinct exact-10-second clips; manifest `25314d13...3000b`; batch-one p95 0.250 s/WER 0; concurrency-two p95 2.082 s/WER 0.0152; zero request failures/fallback and clean teardown |
 | 910C-024B | `45535923`; no runtime edit | Exact10 compatibility profile and frozen `910C-024A` corpus | Two independent fresh services; compile, encoder graph, and prefill graph disabled; guarded decode graph enabled through 70 | Arm S: 100 sequential; Arm C70: 700 measured at concurrency 70 | performance measurement valid; hard target missed; cleanup unresolved; required model-info deltas not returned | Arm S 100/100, p95 0.289 s, WER 0.0167. Arm C70 700/700, p95 3.516 s, 39.31 req/s, WER 0.0164, zero request failures; post-stop chip0 HBM remained 87% rather than 4%; encoder/decode/guard dominance is not yet established |
 | 910C-024C | handoff `0ce137dc`; no runtime edit | Quiescent post-`910C-024B` host; no service/model/benchmark/device mutation | Read-only five-minute HBM, process, device-node, health, and preserved-evidence attribution | Post-run HBM attribution and missing model-info audit | completed: outcome 2, identified holder | NPU context PID 2043369 retained 53,966 MB after Arm C70 was killed with `SIGKILL`; no manageable user process remained. Coarse log stats: encoder 251 batches/754 items, queue wait avg/max 1.24/13.26 s, encoder time 22.6 s; decode 100% graph replay across all 13 buckets; no pre/post rich model-info snapshots |
+| 910C-024D | pending | Handoff commit containing the `910C-024D` authorization; no runtime edit | Operator reports PID 2043369 terminated; no reboot or driver restart | Three-snapshot read-only device/HBM/holder/process/port/repository recovery verification | authorized; pending | Require both chips healthy and HBM <=5%, no unexpected holder/worker, free port and clean exact commits; stop without starting a service or acceleration run |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak

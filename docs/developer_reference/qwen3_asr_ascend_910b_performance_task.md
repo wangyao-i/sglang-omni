@@ -231,6 +231,11 @@ stage attribution from these coarse counters. Hardware work remains blocked
 until operator-approved runtime recovery and a separately authorized clean
 post-recovery preflight.
 
+The project owner subsequently reported terminating PID 2043369 without a
+driver restart or host reboot. The handoff authorizes only a read-only recovery
+verification next; acceleration remains blocked until repeated healthy HBM
+snapshots prove that the context and allocation are gone.
+
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
 
