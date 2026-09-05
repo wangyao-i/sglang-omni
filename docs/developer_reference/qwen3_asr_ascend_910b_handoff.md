@@ -2024,23 +2024,30 @@ baseline. This is prioritization evidence, not proof that the guard alone is
 the root cause: the encoder counters are cumulative/coarse and there is no
 paired pre/post snapshot.
 
-### Next isolated campaign: `910C-025` accelerated-feature matrix
+### `910C-024D` recovery result and next campaign `910C-025A`
 
-The project owner reports that PID 2043369 has already been terminated and
-has explicitly requested a faster, grouped qualification campaign. This
-campaign supersedes unexecuted task `910C-024D`: its read-only recovery checks
-become phase 0, and a passing phase 0 may proceed directly into the independent
-fresh-process arms below. Grouping changes turnaround time, not evidence or
-correctness requirements. The isolated server still must not edit source,
-tests, configuration, documentation, packages, or repository state.
+`910C-024D` passed on handoff commit `db19be76`. Three snapshots at zero, ten,
+and twenty seconds reported both chips healthy and stable at 4% HBM (chip 0:
+3,174/65,536 MB; chip 1: 2,890/65,536 MB at the first snapshot). PID 2043369,
+other context holders, sgl-omni workers, and residual service processes were
+absent; port 8000 was free. The server did not start an acceleration run. The
+retained-context cleanup exception from `910C-024B/C` is therefore closed.
 
-#### Phase 0: recovery and exact-checkout gate
+The project owner has requested a faster grouped qualification campaign, but
+the known encoder-graph and torch-compile failures require local code changes.
+Do not rerun those unchanged failing paths. `910C-025A` groups only the two
+current-code arms that add new information; repaired EG, TC, and ALL arms will
+be authorized together after their local reviewable commits exist. Grouping
+changes turnaround time, not evidence or correctness requirements. The
+isolated server still must not edit source, tests, configuration,
+documentation, packages, or repository state.
 
-Check out the handoff commit containing this section. Capture three complete
-`npu-smi info` and usages snapshots ten seconds apart, plus read-only process,
-device-node-owner, port 8000, and repository-status evidence using the same
-commands approved for `910C-024C`. Require all of the following in every
-snapshot:
+#### Phase 0: accepted recovery and exact-checkout gate
+
+The `910C-024D` three-snapshot recovery evidence above satisfies the hardware
+portion of phase 0 and need not be repeated before `910C-025A`. Check out the
+handoff commit containing this authorization and reconfirm immediately before
+the first arm that:
 
 - chip 0 and chip 1 are healthy and each is at no more than 5% HBM;
 - PID 2043369 and every unexpected compute/context holder are absent;
@@ -2049,12 +2056,12 @@ snapshot:
 - port 8000 is free and both repositories are at their exact declared clean
   commits.
 
-Any phase-0 discrepancy stops the entire campaign. Do not repair, kill, reset,
+Any discrepancy stops the entire campaign. Do not repair, kill, reset,
 restart, install, or mutate anything in place.
 
 #### Common measured contract
 
-If phase 0 passes, execute the following arms in order. Each arm must use a new
+If phase 0 passes, execute only E0 and P below, in order. Each arm must use a new
 service process, a distinct evidence directory, the frozen `910C-024A` corpus
 and manifest hash, and the same model, BF16 precision, memory fraction, cache,
 admission settings, eight request-build workers, maximum-running-requests 70,
@@ -2083,16 +2090,15 @@ failures remain disqualifying.
 |---|---:|---:|---:|---:|---:|---|
 | E0 | off | off | off | off | inactive | Exact all-eager/no-guard control; batch one plus C70 measurement |
 | P | off | on | on through 70 | off | active | Prefill capture and replay must be positive with zero unexpected fallback, then measure C70 |
-| EG | on | off | on through 70 | off | active | Every configured encoder bucket must capture and replay; `bucket stays eager` or `aclrtMemcpy 107030` fails the arm |
-| TC | off | off | on through 70 | on | active | Compile must cover the declared generation buckets without Dynamo `NPUUtils.get_device_properties`, skipped-function, ATB, or fallback signatures |
-| ALL | on | on | on through 70 | on | active | Fully accelerated combination; run only if P, EG, and TC each produced positive capture/replay and a valid C70 measurement |
 
-For `ALL`, a hard-target miss in an otherwise valid prerequisite arm does not
-block execution; absence of positive capture/replay, invalid measurement, or
-feature failure does. Do not invent a sixth configuration or tune parameters
-between arms. Do not run realtime in this campaign.
+EG, TC, and ALL are explicitly not authorized on the current code. Do not use
+the isolated server to diagnose, patch, monkeypatch, or reconfirm their already
+known failures. Local development must first repair encoder capture and the
+compile boundary with regression tests and committed handoff mappings. Do not
+invent another configuration or tune parameters between E0 and P. Do not run
+realtime in this campaign.
 
-Return one sanitized matrix row per arm containing: exact repository and
+Return one sanitized matrix row for E0 and P containing: exact repository and
 dependency HEADs; resolved profile; startup/capture status or first failure;
 batch-one result; C70 validity and request-accounting counts; WER; wall time;
 throughput; RTFx; latency mean/p50/p90/p95/p99/max; NPU utilization, HBM, power,
@@ -2258,8 +2264,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-024A | `94dec6e0`; clean | exact10 harness `37f598f3` + corpus transform `2cb63b9e` + accounting hardening `63f235fa` + fixed 24-to-16 kHz transform `8d46ddec` + deterministic best-fit packing `30b21522` | Exact accepted `910C-023` profile; pinned local SeedTTS snapshot; ffmpeg 6.1.1 aarch64 | Deterministic resampled corpus, NPU parser, batch-one and concurrency-two harness qualification | passed | 52/52 tests; 770 distinct exact-10-second clips; manifest `25314d13...3000b`; batch-one p95 0.250 s/WER 0; concurrency-two p95 2.082 s/WER 0.0152; zero request failures/fallback and clean teardown |
 | 910C-024B | `45535923`; no runtime edit | Exact10 compatibility profile and frozen `910C-024A` corpus | Two independent fresh services; compile, encoder graph, and prefill graph disabled; guarded decode graph enabled through 70 | Arm S: 100 sequential; Arm C70: 700 measured at concurrency 70 | performance measurement valid; hard target missed; cleanup unresolved; required model-info deltas not returned | Arm S 100/100, p95 0.289 s, WER 0.0167. Arm C70 700/700, p95 3.516 s, 39.31 req/s, WER 0.0164, zero request failures; post-stop chip0 HBM remained 87% rather than 4%; encoder/decode/guard dominance is not yet established |
 | 910C-024C | handoff `0ce137dc`; no runtime edit | Quiescent post-`910C-024B` host; no service/model/benchmark/device mutation | Read-only five-minute HBM, process, device-node, health, and preserved-evidence attribution | Post-run HBM attribution and missing model-info audit | completed: outcome 2, identified holder | NPU context PID 2043369 retained 53,966 MB after Arm C70 was killed with `SIGKILL`; no manageable user process remained. Coarse log stats: encoder 251 batches/754 items, queue wait avg/max 1.24/13.26 s, encoder time 22.6 s; decode 100% graph replay across all 13 buckets; no pre/post rich model-info snapshots |
-| 910C-024D | `891e2a23`; no runtime edit | Quiescent post-`910C-024C` host | Operator reported PID 2043369 terminated | Standalone read-only recovery verification | not run; superseded before execution | Recovery checks are phase 0 of grouped campaign `910C-025` |
-| 910C-025 | pending handoff commit; no runtime edit | Frozen `910C-024A` exact10 corpus and `910C-024B` common workload | Five independent fresh-process arms: E0, P, EG, TC, and conditional ALL | Recovery gate, acceleration screening, and one C70 measurement per qualified arm | authorized; pending | Clean feature failure stops only that arm; device, OOM, retained-context, or cleanup failure stops the campaign; no server-side code or environment edits |
+| 910C-024D | `db19be76`; no runtime edit | Quiescent post-`910C-024C` host | Operator had terminated PID 2043369; no reboot or driver restart | Three-snapshot read-only recovery verification | passed | Both chips healthy at stable 4% HBM across t=0/10/20 s; PID 2043369 and other holders/workers absent; port 8000 free; no acceleration run started |
+| 910C-025A | pending handoff commit; no runtime edit | Frozen `910C-024A` exact10 corpus and `910C-024B` common workload | Two independent fresh-process current-code arms: all-eager E0 and guarded prefill+decode graph P | Acceleration screening and one C70 measurement per qualified arm | authorized; pending | EG/TC/ALL are withheld until local fixes exist; clean arm failure does not block the other arm, while device/OOM/retained-context/cleanup failure stops the campaign |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak

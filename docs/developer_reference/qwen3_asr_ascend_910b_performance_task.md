@@ -232,16 +232,17 @@ until operator-approved runtime recovery and a separately authorized clean
 post-recovery preflight.
 
 The project owner subsequently reported terminating PID 2043369 without a
-driver restart or host reboot, then requested a grouped campaign to shorten
-performance-qualification turnaround. `910C-025` therefore begins with the
-same three-snapshot recovery gate and, only if it passes, continues directly
-through independent fresh-process E0, prefill-graph, encoder-graph, compile,
-and conditionally fully accelerated arms. A clean feature failure stops only
-that arm so the other independent paths still produce evidence; any device,
-OOM, retained-context, forced-cleanup, or HBM-recovery failure stops the whole
-campaign. Each qualified arm receives batch one plus one 700-request C70
-exact10 measurement. This screening campaign intentionally omits sequential,
-soak, and three-repeat acceptance work.
+driver restart or host reboot. `910C-024D` then verified three healthy snapshots
+at stable 4% HBM with no retained holder or worker, closing the cleanup
+exception. To shorten turnaround without repeating known failures,
+`910C-025A` groups only independent fresh-process all-eager E0 and guarded
+prefill+decode graph P arms. A clean arm failure does not block the other arm;
+any device, OOM, retained-context, forced-cleanup, or HBM-recovery failure stops
+the campaign. Each qualified arm receives batch one plus one 700-request C70
+exact10 measurement. Encoder graph, torch compile, and the fully accelerated
+combination remain unauthorized until local repair commits and regression
+tests exist. This screening campaign intentionally omits sequential, soak, and
+three-repeat acceptance work.
 
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
