@@ -58,9 +58,12 @@ independently closing the current capacity result despite the historical
 compatibility-profile before-state have now run: 100 sequential requests
 passed at 0.289-second p95, while 700 requests at concurrency 70 passed
 functionally but missed the hard target at 3.516-second p95 and 39.31
-requests/s. The latter service left chip-0 HBM at 87% after shutdown despite
-an empty port and no reported residual process, so its performance aggregates
-are retained but its cleanup gate is not closed. This qualifies the explicit
+requests/s. The latter service left chip-0 HBM at 87% after shutdown. The
+follow-up read-only attribution found 53,966 MB owned by stale NPU context PID
+2043369 after the Arm C70 service had been terminated with `SIGKILL`; no
+corresponding manageable user process remained. Its performance aggregates
+are retained, but the cleanup gate is blocked on operator-approved runtime
+recovery. This qualifies the explicit
 A3 functional candidate and diagnostic before-state only. Fully accelerated
 performance and realtime remain unqualified**.
 
@@ -1947,7 +1950,7 @@ task a clean pass. Retain Arm S and Arm C70 performance evidence as valid
 diagnostic measurements, and classify the task as performance-complete with
 cleanup unresolved. No acceleration experiment may start on that device state.
 
-### Next isolated task: `910C-024C` post-run HBM attribution
+### Isolated task: `910C-024C` post-run HBM attribution
 
 This section is the only newly authorized server task. It is read-only and
 must not start Qwen3-ASR, rerun a benchmark, load a model, allocate NPU memory,
@@ -1996,6 +1999,47 @@ Classify exactly one outcome:
 Stop after the observation and classification. Even if HBM returns to 4%, do
 not start an acceleration run in the same task. A new committed handoff must
 close this cleanup exception and authorize the first acceleration repair gate.
+
+`910C-024C` completed with outcome 2, **identified holder**. Chip 0 remained at
+87% HBM, and the NPU runtime attributed 53,966 MB to context PID 2043369. The
+operator found no corresponding user-space process that could be terminated
+through normal process management. The context is attributed to the Arm C70
+sgl-omni process being terminated with `SIGKILL`, which bypassed normal NPU
+teardown. Do not turn that attribution into permission to kill a daemon,
+reset a device, restart the driver, or reboot the host.
+
+The existing Arm C70 server log also yielded one terminal/coarse stats view:
+
+- encoder: 251 batches, 754 items, 1.24-second average queue wait,
+  13.26-second maximum queue wait, and 22.6 seconds cumulative encoder time;
+- decode graph: 100% NPU graph replay, with all 13 configured buckets including
+  bucket 70 observed;
+- no pre/post rich model-info snapshots exist, so exact measured-only deltas
+  and a complete encoder/decode/guard time decomposition cannot be recovered.
+
+The queue-wait measurements are large relative to request latency and make
+encoder/guard scheduling the first performance-analysis priority, while 100%
+decode replay rules out eager decode fallback as the explanation for this
+baseline. This is prioritization evidence, not proof that the guard alone is
+the root cause: the encoder counters are cumulative/coarse and there is no
+paired pre/post snapshot.
+
+### Blocked recovery boundary after `910C-024C`
+
+There is currently no authorized isolated-server task. The project owner or
+host operator must explicitly choose and approve a recovery under the site's
+operational policy, after confirming impact on every card and other user of
+the host. Candidate classes are an operator-managed NPU driver/runtime restart
+or a host reboot; this repository does not prescribe commands for either.
+Until that external recovery is approved and completed, do not start a model,
+benchmark, acceleration experiment, or realtime task, and do not kill
+PID 2043369, `hdc`, `tsd`, or another runtime process.
+
+After recovery, report only the chosen recovery class and sanitized completion
+status. A later local handoff must authorize a read-only post-recovery gate
+requiring healthy devices, no unexpected NPU holders, port/process cleanliness,
+and chip-0/chip-1 HBM back at the established approximately 4% baseline. Passing
+that gate will permit, but not combine with, the first acceleration experiment.
 
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
@@ -2153,7 +2197,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-023 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact clean guarded candidate; compile, encoder graph, and prefill graph disabled; decode graph through 70 | Fresh functional capacities 64 and 70 | passed on A3 explicit profile | Both levels evaluated 70/70 with WER 0.77%, zero eager decode/fallback, balanced guard events and drain; concurrency 64 p95 4.94 s with bucket 64 replayed 12 times; concurrency 70 p95 4.49 s with bucket 70 replayed 11 times. Functional capacity passed; exact-10-second performance and realtime remain unstarted |
 | 910C-024A | `94dec6e0`; clean | exact10 harness `37f598f3` + corpus transform `2cb63b9e` + accounting hardening `63f235fa` + fixed 24-to-16 kHz transform `8d46ddec` + deterministic best-fit packing `30b21522` | Exact accepted `910C-023` profile; pinned local SeedTTS snapshot; ffmpeg 6.1.1 aarch64 | Deterministic resampled corpus, NPU parser, batch-one and concurrency-two harness qualification | passed | 52/52 tests; 770 distinct exact-10-second clips; manifest `25314d13...3000b`; batch-one p95 0.250 s/WER 0; concurrency-two p95 2.082 s/WER 0.0152; zero request failures/fallback and clean teardown |
 | 910C-024B | `45535923`; no runtime edit | Exact10 compatibility profile and frozen `910C-024A` corpus | Two independent fresh services; compile, encoder graph, and prefill graph disabled; guarded decode graph enabled through 70 | Arm S: 100 sequential; Arm C70: 700 measured at concurrency 70 | performance measurement valid; hard target missed; cleanup unresolved; required model-info deltas not returned | Arm S 100/100, p95 0.289 s, WER 0.0167. Arm C70 700/700, p95 3.516 s, 39.31 req/s, WER 0.0164, zero request failures; post-stop chip0 HBM remained 87% rather than 4%; encoder/decode/guard dominance is not yet established |
-| 910C-024C | pending | Handoff commit containing the `910C-024C` authorization; no runtime edit | Quiescent post-`910C-024B` host; no service/model/benchmark/device mutation | Read-only five-minute HBM, process, device-node, and health attribution | authorized; pending | Classify delayed release, identified holder, unattributed retained HBM, or sampling discrepancy; do not kill/reset/restart/install/rerun; acceleration remains blocked until a later committed handoff |
+| 910C-024C | handoff `0ce137dc`; no runtime edit | Quiescent post-`910C-024B` host; no service/model/benchmark/device mutation | Read-only five-minute HBM, process, device-node, health, and preserved-evidence attribution | Post-run HBM attribution and missing model-info audit | completed: outcome 2, identified holder | NPU context PID 2043369 retained 53,966 MB after Arm C70 was killed with `SIGKILL`; no manageable user process remained. Coarse log stats: encoder 251 batches/754 items, queue wait avg/max 1.24/13.26 s, encoder time 22.6 s; decode 100% graph replay across all 13 buckets; no pre/post rich model-info snapshots |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak

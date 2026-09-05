@@ -220,6 +220,17 @@ performance aggregates are retained as the compatibility before-state while
 cleanup remains a blocking qualification exception. The handoff owns the
 read-only attribution task and the decision to resume acceleration work.
 
+The read-only `910C-024C` attribution identified 53,966 MB retained by stale
+NPU context PID 2043369 after the concurrency-70 service was terminated with
+`SIGKILL`; no normally manageable user process remained. Existing logs showed
+251 encoder batches for 754 items, queue-wait average/maximum of 1.24/13.26
+seconds, 22.6 seconds cumulative encoder time, and 100% decode graph replay
+across all 13 buckets. No paired rich model-info snapshots exist. Prioritize
+encoder/guard scheduling analysis after recovery, but do not claim a final
+stage attribution from these coarse counters. Hardware work remains blocked
+until operator-approved runtime recovery and a separately authorized clean
+post-recovery preflight.
+
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
 
