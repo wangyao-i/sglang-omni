@@ -211,6 +211,15 @@ cannot warm the other. This establishes the before-state and dominant stage
 only. Skip the ten-minute soak and three fresh-process repeats for that known
 disabled-feature baseline.
 
+The accepted `910C-024B` measurement evaluated 100/100 sequential requests at
+0.289-second p95, then 700/700 requests at concurrency 70 at 3.516-second p95
+and 39.31 requests/s. The latter misses the latency target by 7.03 times and
+reaches 28.1% of the implied 140-request/s rate. Its post-service chip-0 HBM
+remained at 87% instead of the approximately 4% idle baseline, so the
+performance aggregates are retained as the compatibility before-state while
+cleanup remains a blocking qualification exception. The handoff owns the
+read-only attribution task and the decision to resume acceleration work.
+
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
 

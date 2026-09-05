@@ -54,9 +54,15 @@ at buckets 32, 64, and 70. This disproves an intrinsic high-concurrency FIFO-
 guard deadlock; the earlier failed process was environment-contaminated by
 residual NPU activity. The two fresh `910C-023` runs each evaluated 70/70,
 independently closing the current capacity result despite the historical
-`910C-022` 65/70 scoring anomaly. This qualifies the explicit A3 functional
-candidate only. No exact-10-second hard-target performance or realtime
-qualification has run**.
+`910C-022` 65/70 scoring anomaly. Exact-10-second harness qualification and a
+compatibility-profile before-state have now run: 100 sequential requests
+passed at 0.289-second p95, while 700 requests at concurrency 70 passed
+functionally but missed the hard target at 3.516-second p95 and 39.31
+requests/s. The latter service left chip-0 HBM at 87% after shutdown despite
+an empty port and no reported residual process, so its performance aggregates
+are retained but its cleanup gate is not closed. This qualifies the explicit
+A3 functional candidate and diagnostic before-state only. Fully accelerated
+performance and realtime remain unqualified**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. The project owner states that its single-card
@@ -1912,6 +1918,85 @@ change acceleration settings, begin a repair experiment, or start realtime.
 The next committed local task will use this before-state to order the required
 prefill-graph, encoder-graph, compile, and guard-scope repairs.
 
+### `910C-024B` result and cleanup exception
+
+The isolated run at `45535923` completed both independent arms with valid
+request and monitor accounting. Arm S evaluated 100/100 sequential requests
+with zero failures, 24.19-second wall time, 4.13 requests/s, 0.289-second p95,
+and WER 0.0167. Arm C70 evaluated 700/700 with zero failures, 17.81-second wall
+time, 39.31 requests/s, 393.11 RTFx, 3.516-second p95, 4.959-second p99,
+5.408-second maximum latency, and WER 0.0164. Mean/max AI Core utilization was
+22%/42%, steady HBM was 87%, and the run reported no unexpected graph
+fallback. The compatibility before-state therefore misses the 0.500-second
+p95 target by 7.03 times and delivers only 28.1% of the implied 140-request/s
+rate. These are measured exact-10-second gaps, not estimates.
+
+The returned summary did not include the required pre/post rich model-info
+encoder counters or decode replay/eager/bucket deltas. It therefore does not
+yet establish whether encoder execution, decode execution, or the coarse
+execution guard dominates the exact workload. Do not promote the operator's
+"encoder or decode" suggestion to a root-cause conclusion. `910C-024C` may
+read and sanitize those already preserved snapshots if they exist, but their
+absence does not authorize a rerun.
+
+Arm C70 did not, however, satisfy cleanup: after service shutdown chip 0 still
+reported 87% HBM while chip 1 was at 4%. Port 8000 was free and the operator
+reported no residual process, but neither observation proves that the NPU
+context or allocation was released. Do not label the complete `910C-024B`
+task a clean pass. Retain Arm S and Arm C70 performance evidence as valid
+diagnostic measurements, and classify the task as performance-complete with
+cleanup unresolved. No acceleration experiment may start on that device state.
+
+### Next isolated task: `910C-024C` post-run HBM attribution
+
+This section is the only newly authorized server task. It is read-only and
+must not start Qwen3-ASR, rerun a benchmark, load a model, allocate NPU memory,
+reset a device, restart a driver/service, kill `hdc`/`tsd` or another process,
+install a tool, or edit any source, configuration, documentation, package, or
+evidence from `910C-024B`.
+
+Check out the handoff commit containing this section and first record the
+current wall-clock time, repository identities, port 8000 state, and a complete
+`npu-smi info` snapshot. Record chip 0 and chip 1 HBM from the same snapshot.
+Then collect five additional HBM/device-health snapshots at 60-second intervals
+for a five-minute observation window. Existing tools may be queried read-only:
+
+```bash
+npu-smi info
+npu-smi info -t usages -i 0
+ps -eo pid,ppid,user,stat,etimes,cmd
+fuser -v /dev/davinci0 /dev/davinci_manager /dev/hisi_hdc
+lsof /dev/davinci0 /dev/davinci_manager /dev/hisi_hdc
+```
+
+`fuser` or `lsof` being absent is not permission to install it; record the
+missing tool and continue with the other read-only evidence. Do not return the
+full process command lines. Keep raw process, device-node, and NPU output
+server-local and return only sanitized process categories, PIDs where policy
+allows, ownership type, HBM percentages, device health, and timestamps.
+Also inspect only the already preserved `910C-024B` model-info/evidence files.
+If the required pre/post rich model-info snapshots exist, return sanitized
+encoder items/batches/queue-wait/encoder-time deltas plus decode
+replay/eager/bucket deltas. If they do not exist, report that evidence gap and
+do not recreate it by starting a service.
+
+Classify exactly one outcome:
+
+1. **delayed release:** chip 0 returns to the established approximately 4%
+   baseline during observation, with the first baseline timestamp and no
+   device holder remaining;
+2. **identified holder:** a live non-baseline process or device-node owner is
+   found; report its sanitized category and do not terminate it;
+3. **unattributed retained HBM:** chip 0 remains materially above baseline for
+   all snapshots and no holder is visible; preserve the evidence and stop for
+   operator-approved runtime recovery;
+4. **sampling discrepancy:** repeated same-time `npu-smi` views disagree on
+   chip identity or HBM; retain the raw outputs locally and report the mismatch.
+
+Stop after the observation and classification. Even if HBM returns to 4%, do
+not start an acceleration run in the same task. A new committed handoff must
+close this cleanup exception and authorize the first acceleration repair gate.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -2067,7 +2152,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-022 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact guarded `910C-021` stack/profile after restoring a clean target-device baseline | One concurrency-32 cold-input diagnostic only | functional/guard stability passed; historical scoring denominator anomaly retained | Reported 70 HTTP completions but benchmark evaluated 65/70; WER 0.77%, p95 3.18 s, RTFx 57.3; decode replay 68/eager 0 with bucket 32 hit 27 times; guard wait/acquire/release each 1,303 and state drained. The earlier concurrency-32 hang is invalidated as environment-contaminated, not an intrinsic guard deadlock |
 | 910C-023 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact clean guarded candidate; compile, encoder graph, and prefill graph disabled; decode graph through 70 | Fresh functional capacities 64 and 70 | passed on A3 explicit profile | Both levels evaluated 70/70 with WER 0.77%, zero eager decode/fallback, balanced guard events and drain; concurrency 64 p95 4.94 s with bucket 64 replayed 12 times; concurrency 70 p95 4.49 s with bucket 70 replayed 11 times. Functional capacity passed; exact-10-second performance and realtime remain unstarted |
 | 910C-024A | `94dec6e0`; clean | exact10 harness `37f598f3` + corpus transform `2cb63b9e` + accounting hardening `63f235fa` + fixed 24-to-16 kHz transform `8d46ddec` + deterministic best-fit packing `30b21522` | Exact accepted `910C-023` profile; pinned local SeedTTS snapshot; ffmpeg 6.1.1 aarch64 | Deterministic resampled corpus, NPU parser, batch-one and concurrency-two harness qualification | passed | 52/52 tests; 770 distinct exact-10-second clips; manifest `25314d13...3000b`; batch-one p95 0.250 s/WER 0; concurrency-two p95 2.082 s/WER 0.0152; zero request failures/fallback and clean teardown |
-| 910C-024B | pending | Handoff commit containing the `910C-024B` authorization; no runtime edit | Two independent fresh services with the exact guarded compatibility profile and frozen `910C-024A` corpus | Arm S: 100 sequential; Arm C70: 700 measured at concurrency 70 | authorized; pending | Diagnostic before-state only. Arm S must pass before Arm C70. Record a p95 above 0.500 s as a hard-target miss; stop after cleanup with no soak, repeat, acceleration change, repair, or realtime |
+| 910C-024B | `45535923`; no runtime edit | Exact10 compatibility profile and frozen `910C-024A` corpus | Two independent fresh services; compile, encoder graph, and prefill graph disabled; guarded decode graph enabled through 70 | Arm S: 100 sequential; Arm C70: 700 measured at concurrency 70 | performance measurement valid; hard target missed; cleanup unresolved; required model-info deltas not returned | Arm S 100/100, p95 0.289 s, WER 0.0167. Arm C70 700/700, p95 3.516 s, 39.31 req/s, WER 0.0164, zero request failures; post-stop chip0 HBM remained 87% rather than 4%; encoder/decode/guard dominance is not yet established |
+| 910C-024C | pending | Handoff commit containing the `910C-024C` authorization; no runtime edit | Quiescent post-`910C-024B` host; no service/model/benchmark/device mutation | Read-only five-minute HBM, process, device-node, and health attribution | authorized; pending | Classify delayed release, identified holder, unattributed retained HBM, or sampling discrepancy; do not kill/reset/restart/install/rerun; acceleration remains blocked until a later committed handoff |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
