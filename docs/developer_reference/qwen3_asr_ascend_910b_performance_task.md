@@ -244,6 +244,16 @@ combination remain unauthorized until local repair commits and regression
 tests exist. This screening campaign intentionally omits sequential, soak, and
 three-repeat acceptance work.
 
+`910C-025A` completed both current-code arms. E0 (all eager, guard inactive)
+measured 2.641-second p95 at 31.52 requests/s. P (guarded prefill and decode
+graphs) measured 1.771-second p95 at 48.39 requests/s, improving p95 by 49.6%
+and throughput by 23.1% over the `910C-024B` guarded decode-only baseline.
+Prefill graph is therefore retained in the accelerated candidate. The result
+still misses the hard target by 3.54 times on p95 and reaches only 34.6% of the
+implied 140-request/s throughput. The next performance-bearing work is local
+encoder-graph repair, torch-compile repair, and reduction of guard/encoder
+serialization before a combined EG/TC/ALL hardware campaign.
+
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
 

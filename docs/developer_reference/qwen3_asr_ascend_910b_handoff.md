@@ -2107,6 +2107,24 @@ replay buckets; guard wait/acquire/release counts; forbidden signatures; and
 cleanup/HBM status. Preserve raw logs, JSONL, transcripts, paths, request IDs,
 audio and profiler data only on the isolated server.
 
+`910C-025A` completed both arms. The all-eager/no-guard E0 arm measured
+2.641-second p95 and 31.52 requests/s. The guarded prefill-plus-decode graph P
+arm measured 1.771-second p95 and 48.39 requests/s. Relative to the accepted
+`910C-024B` decode-only guarded baseline (3.516-second p95 and 39.31 requests/s),
+P reduced p95 by 49.6% and increased throughput by 23.1%. It is the best
+measured configuration so far, but its p95 remains 3.54 times the 0.500-second
+target and its throughput is only 34.6% of the implied 140-request/s target.
+Prefill graph with the existing execution guard is therefore functionally and
+directionally qualified; it is no longer an open compatibility repair.
+
+The returned summary did not state whether a context remained after teardown
+or provide the full requested request-accounting, WER, graph-counter, NPU, and
+cleanup matrix. Do not infer a cleanup failure from the operator's conditional
+warning. Before any later hardware run, require the normal no-holder, healthy
+HBM, free-port, and clean-checkout preflight; if a retained context is actually
+observed, stop and return its identity rather than modifying the host under a
+code-validation task.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -2265,7 +2283,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-024B | `45535923`; no runtime edit | Exact10 compatibility profile and frozen `910C-024A` corpus | Two independent fresh services; compile, encoder graph, and prefill graph disabled; guarded decode graph enabled through 70 | Arm S: 100 sequential; Arm C70: 700 measured at concurrency 70 | performance measurement valid; hard target missed; cleanup unresolved; required model-info deltas not returned | Arm S 100/100, p95 0.289 s, WER 0.0167. Arm C70 700/700, p95 3.516 s, 39.31 req/s, WER 0.0164, zero request failures; post-stop chip0 HBM remained 87% rather than 4%; encoder/decode/guard dominance is not yet established |
 | 910C-024C | handoff `0ce137dc`; no runtime edit | Quiescent post-`910C-024B` host; no service/model/benchmark/device mutation | Read-only five-minute HBM, process, device-node, health, and preserved-evidence attribution | Post-run HBM attribution and missing model-info audit | completed: outcome 2, identified holder | NPU context PID 2043369 retained 53,966 MB after Arm C70 was killed with `SIGKILL`; no manageable user process remained. Coarse log stats: encoder 251 batches/754 items, queue wait avg/max 1.24/13.26 s, encoder time 22.6 s; decode 100% graph replay across all 13 buckets; no pre/post rich model-info snapshots |
 | 910C-024D | `db19be76`; no runtime edit | Quiescent post-`910C-024C` host | Operator had terminated PID 2043369; no reboot or driver restart | Three-snapshot read-only recovery verification | passed | Both chips healthy at stable 4% HBM across t=0/10/20 s; PID 2043369 and other holders/workers absent; port 8000 free; no acceleration run started |
-| 910C-025A | pending handoff commit; no runtime edit | Frozen `910C-024A` exact10 corpus and `910C-024B` common workload | Two independent fresh-process current-code arms: all-eager E0 and guarded prefill+decode graph P | Acceleration screening and one C70 measurement per qualified arm | authorized; pending | EG/TC/ALL are withheld until local fixes exist; clean arm failure does not block the other arm, while device/OOM/retained-context/cleanup failure stops the campaign |
+| 910C-025A | `3ced6537`; no runtime edit | Frozen `910C-024A` exact10 corpus and `910C-024B` common workload | Two independent fresh-process current-code arms: all-eager E0 and guarded prefill+decode graph P | Acceleration screening and one C70 measurement per qualified arm | completed; P is the best measured configuration; hard target missed | E0 p95 2.641 s/31.52 req/s; P p95 1.771 s/48.39 req/s, a 49.6% p95 reduction and 23.1% throughput gain versus `910C-024B`; P remains 3.54x over the latency target and at 34.6% of required throughput; full cleanup and metric matrix were not included in the returned summary |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
