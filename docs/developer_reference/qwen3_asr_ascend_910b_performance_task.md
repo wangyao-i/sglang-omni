@@ -71,6 +71,21 @@ size declared in the handoff, emit per-request machine-readable records, and
 aggregate failed requests rather than dropping them from percentiles. Add its
 unit tests before accepting its numbers.
 
+For the hard gate, each measured repeat requires at least 700 distinct audio-
+content hashes and a separate warm-up partition. Validate PCM16 mono 16 kHz
+format and effective WAV frame count, not only a RIFF data-chunk byte count.
+All request outcomes must be present in raw records. Any timeout, transport or
+HTTP failure, empty response, missing result, or duplicate result ID fails the
+repeat; the summary must not publish a successful-only percentile as if it
+described the requested workload.
+
+The three final repeats are process-level repeats: stop, cleanly drain, verify
+the device baseline, and start a fresh service before each one. A client-side
+loop against one service process does not satisfy this contract. NPU monitoring
+is required for the hard gate. A command/parser failure or absence of the
+selected device's HBM and utilization samples invalidates the run and must be
+reported explicitly.
+
 ## Performance-candidate contract
 
 The compile-disabled, encoder-eager, prefill-eager, decode-graph profile is the

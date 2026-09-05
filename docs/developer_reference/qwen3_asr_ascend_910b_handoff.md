@@ -1697,6 +1697,50 @@ baseline, repair and combine the viable acceleration paths, and determine
 whether the single-card target is feasible. Realtime remains a separate
 protocol and implementation gate after the offline path is trustworthy.
 
+#### Isolated-server harness draft: not yet accepted locally
+
+The isolated operator reported a server-only draft containing an exact-10-
+second manifest loader, an `npu-smi` resource monitor, a benchmark entry point,
+and 26 focused tests, plus 147 benchmark tests passing with 7 skipped. None of
+the reported source or tests exists in the local reviewable checkout at
+`0c5a311a`; the local worktree is clean. Under the collaboration contract,
+those counts are a server report, not proof of a locally maintained
+implementation. Do not commit the server draft as the project source of truth
+or run `910C-024` from it.
+
+The local equivalent must resolve and test these acceptance details before a
+hardware task is issued:
+
+- validate RIFF/WAVE structure, PCM encoding, mono channel count, 16 kHz sample
+  rate, 16-bit sample width, and effective frame count; a raw `data_size`
+  calculation alone is insufficient;
+- require at least 700 distinct measured audio-content hashes per hard-gate
+  repeat, plus a disjoint warm-up set, so neither repeated inputs nor warm-up
+  cache hits can satisfy the timed workload;
+- retain every request outcome. A timeout or failed request must invalidate the
+  repeat and remain represented in machine-readable request records and the
+  aggregate latency/error accounting; adding only failure counters while
+  calculating percentiles from successful `SampleOutput` objects is not
+  sufficient;
+- keep one benchmark repeat within one service lifetime, but orchestrate the
+  three final repeats with three fresh server processes. An in-client
+  `--repeats 3` loop cannot attest the fresh-process requirement;
+- test the exact `npu-smi` command/output variants on the frozen server stack,
+  identify the selected physical device, record command/parser failures, and
+  make missing required HBM/utilization evidence fail the performance run
+  rather than silently degrading to an available-looking result;
+- document the manifest schema, full aggregate SHA-256, duration/language/count
+  summary, raw JSONL schema, timeout treatment, warm-up partition, and server-
+  local artifact layout without returning paths, transcripts, or audio.
+
+Once the implementation and tests exist in the local repository, review and
+commit them separately from the executable `910C-024` handoff. The server must
+then check out that exact commit, rerun the declared focused and benchmark
+tests, execute only a manifest preflight and batch-one/two harness smoke first,
+and stop on the first schema, duration, uniqueness, monitor, or request-
+accounting discrepancy. The full ladder, soak, and three fresh-process repeats
+require later gates; they are not authorized by the initial harness smoke.
+
 ## Qualification sequence
 
 1. Run the [first hardware validation task](qwen3_asr_ascend_910b_validation_task.md)
