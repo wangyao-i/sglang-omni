@@ -32,27 +32,33 @@ prefill graph was disabled. Successive diagnostics localized the unmatched
 decode forward to the NPU graph input-update lane: `graph.replay()` returned at
 the host API boundary, but the update thread never returned from
 `graph.update()` and the main thread remained in its join. The local Qwen3-ASR-
-and-NPU-specific mutual-exclusion fix completed concurrency 8 and 16. A clean
-`910C-022` diagnostic also completed concurrency 32 with 1,303 balanced guard
-triplets, zero eager decode fallback, and real bucket-32 replay. This disproves
-an intrinsic concurrency-32 FIFO-guard deadlock; the earlier failed process
-was environment-contaminated by residual NPU activity. The returned benchmark
-reports 70 HTTP completions but only 65/70 WER-evaluated samples, so a bounded
-evidence reconciliation must close that distinction before capacity 64/70.
-No hard-target performance or realtime qualification has run**.
+and-NPU-specific mutual-exclusion fix completed the cold-input concurrency
+ladder at 8, 16, 32, 64, and 70. The clean `910C-022` and `910C-023` runs
+recorded balanced guard triplets, zero eager decode fallback, and real replay
+at buckets 32, 64, and 70. This disproves an intrinsic high-concurrency FIFO-
+guard deadlock; the earlier failed process was environment-contaminated by
+residual NPU activity. The two fresh `910C-023` runs each evaluated 70/70,
+independently closing the current capacity result despite the historical
+`910C-022` 65/70 scoring anomaly. This qualifies the explicit A3 functional
+candidate only. No exact-10-second hard-target performance or realtime
+qualification has run**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
-identifies as A3 hardware. It is therefore recorded as the derived run
-`910C-000`, not as proof for the original 910B target. The 910B qualification
-remains unstarted until the same gates run on the intended device class.
+identifies as A3 hardware. The project owner states that its single-card
+compute is equivalent to the target 910B, so this host is accepted as the
+single-card performance proxy and compute capacity is not a separate blocker.
+It is still recorded under the derived `910C-*` run series: chip identity,
+CANN/ATB/driver behavior, and runtime compatibility remain device-class
+qualification concerns, so these results do not automatically certify the
+same software stack on a physical 910B.
 
 | Area | Repository state | 910B evidence |
 |---|---|---|
-| Ascend installation | NPU manifest, precheck, and installation guide are implemented | Precheck passed on A3; not yet run on the target 910B |
+| Ascend installation | NPU manifest, precheck, and installation guide are implemented | Precheck passed on the compute-equivalent A3 performance proxy; runtime compatibility has not been repeated on a physical 910B |
 | Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager batch 1, two-concurrent, ten-sequential, health, shutdown, and restart gates passed after repairing the OpenCV environment; not yet started on 910B |
-| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | With torch compile disabled, A3 capacities 1/16/32/64/70 captured and each passed one decode replay smoke; disabling prefill graph removed the two-request cold-overlap hang but did not prevent the concurrency-8 cold-input hang; with compile enabled, batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; maximum-bucket concurrent replay remains untested |
+| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | In the explicit compile-disabled, prefill-eager profile, A3 decode capacities 1 through 70 captured and the cold-input ladder passed through concurrency 70 with zero eager fallback; bucket 70 replayed 11 times. With compile enabled, batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; the repository-default graph profile remains unqualified |
 | Encoder graph | Implemented with `torch.cuda.Stream`, `torch.cuda.CUDAGraph`, and `torch.cuda.graph`; enabled by default | A3 capture failed for every attempted bucket because captured-stream synchronization memcpy is unsupported; each bucket explicitly stayed eager |
-| Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; local commit `29ca236f` adds a FIFO device-execution guard shared only by the Qwen3-ASR encoder batch and generation forward when NPU generation graph is enabled. Cold-input concurrency 8, 16, and 32 completed on clean processes; concurrency 32 recorded 1,303 balanced wait/acquired/released triplets and bucket-32 decode replay. Capacity 64/70 remains pending |
+| Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; local commit `29ca236f` adds a FIFO device-execution guard shared only by the Qwen3-ASR encoder batch and generation forward when NPU generation graph is enabled. Cold-input concurrency 8, 16, 32, 64, and 70 completed on clean processes with balanced guard events and state drain |
 | SSE transcription | Emits decoder-token deltas after the complete upload has entered one engine request | Not continuous audio-input realtime |
 | Realtime WebSocket | Buffers PCM16 until VAD stops, then runs a response pass followed by a transcription pass | Does not meet the incremental-ASR target by inspection; not yet verified on 910B |
 
@@ -1592,7 +1598,7 @@ deltas, scheduler/health/HBM/cleanup state, and any protocol difference. Keep
 raw request IDs, paths, audio, transcripts, logs, and proprietary traces on the
 isolated server. This run cannot qualify performance or realtime.
 
-### `910C-022` result and `910C-023` capacity-64/70 gate
+### `910C-022` and `910C-023` guarded capacity result
 
 The isolated-server `910C-022` run used sglang-omni `81177bea`, including
 guard `29ca236f` and compatibility fix `d9df3a74`, with SGLang diagnostic
@@ -1616,113 +1622,51 @@ tasks must stop when unexpected target-device compute PIDs, non-baseline HBM,
 or a device-health error is present, and recovery must use the operator's
 approved device/runtime procedure under a new run ID.
 
-One evidence discrepancy remains open. The result is described as 70/70 HTTP
-completion but the benchmark aggregate says `evaluated=65/70`. Code inspection
-shows that `evaluated` counts WER-scoreable `SampleOutput` objects, not HTTP
-responses. A successful transcription whose reference normalizes to an empty
-string is deliberately marked `Empty reference after normalization` and is
-included in `skipped`. Therefore both numbers can be valid, but the five skips
-must be classified from server-local evidence before this is accepted as a
-correctness pass.
+The isolated-server `910C-023` run then completed fresh concurrency-64 and
+concurrency-70 processes against the same guarded candidate. Both reported
+70/70 evaluated, WER 0.77%, zero standard-eager decode, balanced guard event
+triplets, state drain, and no graph fallback, OOM, or forbidden error:
 
-Run identifier: `910C-023`. Check out the handoff commit containing this task;
-keep sglang-omni runtime code at local parents `29ca236f` and `d9df3a74` and
-SGLang at `9dbc4f89c`. This gate has a read-only Phase A followed conditionally
-by fresh capacity-64 and capacity-70 processes. No package, runtime, guard,
-stream, graph, batching, model, dataset, or benchmark-code edit is authorized.
+| Concurrency | Wall | Preliminary p95 | RTFx | Decode replay | Largest observed bucket |
+|---:|---:|---:|---:|---:|---:|
+| 64 | 5.06 s | 4.94 s | 63.9 | 51 | 64, 12 replays |
+| 70 | 4.58 s | 4.49 s | 70.6 | 98 | 70, 11 replays |
 
-#### Phase A: reconcile the existing concurrency-32 evidence
+The concurrency-70 run observed all 13 configured decode buckets
+`[1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64, 70]`; references to 25 buckets
+are a reporting typo. Balanced wait/acquire/release events establish forward
+progress, FIFO ownership, and the absence of unmatched guard holders in these
+runs. They do not establish that lock contention was absent.
 
-Before starting a service, use the existing `910C-022` JSON, raw per-sample
-records if present, server request summary, and the exact frozen 70-sample
-manifest. Return aggregate counts only:
+The historical `910C-022` `evaluated=65/70` denominator remains an unexplained
+artifact of that run. It must not be silently rewritten, but it does not
+invalidate the two new `910C-023` 70/70 measurements. The A3 explicit profile
+is now functionally qualified through target concurrency with an actual bucket-
+70 replay. This result does not qualify the compile-enabled repository default,
+the encoder or prefill graph paths, the original 910B device class, hard-target
+performance, or realtime.
 
-1. measured requests submitted, HTTP 200, non-200, timeout/client-error, and
-   non-empty response text;
-2. benchmark `total`, `evaluated`, and `skipped`;
-3. skipped rows grouped by sanitized error class;
-4. the count whose reference becomes empty under the benchmark's exact English
-   normalizer;
-5. distinct sample IDs, distinct audio-content hashes, and duplicate result
-   IDs, without returning IDs, text, audio, or hashes themselves.
+The `910C-023` p95 of 4.49 s is approximately nine times the 0.50 s target, but
+SeedTTS clips are not the frozen exact-10-second manifest and the run retained
+diagnostic settings. Treat that ratio only as a direction-of-travel signal,
+not as the hard-gate gap.
 
-If raw per-sample records were not retained, it is permissible to run the
-benchmark's normalization function locally over the same frozen manifest and
-count empty normalized references. This is read-only dataset evaluation, not a
-server request. Do not recreate missing response records or rerun concurrency
-32 under this run ID.
+### Next local task: exact-10-second performance harness
 
-Phase A passes only if all 70 requests were submitted, all 70 returned HTTP
-200 with non-empty response text, there were zero client/timeout failures and
-duplicate result IDs, there were 70 distinct sample IDs and audio-content
-hashes, and all five scoring skips are explained solely by empty normalized
-references. Any request failure, empty response, missing result, ID collision,
-or other skip reason makes `910C-022` a correctness failure; stop and return
-the first category instead of starting capacity 64.
+No new isolated-server run is authorized yet. The local developer must first
+implement and unit-test the NPU-aware exact-manifest harness required by the
+[performance task](qwen3_asr_ascend_910b_performance_task.md). It must validate
+the manifest's exact durations and distinct audio content, preserve failed and
+timed-out requests in latency/error aggregates, emit per-request machine-
+readable records, fingerprint the effective corpus and client/server
+environments, and obtain NPU utilization/HBM without relying on NVML.
 
-#### Phase B: guarded capacity 64, then 70
-
-Only after Phase A passes, run capacity 64 and then 70 in separate fresh
-service processes. Before each process repeat all established environment
-checks, including:
-
-- both repositories at the declared clean commits and the intended editable
-  mapping, with the single headless OpenCV invariant intact;
-- no unexpected process using the selected NPU, no prior stage/router worker,
-  free port, healthy device, and HBM at the recorded idle baseline;
-- serving pyarrow 25.0.0 and the isolated benchmark-client environment with
-  pyarrow 25.0.1 and the declared WER normalizer;
-- the same model revision, pinned content-distinct SeedTTS EN subset, cache,
-  memory, admission, coalescing, and request timeout settings.
-
-If an unexpected NPU process or device error is present, stop. Do not kill a
-driver daemon and continue the same run. After separately approved recovery,
-restart that capacity as a new suffixed run ID and fresh process.
-
-Use the exact guarded candidate from `910C-022`: encoder graph disabled,
-prefill graph disabled, decode graph enabled and captured through bucket 70,
-torch compile disabled, eight request-build workers, and maximum running
-requests 70. Keep `SGLANG_OMNI_ENCODER_DIAG=1`, start the request recorder, and
-set decode log interval 1 because these are still functional qualification
-runs. Warm only clip A, verify complete encoder/generation guard triplets and a
-positive warm decode replay, then drain. Send exactly the frozen 70 cold inputs
-once with closed-loop client concurrency equal to the current level, no
-benchmark warm-up, retry, or service reuse.
-
-Capacity 64 must pass before capacity 70 starts. A capacity passes only when:
-
-- all 70 requests return HTTP 200 with non-empty response text and zero client
-  failure; WER scoring may report 65/70 only if Phase A proved those same five
-  immutable empty-reference skips and no new skip category appears;
-- WER remains within the existing repository threshold and the scored corpus
-  remains 0.77% within normal deterministic tolerance;
-- decode completed-replay delta is positive, standard-eager decode and graph
-  fallback remain zero, and the observed replay buckets are reported;
-- guard waits/acquisitions/releases balance, acquired tickets are contiguous,
-  acquired intervals do not overlap, and both encoder and generation make
-  progress;
-- all coordinator, build, admission, encoder, scheduler, and request state
-  drains; HBM remains bounded; device health and clean shutdown pass.
-
-At concurrency 70, report whether an actual running decode batch selected
-bucket 70. If scheduling never forms it, capacity-70 client stability may pass
-but maximum-bucket replay remains unproven. Stop at the first discrepancy,
-forbidden error, 90-second no-completion interval, OOM, fallback, state leak,
-device-health failure, or orphan; do not run a higher level or adjust a second
-variable.
-
-Record wall time, throughput, RTFx, and latency distribution only as
-preliminary diagnostics. The existing p95 values (0.61 s at concurrency 8,
-3.58 s at 16, and 3.18 s at 32) do not meet the 0.50 s target and were not
-measured with the exact-10-second hard-gate manifest. Passing `910C-023` proves
-functional capacity, not performance. It authorizes a later, separate A/B
-optimization task; it does not authorize realtime work.
-
-Return only commits, Phase-A aggregate reconciliation, environment/test
-totals, aggregate corpus identity, per-capacity completion/accuracy/cache and
-graph/guard counts, replay-bucket maximum, latency/throughput summaries,
-health/HBM/drain/cleanup, and the first sanitized failure. Keep raw inputs,
-outputs, IDs, hashes, paths, logs, and proprietary traces server-local.
+After local review and a committed handoff update, issue a fresh `910C-024`
+baseline against the explicit qualified profile. Do not block that baseline on
+the already known compile-enabled, encoder-graph, or prefill-graph failures.
+Do not start realtime in parallel: first establish the exact-10-second offline
+baseline and its dominant stage. Realtime remains a separate protocol and
+implementation gate after the offline measurement is trustworthy.
 
 ## Qualification sequence
 
@@ -1769,8 +1713,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-019 | `a949960c`; no runtime edit | SGLang `f86279db9` based on `71de97b2` | Exact `910C-018` stack/profile plus generic SGLang graph-stage logging; repaired headless OpenCV invariant | Repeat concurrency-8 cold-input diagnostic with inner decode graph dispatch markers | completed; selected NPU runner did not return | SGLang 13, omni focused 25, and Qwen3-ASR 588 passed; final batch-size 2 decode emitted `execute_begin` without return; generic inner markers were bypassed by `NPUGraphRunner.execute()` override; editable install had reintroduced non-headless OpenCV and was repaired before the accepted run |
 | 910C-020 | `45bbd120`; no runtime edit | SGLang `9dbc4f89c` on `f86279db9` | Exact `910C-019` stack/profile; NPU-specific stage logging only | Repeat concurrency-8 cold-input diagnostic with NPU load, host-copy, graph-update, replay, and join markers | completed; update lane blocked | Tests passed; final raw batch 6/bucket 8 had `graph_update` 34/33, `graph_replay` 34/34, and update-thread join 34/33; host replay returned but update never returned, so the main thread remained in join and the wave made no completion progress |
 | 910C-021 | `e923d70c` plus server compatibility edit (hash not reported) | guard `29ca236f`; compatibility equivalent `d9df3a74`; SGLang `9dbc4f89c` | Exact `910C-020` stack/profile plus Qwen3-ASR NPU FIFO execution guard | Authorized concurrency-8 treatment; exploratory 16/32 extension | partial: functional 8 passed; diagnostic contract incomplete; exploratory 16 passed and 32 hung | Concurrency 8: 70/70, p95 0.61 s, WER 0.77%, replay 211/eager 0; concurrency 16: 70/70, p95 3.58 s, WER 0.77%, replay 118/eager 0; concurrency 32: ten-minute timeout, 64 pending and only two measured completions. Required guard events were absent, so the 32 failure boundary is unclassified |
-| 910C-022 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact guarded `910C-021` stack/profile after restoring a clean target-device baseline | One concurrency-32 cold-input diagnostic only | functional/guard stability passed; scoring denominator pending reconciliation | Reported 70 HTTP completions; benchmark evaluated 65/70 with WER 0.77%, p95 3.18 s, RTFx 57.3; decode replay 68/eager 0 with bucket 32 hit 27 times; guard wait/acquire/release each 1,303 and state drained. The earlier concurrency-32 hang is invalidated as environment-contaminated, not an intrinsic guard deadlock |
-| 910C-023 | pending | local parents `29ca236f` + `d9df3a74` plus this handoff commit; SGLang `9dbc4f89c` | Exact clean guarded `910C-022` stack/profile | Reconcile 65/70 scoring, then fresh functional capacities 64 and 70 | pending | Phase A must prove 70 successful non-empty responses and explain exactly five immutable empty-reference scoring skips; then 64 must pass before 70. Require balanced FIFO guard events, decode-only graph replay with zero eager/fallback, accuracy, drain, bounded HBM, device health, and clean shutdown |
+| 910C-022 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact guarded `910C-021` stack/profile after restoring a clean target-device baseline | One concurrency-32 cold-input diagnostic only | functional/guard stability passed; historical scoring denominator anomaly retained | Reported 70 HTTP completions but benchmark evaluated 65/70; WER 0.77%, p95 3.18 s, RTFx 57.3; decode replay 68/eager 0 with bucket 32 hit 27 times; guard wait/acquire/release each 1,303 and state drained. The earlier concurrency-32 hang is invalidated as environment-contaminated, not an intrinsic guard deadlock |
+| 910C-023 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact clean guarded candidate; compile, encoder graph, and prefill graph disabled; decode graph through 70 | Fresh functional capacities 64 and 70 | passed on A3 explicit profile | Both levels evaluated 70/70 with WER 0.77%, zero eager decode/fallback, balanced guard events and drain; concurrency 64 p95 4.94 s with bucket 64 replayed 12 times; concurrency 70 p95 4.49 s with bucket 70 replayed 11 times. Functional capacity passed; exact-10-second performance and realtime remain unstarted |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
