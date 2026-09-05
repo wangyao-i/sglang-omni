@@ -99,9 +99,10 @@ only sanitized aggregates and fingerprints are returned.
 HBM capacity/use, AI Core or NPU utilization, temperature, power, and host CPU.
 Command failures, parser failures, missing HBM use, or missing both AI Core and
 NPU utilization invalidate the repeat. Because vendor output varies by stack,
-`910C-024A` must first prove these exact commands and labels on the frozen A3
-environment; the local tests use representative fixtures and are not hardware
-proof.
+`910C-024A` proved these commands and labels on the frozen A3 environment with
+valid batch-one and concurrency-two smokes. The local tests remain fixture
+coverage rather than hardware proof; the accepted hardware identity and
+sanitized evidence are recorded in the handoff.
 
 The artifact layout for one service lifetime is:
 
@@ -202,12 +203,13 @@ reviewed transform; it does not authorize a server edit.
 
 ## Progressive offline ladder
 
-The compatibility-profile baseline uses a bounded subset of this ladder: first
-qualify the harness with manifest preflight, batch one, and two concurrent
-requests; then collect 100 sequential requests and one 700-request
-concurrency-70 repeat in a fresh service. This establishes the before-state and
-dominant stage only. Skip the ten-minute soak and three fresh-process repeats
-for that known disabled-feature baseline.
+The compatibility-profile baseline uses a bounded subset of this ladder.
+`910C-024A` qualified the harness with manifest preflight, batch one, and two
+concurrent requests. `910C-024B` then collects 100 sequential requests and one
+700-request concurrency-70 repeat in two independent fresh services so one arm
+cannot warm the other. This establishes the before-state and dominant stage
+only. Skip the ten-minute soak and three fresh-process repeats for that known
+disabled-feature baseline.
 
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.

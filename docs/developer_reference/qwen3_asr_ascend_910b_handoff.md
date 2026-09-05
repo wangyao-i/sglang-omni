@@ -1811,11 +1811,106 @@ concurrency 70, soak, fresh-process repetitions, acceleration experiments, or
 realtime. `910C-024B` requires review of this evidence and a new committed
 handoff update.
 
-After `910C-024A` passes, a separately committed handoff may authorize
-`910C-024B`: 100 sequential requests and one 700-request concurrency-70
-baseline against the explicit qualified profile. That run exists to identify
-the dominant stage and freeze a before-state; it is not the final performance
-candidate and cannot close the hard target.
+`910C-024A` passed at `94dec6e0`. The isolated run reported 52/52 focused
+tests, a 770-row corpus with 70 warm-up and 700 measured clips, 770 distinct
+PCM hashes, exact 10.0-second duration, the pinned manifest SHA-256
+`25314d13e3922de7f91525dec5e2f562fed133ee7530355d094bc30c4bd3000b`,
+1088 resampled 24 kHz sources, 666 distinct source audios, 10 low-occupancy
+anchors skipped, and two duplicate-derived anchors skipped. Batch one was
+valid at 0.250-second p95 with WER 0.0000. The two-request smoke was also
+valid, but p95 increased to 2.082 seconds with WER 0.0152. Both had complete
+raw outcome accounting, valid NPU monitoring, positive decode-graph evidence,
+zero unexpected fallback, and clean teardown. Raw audio, transcripts, paths,
+request identifiers, and full logs remain server-local.
+
+### Next isolated task: `910C-024B` exact10 compatibility baseline
+
+This section is the only newly authorized server task. It freezes the
+before-state of the already qualified compatibility profile; it is not a
+fully accelerated candidate and cannot close the 500 ms hard target. The
+isolated operator must check out the handoff commit containing this section,
+keep sglang-omni and SGLang clean at their declared commits, and use the exact
+`910C-024A` corpus without regeneration or mutation. The server must not edit
+source, tests, configuration, benchmark code, documentation, installed
+packages, or the manifest.
+
+Run two independent arms, each with a new service process and a new evidence
+directory. Do not let either arm warm the other. Before each arm, repeat the
+established repository identity, editable mapping, OpenCV-headless/libGL,
+pyarrow split, ffmpeg identity, model, process/port, device-health, and idle-HBM
+preflight. Stop on any mismatch, residual worker or NPU device process,
+`SetDevice` error, or unhealthy device rather than applying an ad-hoc server
+repair. Start the exact accepted guarded compatibility profile: encoder graph
+and prefill graph disabled, decode graph enabled through bucket 70, torch
+compile disabled, eight asynchronous request-build workers, maximum running
+requests 70, and the accepted `FairDeviceExecutionGuard`. Do not enable
+diagnostic event logging for measured passes. Require healthy startup, bucket
+70 capture, zero unexpected graph fallback, and empty request state before
+launching the client.
+
+Arm S measures 100 distinct requests sequentially:
+
+```bash
+python -m benchmarks.eval.benchmark_asr_exact10s \
+  --meta "${EXACT10_ROOT}/manifest.jsonl" \
+  --host 127.0.0.1 --port "${QWEN3_ASR_PORT}" \
+  --model Qwen/Qwen3-ASR-1.7B --lang en \
+  --concurrencies 1 --repeats 1 \
+  --warmup-samples 70 --max-samples 100 --min-distinct-audio 770 \
+  --npu-id 0 --npu-chip-id 0 --monitor-interval-s 1 \
+  --request-timeout-s 120 --launch-command "${DECLARED_SERVER_LAUNCH}" \
+  --dataset-revision 27f4c1adee83b5b29b7c4b375f6b976324bda308 \
+  --output "${EVIDENCE}/sequential100/result.json" \
+  --save-raw-dir "${EVIDENCE}/sequential100/raw"
+```
+
+Require exactly 100 measured raw records and a valid result with no failed,
+timed-out, empty, missing, duplicate, unexpected, or unscoreable outcome. If
+Arm S is invalid, preserve evidence, clean up, and stop without Arm C70.
+Otherwise save final health and rich model-info snapshots, stop the service,
+and attest port, process, device, and HBM cleanup before starting Arm C70.
+
+Arm C70 measures the complete 700-clip partition at concurrency 70 in a second
+fresh process:
+
+```bash
+python -m benchmarks.eval.benchmark_asr_exact10s \
+  --meta "${EXACT10_ROOT}/manifest.jsonl" \
+  --host 127.0.0.1 --port "${QWEN3_ASR_PORT}" \
+  --model Qwen/Qwen3-ASR-1.7B --lang en \
+  --concurrencies 70 --repeats 1 \
+  --warmup-samples 70 --max-samples 700 \
+  --min-distinct-audio 770 --hard-gate \
+  --npu-id 0 --npu-chip-id 0 --monitor-interval-s 1 \
+  --request-timeout-s 120 --launch-command "${DECLARED_SERVER_LAUNCH}" \
+  --dataset-revision 27f4c1adee83b5b29b7c4b375f6b976324bda308 \
+  --output "${EVIDENCE}/concurrency70/result.json" \
+  --save-raw-dir "${EVIDENCE}/concurrency70/raw"
+```
+
+Require exactly 700 measured raw records. Any correctness, request-accounting,
+monitoring, OOM, device, process, or stability failure invalidates the arm.
+Latency p95 above 0.500 seconds is an expected possible baseline result: record
+it as a hard-target miss after all outcomes drain; do not hide it, retune the
+profile, or rerun. Capture rich model-info before requests and after drain so
+encoder cache/items/batches/queue wait/encoder time and decode graph
+replay/eager/bucket counters can be compared. Require positive bucket-70
+decode replay, zero standard-eager decode, zero unexpected graph fallback,
+valid NPU HBM and AI Core or NPU-utilization samples, and final cleanup.
+
+Return only sanitized aggregates: validity and failure categories; manifest
+and measured SHA-256; evaluated/raw counts; WER; wall time; throughput; RTFx;
+latency mean/p50/p90/p95/p99/max; RTF mean/p95; NPU utilization, HBM, power and
+temperature summaries; pre/post encoder counters; decode replay/eager counts
+and replay buckets; server startup/capture/error/fallback summary; and cleanup
+status. Keep raw records, transcripts, paths, model-info payloads, resource
+samples, and logs server-local.
+
+Stop after Arm C70 cleanup regardless of whether it meets 500 ms. Do not run a
+soak, repeat either arm, start the three fresh-process hard-gate repetitions,
+change acceleration settings, begin a repair experiment, or start realtime.
+The next committed local task will use this before-state to order the required
+prefill-graph, encoder-graph, compile, and guard-scope repairs.
 
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
@@ -1971,7 +2066,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-021 | `e923d70c` plus server compatibility edit (hash not reported) | guard `29ca236f`; compatibility equivalent `d9df3a74`; SGLang `9dbc4f89c` | Exact `910C-020` stack/profile plus Qwen3-ASR NPU FIFO execution guard | Authorized concurrency-8 treatment; exploratory 16/32 extension | partial: functional 8 passed; diagnostic contract incomplete; exploratory 16 passed and 32 hung | Concurrency 8: 70/70, p95 0.61 s, WER 0.77%, replay 211/eager 0; concurrency 16: 70/70, p95 3.58 s, WER 0.77%, replay 118/eager 0; concurrency 32: ten-minute timeout, 64 pending and only two measured completions. Required guard events were absent, so the 32 failure boundary is unclassified |
 | 910C-022 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact guarded `910C-021` stack/profile after restoring a clean target-device baseline | One concurrency-32 cold-input diagnostic only | functional/guard stability passed; historical scoring denominator anomaly retained | Reported 70 HTTP completions but benchmark evaluated 65/70; WER 0.77%, p95 3.18 s, RTFx 57.3; decode replay 68/eager 0 with bucket 32 hit 27 times; guard wait/acquire/release each 1,303 and state drained. The earlier concurrency-32 hang is invalidated as environment-contaminated, not an intrinsic guard deadlock |
 | 910C-023 | `81177bea`; no runtime edit | guard `29ca236f` + compatibility `d9df3a74`; SGLang `9dbc4f89c` | Exact clean guarded candidate; compile, encoder graph, and prefill graph disabled; decode graph through 70 | Fresh functional capacities 64 and 70 | passed on A3 explicit profile | Both levels evaluated 70/70 with WER 0.77%, zero eager decode/fallback, balanced guard events and drain; concurrency 64 p95 4.94 s with bucket 64 replayed 12 times; concurrency 70 p95 4.49 s with bucket 70 replayed 11 times. Functional capacity passed; exact-10-second performance and realtime remain unstarted |
-| 910C-024A | pending; `441b6db4` stopped on 24 kHz source discovery and `b4c4dc39` stopped on clip-zero 78.1% occupancy; both superseded | exact10 harness `37f598f3` + corpus transform `2cb63b9e` + accounting hardening `63f235fa` + fixed 24-to-16 kHz transform `8d46ddec` + deterministic best-fit packing `30b21522` | Must retain the exact accepted `910C-023` stack/profile, pass the fresh environment and ffmpeg preflight, and perform no manual preprocessing or threshold change | Deterministic resampled 770-clip corpus, NPU parser, batch-one and concurrency-two harness qualification | reauthorized; pending | Require 52 focused passes, 80% minimum speech occupancy, 666 distinct source audios, 770 distinct outputs, and complete resampler/skip provenance; stop after the first discrepancy or after the two smokes and cleanup; no baseline ladder, acceleration experiment, soak, process repeats, or realtime is authorized |
+| 910C-024A | `94dec6e0`; clean | exact10 harness `37f598f3` + corpus transform `2cb63b9e` + accounting hardening `63f235fa` + fixed 24-to-16 kHz transform `8d46ddec` + deterministic best-fit packing `30b21522` | Exact accepted `910C-023` profile; pinned local SeedTTS snapshot; ffmpeg 6.1.1 aarch64 | Deterministic resampled corpus, NPU parser, batch-one and concurrency-two harness qualification | passed | 52/52 tests; 770 distinct exact-10-second clips; manifest `25314d13...3000b`; batch-one p95 0.250 s/WER 0; concurrency-two p95 2.082 s/WER 0.0152; zero request failures/fallback and clean teardown |
+| 910C-024B | pending | Handoff commit containing the `910C-024B` authorization; no runtime edit | Two independent fresh services with the exact guarded compatibility profile and frozen `910C-024A` corpus | Arm S: 100 sequential; Arm C70: 700 measured at concurrency 70 | authorized; pending | Diagnostic before-state only. Arm S must pass before Arm C70. Record a p95 above 0.500 s as a hard-target miss; stop after cleanup with no soak, repeat, acceleration change, repair, or realtime |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
