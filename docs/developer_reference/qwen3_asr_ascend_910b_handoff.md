@@ -2125,13 +2125,77 @@ HBM, free-port, and clean-checkout preflight; if a retained context is actually
 observed, stop and return its identity rather than modifying the host under a
 code-validation task.
 
+### Next isolated task: `910C-026` NPU encoder-graph repair qualification
+
+Local commit `fa5b8852` owns the first encoder-graph repair. On Ascend it keeps
+the fused-attention sequence-boundary metadata on the host before capture,
+eliminating the captured-stream device-to-host synchronization that previously
+raised `aclrtMemcpy` error 107030. Because Ascend consumes those boundaries as
+host-side operator parameters, the runner lazily captures the first real
+window signature for each token bucket and admits at most one signature per
+bucket. A different signature uses an explicit, counted eager fallback rather
+than replaying stale boundaries or growing graph memory without a bound.
+`model_info.encoder_cuda_graph` now reports capture, replay bucket, and eager-
+fallback counts.
+
+Check out local code commit `fa5b8852` plus the handoff commit containing this
+authorization. Keep the exact SGLang dependency commit and all environment
+invariants from accepted `910C-025A`; report and stop on any mismatch. The
+isolated server must not edit source, tests, configuration, documentation,
+packages, site-packages, or environment state.
+
+Run, in order:
+
+1. the focused encoder-graph and model-info tests
+   `tests/unit_test/qwen3_asr/test_encoder_cuda_graph.py` and
+   `tests/unit_test/model_runner/test_prefill_cuda_graph_usage.py`, followed by
+   the complete `tests/unit_test/qwen3_asr` suite; stop on collection or test
+   failure;
+2. the normal clean-device preflight: both chips healthy at no more than 5%
+   HBM, no holder/worker/client, port 8000 free, headless OpenCV invariant, and
+   exact clean repository/dependency HEADs;
+3. start one fresh service with the exact accepted `910C-025A` P profile,
+   changing only `enable_encoder_cuda_graph` from false to true; keep prefill
+   and decode graphs enabled, decode capacity 70, torch compile disabled, the
+   execution guard active, and eight request-build workers;
+4. require the NPU lazy-capture deferral marker at startup and zero startup
+   capture failure, error 107030, `bucket stays eager`, ACL, GE, OOM, or graph
+   fallback signatures;
+5. send the same frozen exact10 batch-one sample twice. The first successful
+   request must produce both the bounded encoder capture marker and encoder
+   replay marker; the second must return the same normalized output/hash,
+   increase `encoder_cuda_graph.replay_count`, and not capture a second graph
+   for the same key. Require `capture_failure_count=0` and
+   `eager_fallback_count=0` after the pair;
+6. if the pair passes, run one 70-sample concurrency-70 warmup excluded from
+   measurement, then exactly one 700-request concurrency-70 exact10 hard-gate
+   measurement using the frozen `910C-024A` corpus and the same harness,
+   timeout, WER, request-accounting, and NPU-monitor contract as `910C-025A`;
+7. capture rich model-info immediately before warmup, after warmup, and after
+   measurement. Report deltas for encoder, prefill, and decode graph capture,
+   replay and fallback counters. Any measured encoder eager fallback makes the
+   feature qualification fail, but allow the already launched 700-request arm
+   to drain so its diagnostic performance result is preserved;
+8. stop gracefully and require port release, no residual process/context, and
+   three healthy HBM snapshots at no more than 5%. Do not use `SIGKILL`; a
+   device error, OOM, retained context, forced cleanup, or HBM recovery failure
+   stops the task and remains a blocking exception.
+
+Return the focused and full test counts; resolved profile; capture/replay log
+markers; the three sanitized graph-counter snapshots/deltas; batch-one hashes;
+700-request validity and accounting; WER; wall time; throughput; RTFx; latency
+mean/p50/p90/p95/p99/max; NPU utilization/HBM/power/temperature; forbidden
+signature counts; and cleanup state. Keep raw logs, JSONL, paths, transcripts,
+request IDs, audio, and profiler data server-local. Do not start torch-compile
+or realtime work in this task.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
 
-1. re-enable prefill graph with the execution guard present and verify whether
-   the guard fixes its former cold-input overlap failure;
-2. replace or repair the incompatible NPU encoder-graph capture path so host-
+1. prefill graph with the execution guard passed `910C-025A` and is retained;
+2. qualify local commit `fa5b8852`, which repairs the incompatible NPU encoder-
+   graph capture path so host-
    device copies and synchronization do not occur illegally inside capture;
 3. repair the compile-enabled generation path across the SGLang/triton-ascend
    boundary and requalify every compiled and non-compiled decode bucket;
@@ -2284,6 +2348,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-024C | handoff `0ce137dc`; no runtime edit | Quiescent post-`910C-024B` host; no service/model/benchmark/device mutation | Read-only five-minute HBM, process, device-node, health, and preserved-evidence attribution | Post-run HBM attribution and missing model-info audit | completed: outcome 2, identified holder | NPU context PID 2043369 retained 53,966 MB after Arm C70 was killed with `SIGKILL`; no manageable user process remained. Coarse log stats: encoder 251 batches/754 items, queue wait avg/max 1.24/13.26 s, encoder time 22.6 s; decode 100% graph replay across all 13 buckets; no pre/post rich model-info snapshots |
 | 910C-024D | `db19be76`; no runtime edit | Quiescent post-`910C-024C` host | Operator had terminated PID 2043369; no reboot or driver restart | Three-snapshot read-only recovery verification | passed | Both chips healthy at stable 4% HBM across t=0/10/20 s; PID 2043369 and other holders/workers absent; port 8000 free; no acceleration run started |
 | 910C-025A | `3ced6537`; no runtime edit | Frozen `910C-024A` exact10 corpus and `910C-024B` common workload | Two independent fresh-process current-code arms: all-eager E0 and guarded prefill+decode graph P | Acceleration screening and one C70 measurement per qualified arm | completed; P is the best measured configuration; hard target missed | E0 p95 2.641 s/31.52 req/s; P p95 1.771 s/48.39 req/s, a 49.6% p95 reduction and 23.1% throughput gain versus `910C-024B`; P remains 3.54x over the latency target and at 34.6% of required throughput; full cleanup and metric matrix were not included in the returned summary |
+| 910C-026 | pending handoff commit; code `fa5b8852` | Exact accepted `910C-025A` P stack plus NPU host-side encoder attention metadata and bounded lazy signature capture | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Focused/full tests, repeated batch one, 70-sample warmup, and one exact10 C70 measurement | authorized; pending | Positive encoder capture/replay and zero measured encoder fallback required; server code/package edits forbidden; graceful cleanup and HBM recovery remain hard gates |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak

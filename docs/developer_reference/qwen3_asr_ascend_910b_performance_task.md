@@ -254,6 +254,16 @@ implied 140-request/s throughput. The next performance-bearing work is local
 encoder-graph repair, torch-compile repair, and reduction of guard/encoder
 serialization before a combined EG/TC/ALL hardware campaign.
 
+Local encoder-graph repair `fa5b8852` is the next performance-bearing change.
+It removes Ascend capture-time D2H sequence-boundary synchronization, uses one
+bounded real host-side window signature per token bucket, and exposes encoder
+capture/replay/fallback counters in rich model-info. `910C-026` compares this
+single change against the accepted P profile: repeated batch one first proves
+capture and replay correctness, then a separate 70-sample warmup and one
+700-request C70 measurement determine graph coverage and directional benefit.
+Any measured encoder eager fallback fails full feature qualification even when
+the diagnostic performance measurement completes.
+
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
 
