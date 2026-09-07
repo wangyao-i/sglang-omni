@@ -2945,6 +2945,54 @@ Return sanitized test counts and per-arm accounting, WER, garbled-output count,
 graph counters, forbidden signatures, and cleanup state. Keep logs, paths,
 audio, transcripts, request IDs, and model details server-local.
 
+### `910C-035` result and compile-context isolation task `910C-036`
+
+`910C-035` passed its declared tests but `D0-R2` remained garbled 70/70 at WER
+1.4140. The conditional `T1-R2` and `A1-R2` arms correctly did not start. This
+rejects the Qwen3-ASR decoder's remaining generic fused-op dispatch switches as
+the direct cause. More importantly, the prior D0 interpretation was too broad:
+the NPU runner applies `set_tc_piecewise_forward_context` independently from
+`prepare_model_for_torch_compile`. That context sets
+`use_decode_graph_attention=True`, changing decode attention to the graph-safe
+path even in prepared-eager mode. D0 therefore did not isolate fused-op state
+from graph-safe attention dispatch.
+
+Local SGLang commit `e45d64c9f` adds only the diagnostic selector
+`SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=context-eager`. It yields raw
+`model.forward` without entering `prepare_model_for_torch_compile`, but leaves
+the existing NPU decode graph context active. It neither calls `torch.compile`
+nor changes production behavior when unset. Its focused test verifies that
+neither the compile-safe context manager nor `torch.compile` is invoked.
+
+`910C-036` is one fresh-process, correctness-localization arm. Use Git only:
+fetch the SGLang-Omni handoff commit containing this task and SGLang
+`origin/codex/qwen3-asr-torch-compile` at exact commit `e45d64c9f`; do not
+modify files, packages, site-packages, or the installed `sgl-kernel-npu`.
+Require clean tracked worktrees, the headless-OpenCV invariant, no device
+holder/service process, an available port, and two HBM snapshots at or below
+5%. Stop and request operator cleanup if that preflight fails.
+
+Run the two NPU dispatch-test files, prior fused-op/decode-runner suites, Omni
+focused encoder/model-info suites, and the complete Qwen3-ASR suite. Stop
+before startup on the first collection or test failure. Then run fresh
+`C0-context-eager` using the exact `D0-R2` profile and its 70-item warm-up plus
+140 exact10 measured requests, with the sole diagnostic value
+`SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=context-eager`. Require the new positive
+marker, all completions, normal drain, and return WER, garbled-output count,
+decode replay/eager counts, capture result, forbidden signatures, and cleanup.
+Do not start normal Torch Compile, ALL, C70, realtime, or another arm.
+
+Interpret the result mechanically:
+
+- correct `C0-context-eager`: the still-unisolated prepare state remains the
+  blocker; next local work must record exact changed fused-op instance state
+  during the real Qwen3-ASR capture instead of guessing more dispatch changes;
+- garbled `C0-context-eager`: graph-safe decode-attention context is necessary
+  for corruption; next local repair belongs at the context/custom-attention
+  boundary, not generic fused ops;
+- capture/startup failure: report its first signature as a separate capture
+  blocker and do not make an accuracy claim.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3128,7 +3176,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-032 | handoff `f56cc244`; SGLang `5403d1f7d`; no server edit | Compiled external-kernel/custom-op value parity plus bounded TC/ALL matrix | NPU op parity, then T1/T2/T70/A0/A1 exact10 accuracy arms | completed; Torch Compile incorrect | Both parity cases passed, but every compile-on arm garbled 70/70 with WER 1.3923--1.4198; A0 compile-off was correct at WER 0.0183. Compile defect is independent of batch size and encoder/prefill graphs |
 | 910C-033 | handoff `f62030d3`; SGLang `a7b279da6` | `910C-032` plus diagnostic compile-stage selector | D0 prepared-eager and D1 Dynamo-eager T1-profile exact10 accuracy arms | completed; compile-safe fused-op state is faulty | Both arms completed 140/140 but were garbled 140/140 with WER 1.3929; the first fault is active before Dynamo and TorchAir, while the compile-safe context is enabled |
 | 910C-034 | handoff `fc021329`; SGLang `3c389d2f1` | NPU TopK preserves its eager `torch.ops.npu` dispatch inside the compile-safe context | Conditional D0-R, normal T1-R, then fully enabled A1-R exact10 correctness arms | completed; TopK hypothesis rejected | Declared tests passed, but D0-R remained garbled 70/70 with WER 1.4220; T1-R and A1-R correctly did not start |
-| 910C-035 | handoff commit containing this row; SGLang `9438420a6` | NPU RMSNorm and SiLU preserve their existing `torch_npu` dispatch inside the compile-safe context | Conditional D0-R2, normal T1-R2, then fully enabled A1-R2 exact10 correctness arms | authorized; pending | Test the remaining active Qwen3-ASR decoder fused-op switches after `910C-034` rejected TopK; no C70 or performance claim |
+| 910C-035 | handoff `9041c9a0`; SGLang `9438420a6` | NPU RMSNorm and SiLU preserve their existing `torch_npu` dispatch inside the compile-safe context | Conditional D0-R2, normal T1-R2, then fully enabled A1-R2 exact10 correctness arms | completed; generic decoder dispatch hypothesis rejected | Declared tests passed, but D0-R2 remained garbled 70/70 with WER 1.4140; T1-R2 and A1-R2 correctly did not start |
+| 910C-036 | handoff commit containing this row; SGLang `e45d64c9f` | Raw model forward with graph-safe decode-attention context retained but compile-safe fused-op preparation omitted | One `C0-context-eager` exact10 correctness arm | authorized; pending | Isolate `prepare_model_for_torch_compile` from the independently installed NPU decode-attention context; no normal compile, ALL, C70, or performance claim |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
