@@ -2945,7 +2945,7 @@ Return sanitized test counts and per-arm accounting, WER, garbled-output count,
 graph counters, forbidden signatures, and cleanup state. Keep logs, paths,
 audio, transcripts, request IDs, and model details server-local.
 
-### `910C-035` result and compile-context isolation task `910C-036`
+### `910C-035` result, superseded compile-context task `910C-036`, and overnight scoped-state matrix `910C-037`
 
 `910C-035` passed its declared tests but `D0-R2` remained garbled 70/70 at WER
 1.4140. The conditional `T1-R2` and `A1-R2` arms correctly did not start. This
@@ -2957,41 +2957,83 @@ the NPU runner applies `set_tc_piecewise_forward_context` independently from
 path even in prepared-eager mode. D0 therefore did not isolate fused-op state
 from graph-safe attention dispatch.
 
-Local SGLang commit `e45d64c9f` adds only the diagnostic selector
-`SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=context-eager`. It yields raw
-`model.forward` without entering `prepare_model_for_torch_compile`, but leaves
-the existing NPU decode graph context active. It neither calls `torch.compile`
-nor changes production behavior when unset. Its focused test verifies that
-neither the compile-safe context manager nor `torch.compile` is invoked.
+`910C-036` is superseded before server execution. The initial local selector
+`context-eager` was useful, but a single arm would still leave an unnecessary
+round trip: the outer Qwen3-ASR model prepares both `audio_tower` and
+`language_model` fused-op instances. Server agents must use the expanded,
+local-reviewable SGLang commit `3295b12d3`, not `e45d64c9f`.
 
-`910C-036` is one fresh-process, correctness-localization arm. Use Git only:
-fetch the SGLang-Omni handoff commit containing this task and SGLang
-`origin/codex/qwen3-asr-torch-compile` at exact commit `e45d64c9f`; do not
-modify files, packages, site-packages, or the installed `sgl-kernel-npu`.
-Require clean tracked worktrees, the headless-OpenCV invariant, no device
-holder/service process, an available port, and two HBM snapshots at or below
-5%. Stop and request operator cleanup if that preflight fails.
+`3295b12d3` adds diagnostic-only selectors, all inert when the environment
+variable is unset:
 
-Run the two NPU dispatch-test files, prior fused-op/decode-runner suites, Omni
-focused encoder/model-info suites, and the complete Qwen3-ASR suite. Stop
-before startup on the first collection or test failure. Then run fresh
-`C0-context-eager` using the exact `D0-R2` profile and its 70-item warm-up plus
-140 exact10 measured requests, with the sole diagnostic value
-`SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=context-eager`. Require the new positive
-marker, all completions, normal drain, and return WER, garbled-output count,
-decode replay/eager counts, capture result, forbidden signatures, and cleanup.
-Do not start normal Torch Compile, ALL, C70, realtime, or another arm.
+| selector | compile-safe fused-op preparation | graph-safe decode-attention context | `torch.compile` |
+| --- | --- | --- | --- |
+| `context-eager` | none | retained | no |
+| `audio-prepared-eager` | `audio_tower` only | retained | no |
+| `language-prepared-eager` | `language_model` only | retained | no |
 
-Interpret the result mechanically:
+The scoped selectors apply and later reverse only matching `BaseFusedOp`
+instances, using their stable module paths. They do not alter production
+behavior, package versions, or the installed `sgl-kernel-npu`.
 
-- correct `C0-context-eager`: the still-unisolated prepare state remains the
-  blocker; next local work must record exact changed fused-op instance state
-  during the real Qwen3-ASR capture instead of guessing more dispatch changes;
-- garbled `C0-context-eager`: graph-safe decode-attention context is necessary
-  for corruption; next local repair belongs at the context/custom-attention
-  boundary, not generic fused ops;
-- capture/startup failure: report its first signature as a separate capture
-  blocker and do not make an accuracy claim.
+#### `910C-037`: overnight Torch-Compile correctness localization matrix
+
+This is an explicitly authorized diagnostic matrix, designed to avoid another
+human round trip. Use Git only: fetch this SGLang-Omni handoff commit and
+SGLang `origin/codex/qwen3-asr-torch-compile` at exact commit `3295b12d3`.
+The server must make zero source, test, configuration, documentation, package,
+or site-packages changes. Do not rebuild or reinstall `sgl-kernel-npu`.
+
+Before any service startup, require clean tracked worktrees, the headless
+OpenCV invariant, no device holder or service process, an available port, and
+two HBM snapshots at or below 5%. A failed infrastructure preflight, test
+collection failure, or test failure stops the entire matrix and is returned as
+the first blocker; do not use `kill -9`, restart a driver, or reboot. Run the
+NPU dispatch tests, fused-op tests, decode-runner tests, Omni focused
+encoder/model-info tests, and the full Qwen3-ASR suite. Return exact test
+counts and the first failure, if any.
+
+For every matrix arm, use a fresh service process and the exact `D0-R2`
+correctness profile: encoder graph disabled, prefill graph disabled, decode
+graph enabled through bucket 70, the Torch-Compile feature flag enabled so
+the NPU runner supplies its normal graph-safe attention context, 70-item
+warm-up, then 140 exact10 measured requests. The sole arm-specific change is
+`SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC`. Require its positive startup marker,
+complete request accounting, normal drain, normal graceful shutdown, and two
+post-stop HBM snapshots at or below 5%.
+
+Run in this exact order:
+
+1. `C0-context-eager` with `context-eager`.
+2. If and only if C0 is correct, run `A0-audio-prepared-eager` with
+   `audio-prepared-eager`.
+3. If and only if C0 is correct, also run `L0-language-prepared-eager` with
+   `language-prepared-eager`, even if A0 is garbled. A0 and L0 are independent
+   diagnosis arms, so an accuracy failure in either must be recorded but does
+   not suppress the other.
+
+Do not run normal Torch Compile, ALL, C70 performance, realtime, a package
+change, or an unlisted experiment. For every started arm return only sanitized
+aggregate evidence: WER, garbled-output count, response accounting, capture
+and replay/eager counters, forbidden signatures, selector marker, and cleanup
+state. Keep transcripts, audio, raw request IDs, and logs server-local.
+
+Interpret the completed matrix mechanically:
+
+- garbled C0: the graph-safe decode-attention context is necessary for the
+  corruption. The next local repair is an NPU numerical-parity investigation
+  of the normal attention path versus `forward_decode_graph` /
+  `unified_attention_with_output`; do not audit more generic fused ops.
+- correct C0 plus garbled A0 only: audit actual audio-tower fused-op state
+  transitions and parity (starting with encoder convolution/norm paths).
+- correct C0 plus garbled L0 only: audit remaining language-model fused-op
+  state transitions and parity, including rotary/q-k normalization context;
+  existing split-QKV kernel parity is not enough.
+- correct C0 plus both A0 and L0 correct while all-prepared D0 remains bad:
+  audit global or ordering interaction in `_to_torch`, including backend
+  initialization and enter/leave ordering, before another numerical fix.
+- any capture/startup failure: report its first signature as a separate capture
+  blocker and make no accuracy or performance claim.
 
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
@@ -3177,7 +3219,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-033 | handoff `f62030d3`; SGLang `a7b279da6` | `910C-032` plus diagnostic compile-stage selector | D0 prepared-eager and D1 Dynamo-eager T1-profile exact10 accuracy arms | completed; compile-safe fused-op state is faulty | Both arms completed 140/140 but were garbled 140/140 with WER 1.3929; the first fault is active before Dynamo and TorchAir, while the compile-safe context is enabled |
 | 910C-034 | handoff `fc021329`; SGLang `3c389d2f1` | NPU TopK preserves its eager `torch.ops.npu` dispatch inside the compile-safe context | Conditional D0-R, normal T1-R, then fully enabled A1-R exact10 correctness arms | completed; TopK hypothesis rejected | Declared tests passed, but D0-R remained garbled 70/70 with WER 1.4220; T1-R and A1-R correctly did not start |
 | 910C-035 | handoff `9041c9a0`; SGLang `9438420a6` | NPU RMSNorm and SiLU preserve their existing `torch_npu` dispatch inside the compile-safe context | Conditional D0-R2, normal T1-R2, then fully enabled A1-R2 exact10 correctness arms | completed; generic decoder dispatch hypothesis rejected | Declared tests passed, but D0-R2 remained garbled 70/70 with WER 1.4140; T1-R2 and A1-R2 correctly did not start |
-| 910C-036 | handoff commit containing this row; SGLang `e45d64c9f` | Raw model forward with graph-safe decode-attention context retained but compile-safe fused-op preparation omitted | One `C0-context-eager` exact10 correctness arm | authorized; pending | Isolate `prepare_model_for_torch_compile` from the independently installed NPU decode-attention context; no normal compile, ALL, C70, or performance claim |
+| 910C-036 | handoff `7b07596a`; SGLang `e45d64c9f` | Raw model forward with graph-safe decode-attention context retained but compile-safe fused-op preparation omitted | One `C0-context-eager` exact10 correctness arm | superseded before server execution | Replaced by the broader, independently scoped `910C-037` matrix to avoid a human round trip |
+| 910C-037 | handoff commit containing this row; SGLang `3295b12d3` | Separate graph-safe-attention, audio-tower-only prepared, and language-model-only prepared eager diagnostics | C0 first; if correct, independent A0 and L0 exact10 correctness arms | authorized; pending | Localize corruption to attention context, audio state, language state, or cross-scope preparation ordering; no normal compile, ALL, C70, realtime, package, or server code change |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
