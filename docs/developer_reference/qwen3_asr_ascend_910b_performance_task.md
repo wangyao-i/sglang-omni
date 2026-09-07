@@ -284,6 +284,15 @@ the measured arm and zero eager fallback. Its C70 metric remains diagnostic
 until Encoder Graph feature qualification closes; torch compile remains a
 separate later repair.
 
+`910C-027` reached zero eager fallback and zero capture failure, but its graph
+count grew from five after warm-up to the eight-signature cap during the
+measured arm. The resulting p95 2.685 seconds and 50.60 requests/s are therefore
+capture-contaminated diagnostics. `910C-028` keeps the code and capacity fixed,
+warms every encoder batch size 1 through 8, then repeats excluded C70 waves
+until two drained snapshots are stable at 8/8 before measuring. Do not raise
+the memory bound or accept measured capture growth unless new evidence shows
+that this deterministic saturation cannot cover the frozen workload.
+
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
 

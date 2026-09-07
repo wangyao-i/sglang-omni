@@ -2321,6 +2321,69 @@ Keep raw logs, JSONL, paths, transcripts, request IDs, audio, and profiler data
 server-local. This is the only authorized server task. Do not enable torch
 compile or start realtime work in `910C-027`.
 
+### `910C-027` result and next isolated task `910C-028`
+
+`910C-027` proved that the bounded multi-signature implementation removed the
+functional fallback seen in `910C-026`: the C70 arm completed with
+`capture_failure_count=0` and `eager_fallback_count=0`, and graceful `SIGTERM`
+cleanup returned both chips to 4% HBM with no retained context. The signature
+cache contained five graphs after the declared warm-up, however, and grew to
+its hard capacity of eight during measurement. This violated the predeclared
+no-measurement-capture condition, so the run is not a clean Encoder Graph
+performance qualification. Its 700-request C70 result (p95 2.685 seconds,
+50.60 requests/s, RTFx 506) is retained as capture-contaminated diagnostic
+evidence. Exact focused/full test counts were not included in the returned
+summary and must be returned by the next run.
+
+Do not increase the signature capacity yet. `910C-027` reached exactly 8/8
+without fallback or capture failure, so there is no evidence that capacity is
+insufficient. Canonicalizing Ascend host operator parameters would be a larger
+semantic change and is not justified while deterministic warm-up can exercise
+the bounded signature set. Accepting graph capture during the measured arm is
+also not permitted for the final performance profile.
+
+`910C-028` is an accelerated, no-code-change warm-up qualification of the same
+commit `9080b901`. Check out code `9080b901` plus the handoff commit containing
+this authorization and preserve the exact SGLang dependency, model, packages,
+headless OpenCV invariant, exact10 corpus, benchmark client, EG service profile,
+timeouts, accuracy rules, and cleanup contract from `910C-027`. The server may
+not edit source, tests, configuration, packages, site-packages, or docs.
+
+Run in order:
+
+1. Repeat the focused encoder-graph/model-info tests and complete Qwen3-ASR
+   suite. Return exact pass/fail/skip counts and stop before hardware on any
+   failure.
+2. Require exact clean HEADs, port 8000 free, no holder/worker/client, headless
+   OpenCV with no `libGL`, and both chips healthy at no more than 5% HBM.
+3. Start one fresh `910C-027` EG service: encoder, prefill, and decode graphs on;
+   torch compile off; decode capacity 70; guard active; encoder batch size and
+   request-build workers both 8. Require zero startup forbidden signatures.
+4. Capture pre-warm-up rich model-info. Issue separate exact10 warm-up waves at
+   client concurrency 1, 2, 3, 4, 5, 6, 7, and 8, draining after each wave and
+   recording encoder signature/capture/replay/fallback counters. These levels
+   target every possible encoder batch size rather than relying on larger
+   client concurrency to produce a particular encoder batch.
+5. Then issue up to three excluded 70-sample C70 warm-up waves, draining and
+   recording rich model-info after each. Stop warm-up successfully as soon as
+   `npu_signature_count=8` and two consecutive drained snapshots show unchanged
+   signature and captured-graph counts. If the cache does not reach a stable
+   8/8 within three C70 waves, or any capture failure/eager fallback/device
+   error appears, stop without measurement and return the counter timeline.
+6. After saturation, run one 700-request C70 exact10 arm. Require 700/700 valid,
+   stable signature/captured-graph counts, positive encoder/prefill/decode
+   replay deltas, zero eager fallback and capture failure, unchanged normalized
+   correctness/WER, and no timeout/OOM/device error. This closes Encoder Graph
+   feature qualification if it passes; its latency remains diagnostic rather
+   than the final project hard gate.
+7. Stop gracefully without `SIGKILL`; require port release, no retained process
+   or context, and three healthy HBM snapshots at no more than 5%.
+
+Return the complete counter timeline for every warm-up wave, exact test counts,
+resolved profile/HEADs, C70 request accounting/WER/latency/throughput/RTFx/NPU
+metrics, forbidden signatures, and cleanup state. Raw data remains server-local.
+Do not enable torch compile or realtime in `910C-028`.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -2496,7 +2559,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-024D | `db19be76`; no runtime edit | Quiescent post-`910C-024C` host | Operator had terminated PID 2043369; no reboot or driver restart | Three-snapshot read-only recovery verification | passed | Both chips healthy at stable 4% HBM across t=0/10/20 s; PID 2043369 and other holders/workers absent; port 8000 free; no acceleration run started |
 | 910C-025A | `3ced6537`; no runtime edit | Frozen `910C-024A` exact10 corpus and `910C-024B` common workload | Two independent fresh-process current-code arms: all-eager E0 and guarded prefill+decode graph P | Acceleration screening and one C70 measurement per qualified arm | completed; P is the best measured configuration; hard target missed | E0 p95 2.641 s/31.52 req/s; P p95 1.771 s/48.39 req/s, a 49.6% p95 reduction and 23.1% throughput gain versus `910C-024B`; P remains 3.54x over the latency target and at 34.6% of required throughput; full cleanup and metric matrix were not included in the returned summary |
 | 910C-026 | handoff `92fcf514`; code `fa5b8852` | Exact accepted `910C-025A` P stack plus NPU host-side encoder attention metadata and bounded lazy signature capture | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Focused/full tests, repeated batch one, 70-sample warmup, and one exact10 C70 measurement | feature qualification failed; later measurement diagnostic only | Focused 15 passed/1 skipped and model-info 4 passed; full Qwen suite had 11 failures but execution incorrectly continued. Batch-one capture/replay passed. C70 completed 700/700 at p95 1.652 s and 52.55 req/s, but 64 `npu_signature_mismatch` eager fallbacks violated the zero-fallback gate; local multi-signature repair required |
-| 910C-027 | pending handoff commit; code `9080b901` | Exact `910C-026` stack plus globally bounded NPU encoder multi-signature cache and legacy-mock guard compatibility | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Clean full tests; signature warm-up at 1/2/4/8 and C70; one 700-request C70 measurement | authorized; pending | Require at most 8 signatures, no capture growth during measurement, positive encoder/prefill/decode replay, zero eager fallback/capture failure, complete request accounting, and graceful HBM recovery |
+| 910C-027 | handoff `65273c98`; code `9080b901` | Exact `910C-026` stack plus globally bounded NPU encoder multi-signature cache and legacy-mock guard compatibility | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Signature warm-up at 1/2/4/8 and C70; one 700-request C70 measurement | partial: functional fallback removed; warm-up/performance qualification failed | C70 had zero encoder fallback/capture failure and clean 4% HBM recovery, but signatures grew 5 to 8 during measurement. Diagnostic p95 2.685 s, 50.60 req/s, RTFx 506; exact test counts were omitted from the returned summary |
+| 910C-028 | pending handoff commit; code `9080b901` | Exact `910C-027` stack and profile; no code change | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Deterministic encoder-batch warm-up 1 through 8, bounded repeated C70 saturation, then one C70 measurement | authorized; pending | Require stable 8/8 signatures before measurement, no measured capture growth/fallback/failure, positive all-graph replay, 700/700 validity, and graceful HBM recovery |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
