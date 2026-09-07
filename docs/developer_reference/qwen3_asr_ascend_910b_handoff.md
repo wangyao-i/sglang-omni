@@ -2500,6 +2500,12 @@ back to the ATB path and failed at `PagedAttentionOperation`. Therefore this
 ATB failure does not disprove the intended local boundary; it demonstrates
 that bypassing it recreates the historical failure.
 
+The returned pre-hardware counts were encoder/model-info 15 passed and 1
+skipped, complete Qwen3-ASR 594 passed and 3 skipped, and no reported SGLang
+decode-runner test failure. The final arm used an otherwise idle NPU 7 at its
+4% HBM baseline. These facts are retained, but they do not cure the source and
+stop-contract deviations below.
+
 The server also continued after the TC first failure and ran a compile-disabled
 encoder+prefill+decode arm. This violated the stop rule and was not the declared
 `ALL` profile. Its 140 outstanding requests and unresponsive shutdown are
