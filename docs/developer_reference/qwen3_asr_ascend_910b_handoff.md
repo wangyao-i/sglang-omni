@@ -61,11 +61,15 @@ functionally but missed the hard target at 3.516-second p95 and 39.31
 requests/s. The latter service left chip-0 HBM at 87% after shutdown. The
 follow-up read-only attribution found 53,966 MB owned by stale NPU context PID
 2043369 after the Arm C70 service had been terminated with `SIGKILL`; no
-corresponding manageable user process remained. Its performance aggregates
-are retained, but the cleanup gate is blocked on operator-approved runtime
-recovery. This qualifies the explicit
-A3 functional candidate and diagnostic before-state only. Fully accelerated
-performance and realtime remain unqualified**.
+corresponding manageable user process remained. The operator removed the stale
+context and `910C-024D` subsequently observed three healthy 4% HBM snapshots,
+closing that cleanup exception. `910C-025A` then qualified guarded prefill plus
+decode graph as the best compatible profile at 1.771-second p95 and 48.39
+requests/s. `910C-026` improved the diagnostic C70 result to 1.652-second p95
+and 52.55 requests/s with Encoder Graph enabled, but 64 counted encoder
+signature-mismatch eager fallbacks failed feature qualification. This qualifies
+the explicit A3 functional candidates and diagnostic before-states only. Fully
+accelerated performance and realtime remain unqualified**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. The project owner states that its single-card
@@ -81,7 +85,7 @@ same software stack on a physical 910B.
 | Ascend installation | NPU manifest, precheck, and installation guide are implemented | Precheck passed on the compute-equivalent A3 performance proxy; runtime compatibility has not been repeated on a physical 910B |
 | Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager batch 1, two-concurrent, ten-sequential, health, shutdown, and restart gates passed after repairing the OpenCV environment; not yet started on 910B |
 | Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | In the explicit compile-disabled, prefill-eager profile, A3 decode capacities 1 through 70 captured and the cold-input ladder passed through concurrency 70 with zero eager fallback; bucket 70 replayed 11 times. With compile enabled, batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; the repository-default graph profile remains unqualified |
-| Encoder graph | Implemented with `torch.cuda.Stream`, `torch.cuda.CUDAGraph`, and `torch.cuda.graph`; enabled by default | A3 capture failed for every attempted bucket because captured-stream synchronization memcpy is unsupported; each bucket explicitly stayed eager |
+| Encoder graph | Local repair `fa5b8852` keeps NPU sequence-boundary metadata host-side and lazily captures a real layout; enabled by default | `910C-026` removed error 107030 and proved repeated batch-one capture/replay, but the one-signature-per-token-bucket policy produced 64 counted eager fallbacks on the 700-request corpus; bounded heterogeneous-signature support remains unqualified |
 | Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; local commit `29ca236f` adds a FIFO device-execution guard shared only by the Qwen3-ASR encoder batch and generation forward when NPU generation graph is enabled. Cold-input concurrency 8, 16, 32, 64, and 70 completed on clean processes with balanced guard events and state drain |
 | SSE transcription | Emits decoder-token deltas after the complete upload has entered one engine request | Not continuous audio-input realtime |
 | Realtime WebSocket | Buffers PCM16 until VAD stops, then runs a response pass followed by a transcription pass | Does not meet the incremental-ASR target by inspection; not yet verified on 910B |
@@ -96,6 +100,36 @@ gate.
 The performance values below are targets, not measured results. Correctness and
 stability gates are prerequisites; an optimization that changes recognized text
 outside the declared accuracy allowance or silently falls back is a failure.
+
+### Two-goal project completion policy
+
+The owner has fixed two independent acceptance goals, in this order:
+
+1. **Complete support for every currently identified acceleration path.** The
+   NPU encoder graph, prefill graph, decode graph, and torch-compile generation
+   path must each pass correctness, capture/replay, cold-input concurrency,
+   stability, cleanup, and observability gates. They must then pass together in
+   one `ALL` profile with positive execution evidence and zero unexpected eager
+   fallback. An explicit feature-disable profile remains useful as a regression
+   control, but cannot satisfy this goal.
+2. **Meet the final offline performance target with that fully enabled `ALL`
+   profile.** On the frozen exact-10-second workload, every one of three fresh-
+   process concurrency-70 repeats must have p95 latency below 500 ms, all 700
+   measured requests must succeed, and measured throughput/RTFx, accuracy,
+   health, memory, and cleanup must satisfy the contracts below.
+
+These goals are conjunctive: the project is not complete if the fully enabled
+profile is correct but too slow, or if a disabled-feature profile meets the
+latency target. Before goal 1 closes, performance measurements are diagnostic
+before/after evidence only; they do not constitute the final performance gate.
+The execution guard is a correctness mechanism rather than a separately named
+acceleration feature. Its current implementation remains qualified, but its
+critical-section scope may be narrowed later if profiling shows that it prevents
+goal 2.
+
+The original realtime requirement remains a separate protocol/product gate
+after the offline `ALL` path is correct and its dominant latency is understood.
+SSE token deltas after a complete upload do not count as realtime support.
 
 ### Offline transcription gate
 
@@ -2125,7 +2159,7 @@ HBM, free-port, and clean-checkout preflight; if a retained context is actually
 observed, stop and return its identity rather than modifying the host under a
 code-validation task.
 
-### Next isolated task: `910C-026` NPU encoder-graph repair qualification
+### `910C-026` NPU encoder-graph repair result
 
 Local commit `fa5b8852` owns the first encoder-graph repair. On Ascend it keeps
 the fused-attention sequence-boundary metadata on the host before capture,
@@ -2136,7 +2170,42 @@ window signature for each token bucket and admits at most one signature per
 bucket. A different signature uses an explicit, counted eager fallback rather
 than replaying stale boundaries or growing graph memory without a bound.
 `model_info.encoder_cuda_graph` now reports capture, replay bucket, and eager-
-fallback counts.
+fallback counts. The isolated run proved that this removes the illegal capture-
+stream synchronization and that identical signatures capture and replay, but
+it also proved that the one-signature-per-bucket policy is insufficient for the
+real exact10 corpus.
+
+The focused encoder-graph suite passed 15 tests with 1 skipped and the model-
+info suite passed 4 tests. The complete Qwen3-ASR suite then reported 583
+passed, 11 failed, and 3 skipped. Those failures were attributed by the
+operator to pre-existing `SimpleNamespace.audio_tower` mocks, but the task's
+declared stop-on-test-failure rule still applied. The server continued through
+hardware measurement after that first failed gate; retain the later numbers as
+diagnostic evidence only, not as a valid feature qualification.
+
+Startup deferred synthetic NPU capture as designed and reported no error
+107030, ACL/GE/OOM, capture failure, or `bucket stays eager` signature. Two
+identical batch-one requests captured bucket 256 with 11 windows, replayed it,
+returned identical normalized output, and kept both capture-failure and eager-
+fallback counts at zero. The 700-request C70 arm then completed 700/700 with
+WER 0.0164, 1.652-second p95, 52.55 requests/s, and RTFx 525.46. This is the
+best directional profile so far, but it missed the 0.500-second target and,
+critically, recorded 64 `npu_signature_mismatch` eager fallbacks. Four encoder
+graphs were captured for token buckets 256, 512, 1024, and 2048; 218 requests
+replayed while 64 fell back. Prefill and decode replay remained positive,
+including decode bucket 70.
+
+Therefore `910C-026` **fails encoder-graph feature qualification**. It proves a
+useful implementation direction and directional gain, not complete support.
+The next work is local and no new isolated run is authorized yet: replace the
+single-signature-per-token-bucket policy with a bounded strategy that covers
+the real window-layout diversity without stale host metadata, unbounded graph
+growth, or silent eager fallback; fix or explicitly rebase the full-suite mock
+contract; add coverage for heterogeneous signatures; then issue a new handoff
+commit for a fresh-process hardware gate.
+
+The original execution instructions are retained below as the audit record for
+what `910C-026` was authorized to run.
 
 Check out local code commit `fa5b8852` plus the handoff commit containing this
 authorization. Keep the exact SGLang dependency commit and all environment
@@ -2204,6 +2273,13 @@ separately and then in combination:
 5. run the fully combined profile with compile, encoder graph, prefill graph,
    and decode graph enabled, positive execution markers, zero unexpected eager
    fallback, and the exact-10-second gate.
+
+This list is the current feature-completion backlog for goal 1. The first
+encoder-graph implementation did not close item 2 because `910C-026` observed
+64 signature-mismatch eager fallbacks. Do not start the final three-repeat
+hard-target campaign until items 1 through 5 are complete.
+Single-arm C70 measurements collected while qualifying an item are authorized
+only as directional before/after evidence and must be labelled diagnostic.
 
 Repair qualification and final performance selection are separate decisions.
 Each path above must first become correct, stable, and observable. Only after
@@ -2305,12 +2381,20 @@ scope work is complete.
    server commit.
 3. Repeat minimal import, startup, batch 1, two-request, sequential, bounded
    concurrency, health, and memory gates in new processes.
-4. After eager correctness is stable, qualify the declared generation graph
-   mode and record every deviation from repository defaults before running the
-   [performance and realtime task](qwen3_asr_ascend_910b_performance_task.md).
-5. Compare one variable at a time against the frozen eager-NPU baseline. Retain
-   only changes that pass correctness, stability, and repeated performance
-   gates.
+4. Qualify each identified acceleration feature independently: prefill graph,
+   decode graph, NPU encoder graph, and torch compile. Record positive execution
+   markers, zero unexpected fallback, and every deviation from repository
+   defaults.
+5. Qualify the combined `ALL` profile with every identified acceleration
+   feature enabled. A disabled-feature compatibility profile cannot close this
+   step.
+6. Only after the `ALL` feature gate passes, run the full
+   [performance task](qwen3_asr_ascend_910b_performance_task.md), including the
+   soak and three fresh-process concurrency-70 repeats. Compare controlled
+   variants as needed, but the final accepted result must use the fully enabled
+   profile.
+7. Start the separate realtime implementation and qualification gate after the
+   offline path is correct and its remaining latency bottleneck is understood.
 
 ## Evidence record
 
@@ -2348,7 +2432,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-024C | handoff `0ce137dc`; no runtime edit | Quiescent post-`910C-024B` host; no service/model/benchmark/device mutation | Read-only five-minute HBM, process, device-node, health, and preserved-evidence attribution | Post-run HBM attribution and missing model-info audit | completed: outcome 2, identified holder | NPU context PID 2043369 retained 53,966 MB after Arm C70 was killed with `SIGKILL`; no manageable user process remained. Coarse log stats: encoder 251 batches/754 items, queue wait avg/max 1.24/13.26 s, encoder time 22.6 s; decode 100% graph replay across all 13 buckets; no pre/post rich model-info snapshots |
 | 910C-024D | `db19be76`; no runtime edit | Quiescent post-`910C-024C` host | Operator had terminated PID 2043369; no reboot or driver restart | Three-snapshot read-only recovery verification | passed | Both chips healthy at stable 4% HBM across t=0/10/20 s; PID 2043369 and other holders/workers absent; port 8000 free; no acceleration run started |
 | 910C-025A | `3ced6537`; no runtime edit | Frozen `910C-024A` exact10 corpus and `910C-024B` common workload | Two independent fresh-process current-code arms: all-eager E0 and guarded prefill+decode graph P | Acceleration screening and one C70 measurement per qualified arm | completed; P is the best measured configuration; hard target missed | E0 p95 2.641 s/31.52 req/s; P p95 1.771 s/48.39 req/s, a 49.6% p95 reduction and 23.1% throughput gain versus `910C-024B`; P remains 3.54x over the latency target and at 34.6% of required throughput; full cleanup and metric matrix were not included in the returned summary |
-| 910C-026 | pending handoff commit; code `fa5b8852` | Exact accepted `910C-025A` P stack plus NPU host-side encoder attention metadata and bounded lazy signature capture | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Focused/full tests, repeated batch one, 70-sample warmup, and one exact10 C70 measurement | authorized; pending | Positive encoder capture/replay and zero measured encoder fallback required; server code/package edits forbidden; graceful cleanup and HBM recovery remain hard gates |
+| 910C-026 | handoff `92fcf514`; code `fa5b8852` | Exact accepted `910C-025A` P stack plus NPU host-side encoder attention metadata and bounded lazy signature capture | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Focused/full tests, repeated batch one, 70-sample warmup, and one exact10 C70 measurement | feature qualification failed; later measurement diagnostic only | Focused 15 passed/1 skipped and model-info 4 passed; full Qwen suite had 11 failures but execution incorrectly continued. Batch-one capture/replay passed. C70 completed 700/700 at p95 1.652 s and 52.55 req/s, but 64 `npu_signature_mismatch` eager fallbacks violated the zero-fallback gate; local multi-signature repair required |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak

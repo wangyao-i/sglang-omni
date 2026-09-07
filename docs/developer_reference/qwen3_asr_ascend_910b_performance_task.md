@@ -264,8 +264,28 @@ capture and replay correctness, then a separate 70-sample warmup and one
 Any measured encoder eager fallback fails full feature qualification even when
 the diagnostic performance measurement completes.
 
+`910C-026` has now supplied that diagnostic result. Repeated batch one captured
+and replayed successfully with zero fallback, but the heterogeneous 700-request
+C70 corpus produced 64 counted `npu_signature_mismatch` eager fallbacks. The
+arm completed 700/700 at p95 1.652 seconds and 52.55 requests/s, the best
+directional result so far, but Encoder Graph remains unqualified. In addition,
+the full Qwen3-ASR suite reported 11 failures before the server continued, so
+the C70 result cannot override the failed stop condition. No final performance
+campaign is authorized from this result. A local bounded multi-signature or
+canonical-layout repair and a clean full-suite gate must precede the next
+hardware task.
+
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
+
+The project has two conjunctive goals. First, every currently identified
+acceleration path must be supported and the combined `ALL` profile must pass its
+functional/stability qualification. Second, that same fully enabled profile
+must meet the exact-10-second performance target. Until the first goal closes,
+any latency or throughput result is a diagnostic before/after measurement only;
+it must not be reported as the final hard-gate result. A profile that reaches a
+performance threshold by disabling encoder graph, prefill graph, decode graph,
+or torch compile does not satisfy project completion.
 
 For each server variant, run these levels in order with no request retries:
 
@@ -325,6 +345,22 @@ if a later A/B motivates a different optimized implementation. Do not call the
 disabled-feature baseline the final candidate merely because it is stable.
 The primary hard-target attempt uses the fully enabled combined profile, with
 positive execution evidence and zero unexpected fallback.
+
+The mandatory order is therefore:
+
+1. qualify encoder graph (the first `910C-026` attempt failed on 64 real-corpus
+   signature-mismatch fallbacks; a local follow-up repair is now required);
+2. repair and qualify torch compile, including the Dynamo/triton-ascend boundary
+   and every compiled/non-compiled decode bucket;
+3. requalify prefill and decode graph together with encoder graph and compile in
+   one `ALL` profile under cold-input concurrency 70;
+4. profile and, if necessary, narrow the execution guard without weakening the
+   `ALL` feature evidence;
+5. run the final sequential, concurrency ladder, ten-minute soak, and three
+   fresh-process C70 hard-target repeats on the accepted `ALL` profile.
+
+An item-level C70 run may accompany steps 1 through 4 to expose its performance
+direction and bottleneck. It is intentionally not a substitute for step 5.
 
 ## Public regression run
 
