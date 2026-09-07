@@ -2757,6 +2757,81 @@ documentation, package, site-package, or commit changes during `910C-032`.
 Runtime command-line values declared by the table are authorized; editing a
 profile file is not.
 
+### `910C-032` result and Torch Compile stage-localization task `910C-033`
+
+`910C-032` used clean SGLang-Omni `9c27cca9` and SGLang
+`5403d1f7dad0692b5fdd26c1dafc4c8192935303`. The two new NPU value-parity
+cases passed, along with the decode-runner and declared Omni suites. The
+external `sgl-kernel-npu` split-QKV/RMSNorm/RoPE implementation, its registered
+opaque custom-op boundary, and the `npugraph_ex`-compiled invocation were
+bit-identical for both compiled batch sizes 1 and 2. Rebuilding or replacing
+`sgl-kernel-npu` is therefore neither required nor authorized.
+
+The subsequent deterministic exact10 accuracy matrix completed five meaningful
+arms. `A0` (encoder, prefill, and decode graphs on; Torch Compile off) was
+correct with WER 0.0183 and no garbled output. Every compile-enabled arm was
+incorrect: `T1` WER 1.3923 with 70/70 garbled outputs, `T2` 1.3929 with 70/70,
+`T70` 1.4198 with 70/70, and `A1` 1.4106 with 70/70. `A2` was not run because
+`A1` already established the all-feature compile failure and `T1/T2/T70`
+already excluded batch-size and encoder/prefill interactions. This proves the
+fault lies beyond the split-QKV opaque op, is independent of compile batch size,
+and is independent of encoder/prefill graph enablement. It does not yet prove
+whether the remaining fault is the compile-safe fused-op state, Dynamo graph
+semantics, or TorchAir lowering.
+
+Local SGLang commit `a7b279da6b0e858cb074e5ba6e8e5f144c1f84d4` introduces an
+explicit diagnostic-only environment selector in `patch_model_npu`, with CPU
+tests for its normal and diagnostic dispatch. It preserves production behavior
+when unset:
+
+- `SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=prepared-eager` enters the identical
+  compile-safe fused-op context but calls the uncompiled `model.forward`;
+- `SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=dynamo-eager` keeps
+  `torch.compile(fullgraph=True, dynamic=False)` but uses PyTorch's `eager`
+  backend instead of TorchAir `npugraph_ex`.
+
+`910C-033` is a two-arm numerical-localization task, not a performance run.
+Use Git only: fetch and check out the exact handoff commit in SGLang-Omni and
+SGLang commit `a7b279da6b0e858cb074e5ba6e8e5f144c1f84d4`; leave the installed
+`sgl-kernel-npu` unchanged. The server must make no source, test, configuration,
+documentation, package, site-package, or commit changes. Before startup, require
+clean tracked worktrees, the existing headless OpenCV invariant, no holder or
+service process, port availability, and two stable HBM snapshots at or below
+5%. Run the prior SGLang fused-op/decode-runner suites, the new patch-model
+dispatch tests, the Omni focused suites, and the complete Qwen3-ASR suite. Stop
+before hardware on the first test collection or test failure.
+
+For each arm, use a fresh service process and the `T1` profile from `910C-032`:
+encoder graph off, prefill graph off, decode graph enabled through bucket 70,
+Torch Compile enabled with compile maximum batch 1, all other model, corpus,
+seed, sampling, memory, worker, timeout, and exact10 settings unchanged. Use
+the same deterministic 70 warmup and 140 measured exact10 inputs, require all
+140 completions, positive decode-graph replay, zero unexpected eager fallback,
+and graceful cleanup. Do not start `ALL`, C70, realtime, package actions, or
+any third arm.
+
+| Arm | Sole additional environment value | Required positive marker |
+|---|---|---|
+| `D0` | `SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=prepared-eager` | warning that compile-safe dispatch ran without `torch.compile` |
+| `D1` | `SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=dynamo-eager` | warning that `fullgraph` Dynamo ran with backend `eager` |
+
+For both arms return only sanitized aggregate evidence: completion/accounting,
+WER, garbled-output count, normalized equality against the recorded correct
+`A0` control, decode replay/eager counts, forbidden-signature counts, the
+diagnostic marker, and cleanup state. Retain raw audio, text, request IDs, and
+logs server-local. Interpret outcomes mechanically:
+
+- bad `D0`: the defect is in the compile-safe fused-op/context state before
+  Dynamo or TorchAir; the next local repair must inventory that state;
+- good `D0`, bad `D1`: the defect is in Dynamo's full-graph handling of the
+  remaining model path or custom-op alias/state contract;
+- good `D0` and `D1`, with the recorded bad `T1`: the defect is isolated to
+  TorchAir `npugraph_ex` lowering/runtime; retain the exact compiler config and
+  first divergence evidence for the framework-owned repair;
+- a clean `D0`/`D1` result does not qualify Torch Compile or permit a
+  performance claim. The normal `npugraph_ex` path must be repaired, then
+  requalified through TC and `ALL`.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -2937,7 +3012,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-029 | handoff `a389a000`; SGLang `d7e0d517e` plus an uncommitted server edit | Complete local Torch Compile boundary repair, bounded encoder signatures, graph guard, and positive compile model-info | TC isolation, then fully enabled ALL profile | Compile/non-compile buckets 1/32/64/70; deterministic encoder saturation; ALL batch1/conc2 and 700-request C70; conditional full campaign | failed protocol and feature gate; not qualified | Prefill-disabled TC exposed missing `attention_layers`; server then bypassed the compile context and saw ATB PagedAttention failure. It continued contrary to the stop rule with compile off, so the 140-request hang is diagnostic only and was not an ALL result |
 | 910C-030 | `d0d55e8c`; SGLang `93d312480`; no server edit | Decode-only attention/MoE metadata initialization on the prior compile-safe attention boundary | TC isolation before conditional ALL | Full decode capture list 1 through 70 | partial progress; TC failed at compiled batch 1; ALL correctly not run | SGLang 20, Omni focused 15/1 skipped, and Qwen3-ASR 594/3 skipped passed. Buckets 70 through 2 captured; batch 1 failed when Dynamo traced external `split_qkv_rmsnorm_rope -> get_device_properties`. Missing metadata and ATB PagedAttention signatures were absent |
 | 910C-031 | `9c27cca9`; SGLang `44f9e40b5`; no authorized server edit | Opaque custom-op boundary around the unchanged installed fused QKV/RMSNorm/RoPE kernel | TC isolation, fully enabled ALL, exact10 C70 diagnostic | capture/scheduling passed; numerical correctness failed | TC captured all 13 buckets and drained 1/8/32/70 with no forbidden signature. ALL completed 700/700 with all graph paths positive and zero encoder fallback, but WER was 1.4464 with corrupted output; p95 2.142 s is invalid performance evidence. A later dirty removal of `fullgraph=True` did not restore accuracy and is rejected |
-| 910C-032 | handoff commit containing this row; SGLang `5403d1f7d` | `910C-031` plus compiled fused-op value-parity tests | NPU op parity, then six-arm TC/ALL compile-bucket accuracy matrix | authorized; pending | First compare external kernel and compiled opaque op at bs1/2. If it passes, run T1/T2/T70 and A0/A1/A2 on the same 140 exact10 inputs, preserving per-sample comparisons and making zero server edits |
+| 910C-032 | handoff `f56cc244`; SGLang `5403d1f7d`; no server edit | Compiled external-kernel/custom-op value parity plus bounded TC/ALL matrix | NPU op parity, then T1/T2/T70/A0/A1 exact10 accuracy arms | completed; Torch Compile incorrect | Both parity cases passed, but every compile-on arm garbled 70/70 with WER 1.3923--1.4198; A0 compile-off was correct at WER 0.0183. Compile defect is independent of batch size and encoder/prefill graphs |
+| 910C-033 | handoff commit containing this row; SGLang `a7b279da6` | `910C-032` plus diagnostic compile-stage selector | D0 prepared-eager and D1 Dynamo-eager T1-profile exact10 accuracy arms | authorized; pending | Isolate compile-safe fused-op state vs Dynamo semantics vs TorchAir lowering without server edits or performance claims |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
