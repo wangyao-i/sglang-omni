@@ -67,9 +67,16 @@ closing that cleanup exception. `910C-025A` then qualified guarded prefill plus
 decode graph as the best compatible profile at 1.771-second p95 and 48.39
 requests/s. `910C-026` improved the diagnostic C70 result to 1.652-second p95
 and 52.55 requests/s with Encoder Graph enabled, but 64 counted encoder
-signature-mismatch eager fallbacks failed feature qualification. This qualifies
-the explicit A3 functional candidates and diagnostic before-states only. Fully
-accelerated performance and realtime remain unqualified**.
+signature-mismatch eager fallbacks failed feature qualification. `910C-027`
+then removed those fallbacks with bounded multi-signature capture, but its
+signature count grew from five to eight during measurement, so deterministic
+pre-measurement saturation remains required. Local SGLang commit `d7e0d517e`
+now repairs the compile-safe fused-op and NPU decode-attention boundaries, but
+has not yet been hardware-qualified. Combined task `910C-029` delivers that
+complete code with the encoder changes and tests TC isolation plus `ALL` in one
+server sequence. This qualifies the explicit A3 functional candidates and
+diagnostic before-states only. Fully accelerated performance and realtime
+remain unqualified**.
 
 The first remote run used `Ascend910_9382`, which the current Ascend ecosystem
 identifies as A3 hardware. The project owner states that its single-card
@@ -84,8 +91,8 @@ same software stack on a physical 910B.
 |---|---|---|
 | Ascend installation | NPU manifest, precheck, and installation guide are implemented | Precheck passed on the compute-equivalent A3 performance proxy; runtime compatibility has not been repeated on a physical 910B |
 | Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager batch 1, two-concurrent, ten-sequential, health, shutdown, and restart gates passed after repairing the OpenCV environment; not yet started on 910B |
-| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang | In the explicit compile-disabled, prefill-eager profile, A3 decode capacities 1 through 70 captured and the cold-input ladder passed through concurrency 70 with zero eager fallback; bucket 70 replayed 11 times. With compile enabled, batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; the repository-default graph profile remains unqualified |
-| Encoder graph | Local repair `fa5b8852` keeps NPU sequence-boundary metadata host-side and lazily captures a real layout; enabled by default | `910C-026` removed error 107030 and proved repeated batch-one capture/replay, but the one-signature-per-token-bucket policy produced 64 counted eager fallbacks on the 700-request corpus; bounded heterogeneous-signature support remains unqualified |
+| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang; local SGLang repair `d7e0d517e` adds compile-safe fused-op and NPU decode-attention boundaries | In the explicit compile-disabled, prefill-eager profile, A3 decode capacities 1 through 70 captured and the cold-input ladder passed through concurrency 70 with zero eager fallback; bucket 70 replayed 11 times. Historical compile-enabled batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; the local repair awaits `910C-029` hardware qualification |
+| Encoder graph | Local repairs `fa5b8852` and `9080b901` keep NPU sequence-boundary metadata host-side, lazily capture real layouts, and retain a bounded heterogeneous-signature cache | `910C-027` completed C70 with zero eager fallback and capture failure, but signature count grew 5 to 8 during measurement. `910C-029` must saturate 8/8 before measuring the combined profile |
 | Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; local commit `29ca236f` adds a FIFO device-execution guard shared only by the Qwen3-ASR encoder batch and generation forward when NPU generation graph is enabled. Cold-input concurrency 8, 16, 32, 64, and 70 completed on clean processes with balanced guard events and state drain |
 | SSE transcription | Emits decoder-token deltas after the complete upload has entered one engine request | Not continuous audio-input realtime |
 | Realtime WebSocket | Buffers PCM16 until VAD stops, then runs a response pass followed by a transcription pass | Does not meet the incremental-ASR target by inspection; not yet verified on 910B |
@@ -2384,6 +2391,96 @@ resolved profile/HEADs, C70 request accounting/WER/latency/throughput/RTFx/NPU
 metrics, forbidden signatures, and cleanup state. Raw data remains server-local.
 Do not enable torch compile or realtime in `910C-028`.
 
+### Combined code handoff: `910C-029` Torch Compile and `ALL`
+
+`910C-028` is superseded before execution by this combined task. The project
+owner has requested one complete, locally reviewed code delivery followed by
+one server qualification sequence, rather than a code-edit/run round trip for
+each acceleration feature. This changes task batching, not source authority:
+the isolated-server agent still must not modify source, tests, configuration,
+documentation, packages, or site-packages, and must not commit. On any code
+defect it must return evidence to the local owner instead of repairing it.
+
+Transfer and check out these complete source snapshots together:
+
+- SGLang-Omni code `f10067cf` plus the handoff commit containing this task;
+- SGLang code `d7e0d517e9c6f3537078c53a504bcf8530e4cebf`, based on the
+  previously qualified diagnostic lineage `9dbc4f89c` / upstream base
+  `71de97b264`.
+
+The SGLang change keeps fused operators in their compile-safe form while
+`torch.compile` traces, establishes an NPU capture context for decode, and
+routes decode attention through the registered graph-safe custom-op boundary.
+It is intended to remove both historical compile-enabled failures: the batch-1
+Dynamo trace into Triton-Ascend `NPUUtils.get_device_properties`, and the
+non-compiled large-bucket ATB `PagedAttentionOperation setup failed`. The Omni
+change adds positive model-info evidence for `torch_compile_enabled` and
+`compile_bs`; absence of the historical errors alone is not acceptance.
+
+Run the following as one authorized task, using a fresh service process for
+each service arm. Stop the sequence at the first failed gate, retain raw
+evidence server-local, and return one sanitized summary. Do not improvise a
+patch or dependency change.
+
+1. Preflight both exact HEADs and clean tracked worktrees. Verify that the
+   editable SGLang import resolves to the transferred SGLang tree without a
+   dependency-resolving reinstall. Recheck the hard OpenCV invariant:
+   `opencv-python` absent, headless OpenCV present, fresh-process `cv2` import
+   succeeds, and the loaded extension has no `libGL` dependency. Require port
+   8000 free, no worker/client/context holder, both chips healthy, and HBM no
+   more than 5%.
+2. Before hardware, run the SGLang decode-graph-runner tests containing the new
+   compile-boundary cases, the Omni model-info/encoder-graph focused tests, and
+   the complete Qwen3-ASR suite. Return exact pass/fail/skip counts. Stop before
+   service startup on any collection or test failure.
+3. Run a **TC isolation arm** with encoder graph disabled, prefill graph
+   disabled, decode graph enabled through bucket 70, torch compile enabled,
+   `torch_compile_max_bs=32`, the execution guard active, encoder batch size 8,
+   request-build workers 8, and `max_running_requests=70`. Require the resolved
+   profile and rich model-info to report `torch_compile_enabled=true`,
+   `compile_bs=[1,2,4,8,12,16,24,32]` (subject only to an explicitly reported
+   alignment filter), and capture buckets through 70. Run drained exact10 waves
+   at client concurrency 1, 32, 64, and 70. Require HTTP success and unchanged
+   accuracy, positive replay deltas at a compiled bucket and at buckets 64 and
+   70, zero eager fallback, and zero Dynamo skipped-function, Triton device-
+   property, ATB PagedAttention, graph-capture, ACL/GE, OOM, or device-error
+   signature. This closes Torch Compile qualification only if both compiled and
+   non-compiled decode buckets execute successfully.
+4. Gracefully stop the TC arm and establish a clean device baseline. Start one
+   fresh **ALL arm** with encoder graph, prefill graph, decode graph, and torch
+   compile all enabled; retain the same guard, batch/workers/capacity/memory,
+   exact10 corpus, timeout, and accuracy settings. Require positive startup
+   evidence for all four features, not merely configuration text.
+5. Before measuring ALL, deterministically saturate the bounded encoder graph:
+   issue separate drained exact10 waves at concurrency 1 through 8, then up to
+   three excluded 70-sample C70 waves. Continue only after
+   `npu_signature_count=8` and two consecutive drained snapshots have unchanged
+   signature and captured-graph counts. Any encoder eager fallback, capture
+   failure, device error, or failure to stabilize aborts the arm.
+6. Run batch 1 and concurrency 2 correctness smokes, then one 700-request
+   exact10 C70 go/no-go measurement. Require 700/700 valid, unchanged WER,
+   positive encoder/prefill/decode replay, positive compiled-bucket execution,
+   stable encoder graph counts, zero unexpected eager fallback/capture growth,
+   no timeout/OOM/device error, and complete request/state drain. Return p50,
+   p90, p95, p99, max, throughput, input-audio-seconds/s, RTFx, stage timings,
+   guard wait/hold statistics, NPU utilization/HBM/power, and every graph/
+   compile counter delta.
+7. If and only if that ALL C70 arm meets p95 below 0.500 seconds, at least 140
+   requests/s, and every correctness/feature condition, continue in this same
+   authorization with the remaining formal campaign: 100 sequential requests;
+   concurrency 8, 16, 32, 64, and 70; a ten-minute C70 soak; and two additional
+   fresh-process 700-request C70 measurements so that three fresh-process C70
+   results exist. Each C70 repeat must independently meet the hard target. If
+   the first ALL C70 arm misses, stop and return its bottleneck evidence rather
+   than spending time on redundant repeats.
+8. Use graceful shutdown for every arm. Do not use `SIGKILL` as normal cleanup.
+   Require port/process release and three healthy HBM snapshots at or below 5%.
+   If bounded forced cleanup is unavoidable, attribute any retained NPU context
+   and report it instead of starting the next arm.
+
+Realtime remains outside `910C-029`. It begins only after the offline ALL path
+is functionally qualified and its remaining performance gap is understood.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -2560,7 +2657,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-025A | `3ced6537`; no runtime edit | Frozen `910C-024A` exact10 corpus and `910C-024B` common workload | Two independent fresh-process current-code arms: all-eager E0 and guarded prefill+decode graph P | Acceleration screening and one C70 measurement per qualified arm | completed; P is the best measured configuration; hard target missed | E0 p95 2.641 s/31.52 req/s; P p95 1.771 s/48.39 req/s, a 49.6% p95 reduction and 23.1% throughput gain versus `910C-024B`; P remains 3.54x over the latency target and at 34.6% of required throughput; full cleanup and metric matrix were not included in the returned summary |
 | 910C-026 | handoff `92fcf514`; code `fa5b8852` | Exact accepted `910C-025A` P stack plus NPU host-side encoder attention metadata and bounded lazy signature capture | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Focused/full tests, repeated batch one, 70-sample warmup, and one exact10 C70 measurement | feature qualification failed; later measurement diagnostic only | Focused 15 passed/1 skipped and model-info 4 passed; full Qwen suite had 11 failures but execution incorrectly continued. Batch-one capture/replay passed. C70 completed 700/700 at p95 1.652 s and 52.55 req/s, but 64 `npu_signature_mismatch` eager fallbacks violated the zero-fallback gate; local multi-signature repair required |
 | 910C-027 | handoff `65273c98`; code `9080b901` | Exact `910C-026` stack plus globally bounded NPU encoder multi-signature cache and legacy-mock guard compatibility | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Signature warm-up at 1/2/4/8 and C70; one 700-request C70 measurement | partial: functional fallback removed; warm-up/performance qualification failed | C70 had zero encoder fallback/capture failure and clean 4% HBM recovery, but signatures grew 5 to 8 during measurement. Diagnostic p95 2.685 s, 50.60 req/s, RTFx 506; exact test counts were omitted from the returned summary |
-| 910C-028 | pending handoff commit; code `9080b901` | Exact `910C-027` stack and profile; no code change | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Deterministic encoder-batch warm-up 1 through 8, bounded repeated C70 saturation, then one C70 measurement | authorized; pending | Require stable 8/8 signatures before measurement, no measured capture growth/fallback/failure, positive all-graph replay, 700/700 validity, and graceful HBM recovery |
+| 910C-028 | handoff `a148f8c6`; code `9080b901` | Exact `910C-027` stack and profile; no code change | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Deterministic encoder-batch warm-up 1 through 8, bounded repeated C70 saturation, then one C70 measurement | superseded before execution | Folded into `910C-029` so the server receives the complete Torch Compile and Encoder Graph code together |
+| 910C-029 | code `f10067cf` plus this handoff commit; SGLang `d7e0d517e` | Complete local Torch Compile boundary repair, bounded encoder signatures, graph guard, and positive compile model-info | TC isolation, then fully enabled ALL profile | Compile/non-compile buckets 1/32/64/70; deterministic encoder saturation; ALL batch1/conc2 and 700-request C70; conditional full campaign | authorized; pending | Server is execution-only. Require all four acceleration features positive, zero unexpected fallback/capture growth, 700/700 validity, and run remaining repeats only if the first ALL C70 meets p95 <0.500 s and >=140 req/s |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak

@@ -293,6 +293,17 @@ until two drained snapshots are stable at 8/8 before measuring. Do not raise
 the memory bound or accept measured capture growth unless new evidence shows
 that this deterministic saturation cannot cover the frozen workload.
 
+The standalone `910C-028` run is superseded before execution by combined task
+`910C-029`. That task transfers the complete local SGLang Torch Compile repair
+and the SGLang-Omni encoder/model-info changes in one delivery. It first
+qualifies Torch Compile in isolation, then saturates Encoder Graph and runs an
+`ALL` arm with encoder, prefill, decode graph, and Torch Compile enabled. A
+single 700-request C70 ALL measurement is the fast go/no-go point. Only when it
+already meets the latency, throughput, correctness, and feature-evidence gates
+does the same authorization continue into the sequential/ladder/soak and two
+additional fresh-process repeats. This combines independent checks without
+allowing the server operator to edit code or dependencies.
+
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
 
