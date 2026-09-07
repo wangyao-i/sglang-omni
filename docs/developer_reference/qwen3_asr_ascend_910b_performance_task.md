@@ -304,6 +304,16 @@ does the same authorization continue into the sequential/ladder/soak and two
 additional fresh-process repeats. This combines independent checks without
 allowing the server operator to edit code or dependencies.
 
+`910C-029` stopped being valid when its TC arm exposed missing decode-only
+`attention_layers` metadata and the server bypassed the compile context with an
+uncommitted edit. The resulting ATB failure tested the bypass, not the intended
+custom-op path. A later compile-disabled arm was neither authorized after the
+first failure nor an `ALL` profile. Corrected task `910C-030` uses local SGLang
+commit `93d312480`, which initializes the required layer metadata even when
+prefill graph is disabled. It repeats TC first and proceeds to ALL only after TC
+passes. Encoder saturation is strictly drained between waves and may never
+exceed 70 outstanding requests.
+
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
 

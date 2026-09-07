@@ -70,11 +70,13 @@ and 52.55 requests/s with Encoder Graph enabled, but 64 counted encoder
 signature-mismatch eager fallbacks failed feature qualification. `910C-027`
 then removed those fallbacks with bounded multi-signature capture, but its
 signature count grew from five to eight during measurement, so deterministic
-pre-measurement saturation remains required. Local SGLang commit `d7e0d517e`
-now repairs the compile-safe fused-op and NPU decode-attention boundaries, but
-has not yet been hardware-qualified. Combined task `910C-029` delivers that
-complete code with the encoder changes and tests TC isolation plus `ALL` in one
-server sequence. This qualifies the explicit A3 functional candidates and
+pre-measurement saturation remains required. `910C-029` then exposed that the
+decode-only TC profile lacked attention-layer metadata; its later server-side
+context bypass and compile-disabled arm violated the source-authority and stop
+contracts, so neither arm qualified. Local SGLang commit `93d312480` now adds
+the missing metadata initialization on top of the compile-safe fused-op and NPU
+decode-attention boundaries. Corrected combined task `910C-030` tests TC first
+and only then `ALL`. This qualifies the explicit A3 functional candidates and
 diagnostic before-states only. Fully accelerated performance and realtime
 remain unqualified**.
 
@@ -91,7 +93,7 @@ same software stack on a physical 910B.
 |---|---|---|
 | Ascend installation | NPU manifest, precheck, and installation guide are implemented | Precheck passed on the compute-equivalent A3 performance proxy; runtime compatibility has not been repeated on a physical 910B |
 | Qwen3-ASR model path | Single-stage model, batching, pre-LM encoder, SSE output, and long-audio upload chunking are implemented | A3 eager batch 1, two-concurrent, ten-sequential, health, shutdown, and restart gates passed after repairing the OpenCV environment; not yet started on 910B |
-| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang; local SGLang repair `d7e0d517e` adds compile-safe fused-op and NPU decode-attention boundaries | In the explicit compile-disabled, prefill-eager profile, A3 decode capacities 1 through 70 captured and the cold-input ladder passed through concurrency 70 with zero eager fallback; bucket 70 replayed 11 times. Historical compile-enabled batch 1 failed at Dynamo/triton-ascend and batch 64 failed at ATB `PagedAttentionOperation`; the local repair awaits `910C-029` hardware qualification |
+| Generation graph | Enabled by the Qwen3-ASR defaults and delegated to SGLang; local SGLang repairs `d7e0d517e` and `93d312480` add compile-safe fused-op/NPU decode-attention boundaries and decode-only layer metadata | In the explicit compile-disabled, prefill-eager profile, A3 decode capacities 1 through 70 captured and the cold-input ladder passed through concurrency 70 with zero eager fallback; bucket 70 replayed 11 times. `910C-029` exposed missing metadata, then bypassed the intended context and reproduced ATB failure; corrected local code awaits `910C-030` hardware qualification |
 | Encoder graph | Local repairs `fa5b8852` and `9080b901` keep NPU sequence-boundary metadata host-side, lazily capture real layouts, and retain a bounded heterogeneous-signature cache | `910C-027` completed C70 with zero eager fallback and capture failure, but signature count grew 5 to 8 during measurement. `910C-029` must saturate 8/8 before measuring the combined profile |
 | Pre-LM encoder service | NPU tensors use the default device stream; the dedicated stream path is CUDA-only | A3 eager functionality and restart stability passed; local commit `29ca236f` adds a FIFO device-execution guard shared only by the Qwen3-ASR encoder batch and generation forward when NPU generation graph is enabled. Cold-input concurrency 8, 16, 32, 64, and 70 completed on clean processes with balanced guard events and state drain |
 | SSE transcription | Emits decoder-token deltas after the complete upload has entered one engine request | Not continuous audio-input realtime |
@@ -2486,6 +2488,74 @@ patch or dependency change.
 Realtime remains outside `910C-029`. It begins only after the offline ALL path
 is functionally qualified and its remaining performance gap is understood.
 
+### `910C-029` result and corrected combined task `910C-030`
+
+`910C-029` did not produce a qualification result. The TC isolation arm first
+exposed a real local defect: with prefill graph disabled, SGLang had never
+populated `model_runner.attention_layers`, so the new NPU compile context raised
+`AttributeError`. The server then made an unauthorized uncommitted edit that
+returned an empty context when the metadata was absent. That edit removed the
+graph-safe attention boundary under test, after which capture predictably fell
+back to the ATB path and failed at `PagedAttentionOperation`. Therefore this
+ATB failure does not disprove the intended local boundary; it demonstrates
+that bypassing it recreates the historical failure.
+
+The server also continued after the TC first failure and ran a compile-disabled
+encoder+prefill+decode arm. This violated the stop rule and was not the declared
+`ALL` profile. Its 140 outstanding requests and unresponsive shutdown are
+retained as diagnostic evidence only. They do not establish a new execution-
+guard defect: the existing encoder service holds the shared guard around its
+entire `_execute_batch`, including encoder-graph capture/replay, and earlier
+`910C-027` completed the encoder+prefill+decode C70 measurement. Because 140
+pending requests exceed one declared 70-request wave, the next run must prove
+drain before submitting another wave and must never exceed 70 outstanding.
+
+Local SGLang commit `93d312480` fixes the actual TC defect. Before decode graph
+capture begins, NPU torch compile now derives the same attention/MoE layer
+metadata normally published by prefill-graph setup. It preserves already
+initialized metadata and fails explicitly if the decoder attention map is
+incomplete; it never silently returns an empty compile context. Three CPU unit
+tests cover decode-only initialization, preservation, and incomplete-map
+failure. Local compileall, fatal Ruff checks, and `git diff --check` pass;
+Windows cannot collect the Linux SGLang suite because the standard `resource`
+module is unavailable, so the isolated Linux test gate remains mandatory.
+
+`910C-030` replaces `910C-029` and remains one combined server interaction.
+Use Git only: SGLang-Omni `origin/qwen3-asr-910b-opt` at the handoff commit
+containing this task, and SGLang `origin/codex/qwen3-asr-torch-compile` at exact
+commit `93d312480`. The server must discard its uncommitted 029 edit by using a
+fresh clean worktree or by stopping and asking the operator to provide one; the
+agent itself must not reset, overwrite, stash, or repair a dirty checkout.
+
+Run the same preflight and test gates from `910C-029`, including the three new
+SGLang metadata tests. Then:
+
+1. Repeat the TC isolation arm exactly as specified in `910C-029`. Require no
+   `AttributeError`, require non-empty attention metadata through the compile
+   context, require model-info `torch_compile_enabled=true`, and exercise
+   drained concurrency 1, 32, 64, and 70 waves. The old Dynamo, Triton device-
+   property, and ATB PagedAttention signatures must all be zero. Stop on the
+   first failure; do not edit code and do not start ALL.
+2. Only if TC passes, gracefully stop it, prove the device returned to baseline,
+   and run the declared fully enabled ALL arm. Compile must remain enabled; a
+   compile-disabled arm is not ALL.
+3. For encoder saturation, submit concurrency 1 through 8 one drained wave at
+   a time. Submit at most one C70 saturation wave, wait for all request and
+   scheduler counters to drain to zero, and capture model-info before deciding
+   whether another is needed. Never allow more than 70 outstanding requests.
+   If a wave has no completion progress for 90 seconds, capture guard owner/
+   ticket/wait/hold, encoder signature counters, request states, and graph
+   counters, then stop; do not submit another wave.
+4. If ALL stabilizes at 8/8, continue with the batch1/conc2 and one 700-request
+   C70 go/no-go measurement from `910C-029`. The conditional full performance
+   campaign and cleanup rules remain unchanged.
+
+Return the exact checked-out HEADs, confirmation that both worktrees stayed
+clean, test counts, resolved profiles, every target-path counter, per-wave
+drain timeline, first complete failure if any, and cleanup state. The isolated
+agent must make zero source, test, config, documentation, package, or commit
+changes during `910C-030`.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -2663,7 +2733,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-026 | handoff `92fcf514`; code `fa5b8852` | Exact accepted `910C-025A` P stack plus NPU host-side encoder attention metadata and bounded lazy signature capture | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Focused/full tests, repeated batch one, 70-sample warmup, and one exact10 C70 measurement | feature qualification failed; later measurement diagnostic only | Focused 15 passed/1 skipped and model-info 4 passed; full Qwen suite had 11 failures but execution incorrectly continued. Batch-one capture/replay passed. C70 completed 700/700 at p95 1.652 s and 52.55 req/s, but 64 `npu_signature_mismatch` eager fallbacks violated the zero-fallback gate; local multi-signature repair required |
 | 910C-027 | handoff `65273c98`; code `9080b901` | Exact `910C-026` stack plus globally bounded NPU encoder multi-signature cache and legacy-mock guard compatibility | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Signature warm-up at 1/2/4/8 and C70; one 700-request C70 measurement | partial: functional fallback removed; warm-up/performance qualification failed | C70 had zero encoder fallback/capture failure and clean 4% HBM recovery, but signatures grew 5 to 8 during measurement. Diagnostic p95 2.685 s, 50.60 req/s, RTFx 506; exact test counts were omitted from the returned summary |
 | 910C-028 | handoff `a148f8c6`; code `9080b901` | Exact `910C-027` stack and profile; no code change | Encoder, prefill and decode graphs enabled; compile disabled; guard active | Deterministic encoder-batch warm-up 1 through 8, bounded repeated C70 saturation, then one C70 measurement | superseded before execution | Folded into `910C-029` so the server receives the complete Torch Compile and Encoder Graph code together |
-| 910C-029 | code `f10067cf` plus this handoff commit; SGLang `d7e0d517e` | Complete local Torch Compile boundary repair, bounded encoder signatures, graph guard, and positive compile model-info | TC isolation, then fully enabled ALL profile | Compile/non-compile buckets 1/32/64/70; deterministic encoder saturation; ALL batch1/conc2 and 700-request C70; conditional full campaign | authorized; pending | Server is execution-only. Require all four acceleration features positive, zero unexpected fallback/capture growth, 700/700 validity, and run remaining repeats only if the first ALL C70 meets p95 <0.500 s and >=140 req/s |
+| 910C-029 | handoff `a389a000`; SGLang `d7e0d517e` plus an uncommitted server edit | Complete local Torch Compile boundary repair, bounded encoder signatures, graph guard, and positive compile model-info | TC isolation, then fully enabled ALL profile | Compile/non-compile buckets 1/32/64/70; deterministic encoder saturation; ALL batch1/conc2 and 700-request C70; conditional full campaign | failed protocol and feature gate; not qualified | Prefill-disabled TC exposed missing `attention_layers`; server then bypassed the compile context and saw ATB PagedAttention failure. It continued contrary to the stop rule with compile off, so the 140-request hang is diagnostic only and was not an ALL result |
+| 910C-030 | code `f10067cf` plus this handoff commit; SGLang `93d312480` | `910C-029` stack plus local decode-only attention/MoE metadata initialization; no server edit | TC isolation, then conditionally fully enabled ALL | Repeat TC buckets 1/32/64/70; only on pass run drained encoder saturation and ALL C70 go/no-go; conditional full campaign | authorized; pending | Require clean Git checkouts, non-empty compile context, zero historical TC signatures, at most 70 outstanding, drain between waves, all four acceleration features positive, and zero server modifications |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
