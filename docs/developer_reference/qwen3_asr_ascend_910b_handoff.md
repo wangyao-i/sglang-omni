@@ -2832,6 +2832,68 @@ logs server-local. Interpret outcomes mechanically:
   performance claim. The normal `npugraph_ex` path must be repaired, then
   requalified through TC and `ALL`.
 
+### `910C-033` result and NPU TopK dispatch-repair task `910C-034`
+
+`910C-033` completed both requested numerical-localization arms with the
+declared suites passing. `D0` (prepared-eager) and `D1` (Dynamo with the eager
+backend) each completed 140/140 requests but produced garbled output for every
+request, with WER 1.3929. This excludes both Dynamo and TorchAir as the first
+cause: the fault is active while compile-safe fused-op dispatch is selected.
+It does **not** prove that `leave_torch_compile()` fails, because the wrong
+output was generated while the context was still active. The installed
+`sgl-kernel-npu` remains value-parity qualified and must not be rebuilt.
+
+Local SGLang commit `3c389d2f1` changes only `TopK`'s NPU compile policy. The
+generic batch-one compile policy previously replaced NPU `TopK.forward_npu`
+with `forward_native`. On NPU, the existing route is composed of
+`torch.ops.npu` custom-op boundaries and is valid for the outer Dynamo trace;
+it also preserves the eager routing contract. The native replacement mutates
+`TopKConfig.torch_native` and is the first identified compile-safe state change
+that can explain the `D0` failure. The new focused unit test asserts that NPU
+keeps its existing dispatch for compile batch sizes one and two while the
+non-NPU policy is unchanged. This is a bounded hypothesis repair, not a claim
+that all fused-op state has been exhaustively cleared.
+
+`910C-034` is a conditional, correctness-only task. Use Git only: fetch the
+SGLang-Omni branch at the handoff commit containing this task and fetch
+`origin/codex/qwen3-asr-torch-compile` at exact commit `3c389d2f1`. Do not
+modify source, tests, configuration files, documentation, packages,
+site-packages, commits, or the installed `sgl-kernel-npu` package. Before each
+fresh service process, require clean tracked worktrees, the headless-OpenCV
+invariant, no holder/service process, port availability, and two stable HBM
+snapshots at or below 5%. If an NPU driver holder remains from `910C-033`, stop
+and request operator cleanup; do not use `SIGKILL`, reboot, or restart a driver.
+
+1. Run the SGLang TopK dispatch test, prior fused-op/decode-runner tests, Omni
+   focused encoder/model-info tests, and the complete Qwen3-ASR suite. Stop
+   before service startup on any collection or test failure.
+2. In a fresh `D0-R` service, repeat the exact `910C-033` `D0` profile:
+   encoder and prefill graphs disabled, decode graph through bucket 70, compile
+   maximum batch one, and
+   `SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=prepared-eager`. Run the fixed 70-item
+   warm-up and 140 exact10 measured requests. Require all completions, zero
+   garbled outputs, WER no worse than the accepted compile-off control plus
+   0.01 absolute, positive decode replay, zero unexpected eager fallback, and
+   the diagnostic marker. On any failure, stop; do not start later arms.
+3. Conditional on `D0-R` passing, use a fresh `T1-R` service with the same
+   profile but without the diagnostic environment value, thus exercising normal
+   `npugraph_ex` compile. Require the same accuracy/accounting criteria plus
+   all 13 decode buckets captured and zero historical Dynamo, ATB, ACL/GE, OOM,
+   or graph-fallback signatures. Stop on failure.
+4. Conditional on `T1-R` passing, use a fresh `A1-R` service with encoder,
+   prefill, decode, and Torch Compile all enabled; retain the execution guard
+   and the deterministic encoder-signature warm-up already required by
+   `910C-031`. Run the same 140-request correctness set. Require zero encoder
+   capture failures/fallbacks, positive replay on all enabled graph paths,
+   normal output quality, and clean drain. This is not a C70 performance run.
+
+For every completed arm return sanitized completion/error accounting, WER,
+garbled-output count, graph capture/replay/eager counters, TopK focused-test
+result, forbidden-signature counts, and teardown state. Retain transcripts,
+audio, paths, request IDs, and logs server-local. A successful `A1-R` closes
+the Torch Compile functional-correctness blocker only; exact10 C70 performance
+is separately authorized after it.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3013,7 +3075,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-030 | `d0d55e8c`; SGLang `93d312480`; no server edit | Decode-only attention/MoE metadata initialization on the prior compile-safe attention boundary | TC isolation before conditional ALL | Full decode capture list 1 through 70 | partial progress; TC failed at compiled batch 1; ALL correctly not run | SGLang 20, Omni focused 15/1 skipped, and Qwen3-ASR 594/3 skipped passed. Buckets 70 through 2 captured; batch 1 failed when Dynamo traced external `split_qkv_rmsnorm_rope -> get_device_properties`. Missing metadata and ATB PagedAttention signatures were absent |
 | 910C-031 | `9c27cca9`; SGLang `44f9e40b5`; no authorized server edit | Opaque custom-op boundary around the unchanged installed fused QKV/RMSNorm/RoPE kernel | TC isolation, fully enabled ALL, exact10 C70 diagnostic | capture/scheduling passed; numerical correctness failed | TC captured all 13 buckets and drained 1/8/32/70 with no forbidden signature. ALL completed 700/700 with all graph paths positive and zero encoder fallback, but WER was 1.4464 with corrupted output; p95 2.142 s is invalid performance evidence. A later dirty removal of `fullgraph=True` did not restore accuracy and is rejected |
 | 910C-032 | handoff `f56cc244`; SGLang `5403d1f7d`; no server edit | Compiled external-kernel/custom-op value parity plus bounded TC/ALL matrix | NPU op parity, then T1/T2/T70/A0/A1 exact10 accuracy arms | completed; Torch Compile incorrect | Both parity cases passed, but every compile-on arm garbled 70/70 with WER 1.3923--1.4198; A0 compile-off was correct at WER 0.0183. Compile defect is independent of batch size and encoder/prefill graphs |
-| 910C-033 | handoff commit containing this row; SGLang `a7b279da6` | `910C-032` plus diagnostic compile-stage selector | D0 prepared-eager and D1 Dynamo-eager T1-profile exact10 accuracy arms | authorized; pending | Isolate compile-safe fused-op state vs Dynamo semantics vs TorchAir lowering without server edits or performance claims |
+| 910C-033 | handoff `f62030d3`; SGLang `a7b279da6` | `910C-032` plus diagnostic compile-stage selector | D0 prepared-eager and D1 Dynamo-eager T1-profile exact10 accuracy arms | completed; compile-safe fused-op state is faulty | Both arms completed 140/140 but were garbled 140/140 with WER 1.3929; the first fault is active before Dynamo and TorchAir, while the compile-safe context is enabled |
+| 910C-034 | handoff commit containing this row; SGLang `3c389d2f1` | NPU TopK preserves its eager `torch.ops.npu` dispatch inside the compile-safe context | Conditional D0-R, normal T1-R, then fully enabled A1-R exact10 correctness arms | authorized; pending | Test the first bounded repair for the compile-safe fused-op defect; no C70 or performance claim |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
