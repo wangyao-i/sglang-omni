@@ -275,6 +275,15 @@ campaign is authorized from this result. A local bounded multi-signature or
 canonical-layout repair and a clean full-suite gate must precede the next
 hardware task.
 
+Local follow-up `9080b901` changes the NPU encoder graph to retain up to eight
+exact real signatures globally, allowing several layouts in the same token
+bucket while bounding graph memory by the configured encoder batch size. The
+`910C-027` feature gate warms concurrency shapes 1, 2, 4, and 8 plus one C70
+wave before measuring. Qualification requires no signature/capture growth in
+the measured arm and zero eager fallback. Its C70 metric remains diagnostic
+until Encoder Graph feature qualification closes; torch compile remains a
+separate later repair.
+
 The full ladder below applies to the fully accelerated candidate and to later
 candidates that are being considered for the hard target.
 
@@ -349,7 +358,8 @@ positive execution evidence and zero unexpected fallback.
 The mandatory order is therefore:
 
 1. qualify encoder graph (the first `910C-026` attempt failed on 64 real-corpus
-   signature-mismatch fallbacks; a local follow-up repair is now required);
+   signature-mismatch fallbacks; bounded multi-signature follow-up `9080b901`
+   is authorized as `910C-027`);
 2. repair and qualify torch compile, including the Dynamo/triton-ascend boundary
    and every compiled/non-compiled decode bucket;
 3. requalify prefill and decode graph together with encoder graph and compile in
