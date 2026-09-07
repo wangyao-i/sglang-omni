@@ -399,6 +399,15 @@ The mandatory order is therefore:
 5. run the final sequential, concurrency ladder, ten-minute soak, and three
    fresh-process C70 hard-target repeats on the accepted `ALL` profile.
 
+Current gate `910C-031` implements step 2 without changing or rebuilding the
+installed `sgl-kernel-npu`: SGLang commit `44f9e40b5` wraps the external fused
+QKV/RMSNorm/RoPE Triton launcher in an opaque custom op so the compiled batch-
+one bucket cannot trace its eager device-property query. The gate must retain
+batch 1 and the complete 13-bucket decode list. If TC passes, the same server
+task proceeds directly through a drained fully enabled `ALL` ladder and one
+exact10 C70 diagnostic; the final soak and three fresh-process repeats remain
+reserved for a qualified `ALL` profile.
+
 An item-level C70 run may accompany steps 1 through 4 to expose its performance
 direction and bottleneck. It is intentionally not a substitute for step 5.
 
