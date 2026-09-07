@@ -416,12 +416,22 @@ class ModelWorker:
             if runner is not None and getattr(runner, "backend", None) is not None
             else None
         )
+        compile_bs = (
+            [int(value) for value in runner.compile_bs]
+            if runner is not None and getattr(runner, "compile_bs", None) is not None
+            else None
+        )
         usage = self._decode_cuda_graph_usage
         return {
             "backend": self.server_args.cuda_graph_config.decode.backend,
             "runner": type(runner).__name__ if runner is not None else None,
             "backend_runner": backend_runner,
             "capture_bs": capture_bs,
+            "torch_compile_enabled": bool(
+                runner is not None
+                and getattr(runner, "enable_torch_compile", False)
+            ),
+            "compile_bs": compile_bs,
             "replay_count": int(usage.replay_count),
             "standard_eager_count": int(usage.standard_eager_count),
             "replay_buckets": {

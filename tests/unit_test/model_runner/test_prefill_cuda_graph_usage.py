@@ -153,6 +153,8 @@ def test_model_worker_reports_actual_decode_graph_replays_by_bucket(
 
     decode_runner = SimpleNamespace(
         capture_bs=[1, 2, 4],
+        compile_bs=[1, 2, 4],
+        enable_torch_compile=True,
         bs=2,
         backend=SimpleNamespace(),
     )
@@ -215,6 +217,8 @@ def test_model_worker_reports_actual_decode_graph_replays_by_bucket(
         "runner": "SimpleNamespace",
         "backend_runner": "SimpleNamespace",
         "capture_bs": [1, 2, 4],
+        "torch_compile_enabled": True,
+        "compile_bs": [1, 2, 4],
         "replay_count": 1,
         "standard_eager_count": 1,
         "replay_buckets": {"2": 1},
