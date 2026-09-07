@@ -2401,10 +2401,15 @@ the isolated-server agent still must not modify source, tests, configuration,
 documentation, packages, or site-packages, and must not commit. On any code
 defect it must return evidence to the local owner instead of repairing it.
 
-Transfer and check out these complete source snapshots together:
+Use the established Git collaboration path only. Do not create or transfer an
+offline archive. Fetch and check out these remote branches and exact source
+snapshots together; if either existing server worktree is dirty, stop and
+report it instead of overwriting local state:
 
-- SGLang-Omni code `f10067cf` plus the handoff commit containing this task;
-- SGLang code `d7e0d517e9c6f3537078c53a504bcf8530e4cebf`, based on the
+- SGLang-Omni `origin/qwen3-asr-910b-opt`, code `f10067cf` plus the handoff
+  commit containing this task;
+- SGLang `origin/codex/qwen3-asr-torch-compile`, code
+  `d7e0d517e9c6f3537078c53a504bcf8530e4cebf`, based on the
   previously qualified diagnostic lineage `9dbc4f89c` / upstream base
   `71de97b264`.
 
