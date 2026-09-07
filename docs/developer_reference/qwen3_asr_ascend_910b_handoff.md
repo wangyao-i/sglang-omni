@@ -2894,6 +2894,57 @@ audio, paths, request IDs, and logs server-local. A successful `A1-R` closes
 the Torch Compile functional-correctness blocker only; exact10 C70 performance
 is separately authorized after it.
 
+### `910C-034` result and NPU norm/activation dispatch-repair task `910C-035`
+
+`910C-034` passed all declared tests but `D0-R` remained garbled 70/70 with
+WER 1.4220. The conditional normal-compile and ALL arms did not start. This
+rejects the `TopK` dispatch hypothesis and leaves the first fault in another
+compile-safe fused-op switch. It does not weaken the earlier conclusion that
+the fault predates Dynamo and TorchAir.
+
+The local audit of the Qwen3-ASR decoder is now complete. Its active generic
+`BaseFusedOp` instances are decoder RMSNorms and MLP `SiluAndMul`; Q/K norm and
+RoPE are already bypassed by the separately value-qualified opaque packed-QKV
+custom-op boundary. Local SGLang commit `9438420a6` makes the smallest remaining
+NPU-specific repair: `RMSNorm` retains `torch_npu.npu_rms_norm` /
+`npu_add_rms_norm`, and `SiluAndMul` retains `torch_npu.npu_swiglu`, while the
+outer compiler traces their `torch.ops` boundaries. Non-NPU behavior remains
+the generic native-reference policy. The commit includes CPU policy tests for
+both NPU retention and non-NPU preservation. This is deliberately scoped to
+the real Qwen3-ASR decoder inventory, not a global exemption for all fused ops.
+
+`910C-035` is another conditional correctness task, not a performance task.
+Use Git only: fetch the SGLang-Omni handoff commit containing this task and
+fetch `origin/codex/qwen3-asr-torch-compile` at exact commit `9438420a6`. Keep
+the installed `sgl-kernel-npu` unchanged. The server must make zero source,
+test, configuration, documentation, package, site-package, or commit changes.
+Require clean tracked worktrees, headless OpenCV, no holder/service process,
+port availability, and two stable HBM snapshots at or below 5% before every
+service. If a residual driver holder exists, stop and request operator cleanup.
+
+1. Run both new NPU dispatch-test files, the prior fused-op/decode-runner
+   suites, Omni focused encoder/model-info suites, and the complete Qwen3-ASR
+   suite. Stop before startup on the first collection or test failure.
+2. In fresh `D0-R2`, repeat `D0-R` exactly: encoder/prefill graphs disabled,
+   decode graph through bucket 70, compile maximum batch one, and
+   `SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=prepared-eager`; run its fixed warm-up
+   and 140 exact10 correctness requests. Require all completions, no garbled
+   output, WER within 0.01 absolute of `A0`, positive decode replay, and zero
+   unexpected eager fallback. Stop on failure.
+3. Conditional on `D0-R2` passing, run fresh normal `T1-R2` with the same
+   profile but no diagnostic variable. Require all 13 capture buckets, normal
+   accuracy, positive replay, and zero historical Dynamo/ATB/ACL/GE/OOM/fallback
+   signatures. Stop on failure.
+4. Conditional on `T1-R2` passing, run fresh fully enabled `A1-R2` with the
+   existing guard and deterministic encoder-signature warm-up. Run the same
+   140-request correctness set; require all graph-path replay markers, zero
+   encoder capture failures/fallbacks, normal accuracy, and drain. Do not run
+   C70, realtime, or a performance campaign.
+
+Return sanitized test counts and per-arm accounting, WER, garbled-output count,
+graph counters, forbidden signatures, and cleanup state. Keep logs, paths,
+audio, transcripts, request IDs, and model details server-local.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3076,7 +3127,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-031 | `9c27cca9`; SGLang `44f9e40b5`; no authorized server edit | Opaque custom-op boundary around the unchanged installed fused QKV/RMSNorm/RoPE kernel | TC isolation, fully enabled ALL, exact10 C70 diagnostic | capture/scheduling passed; numerical correctness failed | TC captured all 13 buckets and drained 1/8/32/70 with no forbidden signature. ALL completed 700/700 with all graph paths positive and zero encoder fallback, but WER was 1.4464 with corrupted output; p95 2.142 s is invalid performance evidence. A later dirty removal of `fullgraph=True` did not restore accuracy and is rejected |
 | 910C-032 | handoff `f56cc244`; SGLang `5403d1f7d`; no server edit | Compiled external-kernel/custom-op value parity plus bounded TC/ALL matrix | NPU op parity, then T1/T2/T70/A0/A1 exact10 accuracy arms | completed; Torch Compile incorrect | Both parity cases passed, but every compile-on arm garbled 70/70 with WER 1.3923--1.4198; A0 compile-off was correct at WER 0.0183. Compile defect is independent of batch size and encoder/prefill graphs |
 | 910C-033 | handoff `f62030d3`; SGLang `a7b279da6` | `910C-032` plus diagnostic compile-stage selector | D0 prepared-eager and D1 Dynamo-eager T1-profile exact10 accuracy arms | completed; compile-safe fused-op state is faulty | Both arms completed 140/140 but were garbled 140/140 with WER 1.3929; the first fault is active before Dynamo and TorchAir, while the compile-safe context is enabled |
-| 910C-034 | handoff commit containing this row; SGLang `3c389d2f1` | NPU TopK preserves its eager `torch.ops.npu` dispatch inside the compile-safe context | Conditional D0-R, normal T1-R, then fully enabled A1-R exact10 correctness arms | authorized; pending | Test the first bounded repair for the compile-safe fused-op defect; no C70 or performance claim |
+| 910C-034 | handoff `fc021329`; SGLang `3c389d2f1` | NPU TopK preserves its eager `torch.ops.npu` dispatch inside the compile-safe context | Conditional D0-R, normal T1-R, then fully enabled A1-R exact10 correctness arms | completed; TopK hypothesis rejected | Declared tests passed, but D0-R remained garbled 70/70 with WER 1.4220; T1-R and A1-R correctly did not start |
+| 910C-035 | handoff commit containing this row; SGLang `9438420a6` | NPU RMSNorm and SiLU preserve their existing `torch_npu` dispatch inside the compile-safe context | Conditional D0-R2, normal T1-R2, then fully enabled A1-R2 exact10 correctness arms | authorized; pending | Test the remaining active Qwen3-ASR decoder fused-op switches after `910C-034` rejected TopK; no C70 or performance claim |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
