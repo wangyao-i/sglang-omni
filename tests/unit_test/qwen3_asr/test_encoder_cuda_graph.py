@@ -282,6 +282,7 @@ def test_encoder_graph_model_info_reports_replay_and_fallbacks():
         "captured_graph_count": 1,
         "captured_buckets": {"128": 1},
         "capture_failure_count": 1,
+        "diagnostic_capture_release_count": 0,
         "replay_count": 3,
         "replay_buckets": {"128": 3},
         "eager_fallback_count": 2,
