@@ -3450,8 +3450,66 @@ Interpret each arm independently:
   two independent defects.
 
 Do not run ALL, C70, performance, soak, realtime, or any unlisted experiment
-under these diagnostic bypasses.  After `910C-045`, run the still-authorized
-`910C-042` performance attribution only as a separate serial task.
+under these diagnostic bypasses.  The still-authorized `910C-042` performance
+attribution is a separate serial task; do not overlap or mix its evidence with
+the capture-lifecycle diagnostics below.
+
+`910C-045` completed with both capture-only arms still garbled.  Encoder and
+prefill replay counters remained zero for their bypassed paths, so an actual
+auxiliary graph replay is not necessary for corruption.  This establishes
+capture/init plus retention as sufficient, but it does not yet distinguish an
+irreversible capture-time mutation from interference caused by the still-live
+captured graph, graph pool, or static tensors.
+
+#### `910C-046`: serial capture-release ownership isolation
+
+Use Omni `0948859a` and SGLang `1cd6be1b5`.  Run on one verified-clean NPU,
+one fresh service at a time, with the same packages, kernels, exact10 corpus,
+deterministic settings, and profile controls as `910C-045`.  Explicitly unset
+the `910C-045` capture-only variables and keep the rejected completion fence
+disabled.  The isolated operator must not edit source, tests, configuration
+files, packages, site-packages, kernels, or Git history.
+
+Run the SGLang prefill/decode-runner focused tests, the Omni encoder/model-info
+focused tests, and the complete Qwen3-ASR suite once.  Stop on the first
+collection or test failure.  Then run these two arms sequentially:
+
+| Order | Arm | Encoder graph | Prefill graph | Decode graph | Compile | Diagnostic |
+|---:|---|---:|---:|---:|---:|---|
+| 1 | `E-REL` | capture then release | off | on | on | `SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE=1` |
+| 2 | `P-REL` | off | capture then release | on | on | `SGLANG_NPU_PREFILL_GRAPH_CAPTURE_RELEASE=1` |
+
+Each arm runs the exact `910C-041` 20-item `max_new_tokens=2` probe followed by
+the content-distinct 70-item untruncated accuracy set.  For `E-REL`, require a
+positive `diagnostic_capture_release_count`, zero live captured graphs after
+release, zero encoder replay, and a positive
+`diagnostic_capture_released` fallback count.  Each real signature is captured
+and released at most once; subsequent matching requests stay eager without
+recapture.  For `P-REL`, require the startup warning `NPU prefill graph
+capture-release diagnostic active`, normal prefill capture attestation before
+that warning, eager request prefill, and normal decode capture/compile/replay.
+
+Between arms require graceful shutdown, a free port, no residual holder, and
+two HBM snapshots at or below 5%.  Return request accounting,
+equality/garbled counts, WER, all diagnostic markers and counters, compile and
+decode graph counters, forbidden signatures, guard balance, drain, and cleanup
+evidence.
+
+Interpret each arm independently:
+
+- correct after release: a live auxiliary graph, pool, or retained static
+  tensor is necessary for corruption; next isolate graph-pool identity and
+  static output/input ownership while keeping the capture alive;
+- still garbled after release: capture performs an irreversible process/module
+  state transition; next snapshot fused-op dispatch, graph context globals,
+  streams, allocators, module buffers, and compiler state immediately before
+  and after capture;
+- one arm recovers and the other does not: split the fixes by owner rather
+  than assuming one shared lifecycle defect.
+
+Do not run ALL, C70, performance, soak, realtime, or additional arms under the
+release diagnostics.  `910C-042` remains separately authorized and serial;
+its performance data must not be mixed with `910C-046`.
 
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
@@ -3646,7 +3704,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-042 | handoff commit containing this row; SGLang `54a8d042d` | Serial stage attribution while compile-combination accuracy remains open | Same-NPU control/treatment arms run one fresh service at a time at exact10 C70 with existing structured events | authorized; pending; serial policy supersedes multi-NPU plan | Collect encoder, prefill, decode-step, guard, graph-bucket and NPU utilization costs; garbled arms are diagnostic only and cannot satisfy the hard target |
 | 910C-043 | handoff `970e9560`; code `b6966d4d`; SGLang `54a8d042d`; no server edit | Opt-in NPU device completion before each execution-guard hand-off | Parallel E1-F/P1-F two-token correctness probes | completed; hypothesis rejected | Both fenced arms remained garbled, so device completion alone does not repair the first compiled decode transition; fenced performance is invalid |
 | 910C-044 | handoff `53c1eccd`; SGLang `634303cdf`; no server edit | Make paged KV storage and cache locations explicit custom-op state | TC regression control and conditional combination arms | completed; rejected and reverted by SGLang `ca17cd413` | The explicit operands did not repair accuracy, regressed T1, and introduced a warm-up hang; do not reuse this implementation |
-| 910C-045 | handoff commit containing this row; Omni `8dab0b8f`; SGLang `5cb571995`; no server edit | Distinguish graph capture/init contamination from actual encoder/prefill replay | Serial E-CAP then P-CAP capture-only correctness arms on one clean NPU | authorized; pending | Capture remains real while request replay is bypassed; classify each feature independently before the next repair |
+| 910C-045 | handoff `af793d17`; Omni `8dab0b8f`; SGLang `5cb571995`; no server edit | Distinguish graph capture/init contamination from actual encoder/prefill replay | Serial E-CAP then P-CAP capture-only correctness arms on one clean NPU | completed; both arms garbled | Encoder and prefill replay were bypassed, but both combinations still corrupted the first compiled decode transition; capture/init plus retained graph state is sufficient |
+| 910C-046 | handoff commit containing this row; Omni `0948859a`; SGLang `1cd6be1b5`; no server edit | Distinguish irreversible capture mutation from live graph/pool/static-buffer ownership | Serial E-REL then P-REL capture-release correctness arms on one clean NPU | authorized; pending | Capture each auxiliary graph, destroy its graph, pool and static owners, then execute eager producer plus compiled decode |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
