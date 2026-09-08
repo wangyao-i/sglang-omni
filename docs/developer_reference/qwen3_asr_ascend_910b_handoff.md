@@ -3035,6 +3035,58 @@ Interpret the completed matrix mechanically:
 - any capture/startup failure: report its first signature as a separate capture
   blocker and make no accuracy or performance claim.
 
+`910C-037` returned before A0/L0: `C0-context-eager` was garbled. It proves
+that the full graph-safe decode-attention route is necessary for the observed
+corruption, but does **not** yet prove that `AscendAttnBackend.forward_decode_graph`
+is itself numerically wrong. The compile-off decode graph route already reaches
+that backend successfully; C0 adds the `unified_attention_with_output` custom-op
+wrapper, including temporary ForwardBatch narrowing and an output-buffer copy.
+A0/L0 must not start because their conditional entry criterion (a correct C0)
+was not met.
+
+#### `910C-038`: direct graph-attention wrapper-isolation arm
+
+Local SGLang commit `8ec282120` adds the opt-in diagnostic selector
+`SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=direct-graph-eager`. It retains the NPU
+graph backend and Torch-Compile runner feature flag, but makes the TC context
+skip the `unified_attention_with_output` custom-op route. The NPU backend then
+selects its existing `forward_decode_graph` path directly, just as the known-
+correct compile-disabled decode graph does. It invokes neither fused-op prepare
+nor `torch.compile`; the selector is process-scoped and inert when unset.
+
+Use Git only: fetch this handoff commit and SGLang
+`origin/codex/qwen3-asr-torch-compile` at exact commit `8ec282120`. The server
+must make zero source, test, configuration, package, or site-packages changes;
+do not rebuild or reinstall `sgl-kernel-npu`. Repeat the same clean-worktree,
+headless-OpenCV, port, device-holder, and two-HBM-snapshot preflight. Run the
+new focused runner test, the preceding NPU dispatch/fused-op/decode-runner
+suites, Omni focused suites, and the full Qwen3-ASR suite. A preflight,
+collection, or test failure stops the arm and is returned as the first blocker.
+
+Run one fresh `W0-direct-graph-eager` service using the exact C0/T1 correctness
+profile: encoder and prefill graphs disabled; decode graph enabled through
+bucket 70; the Torch-Compile feature flag enabled; 70-item warm-up; then 140
+exact10 measured requests. Set only the new diagnostic selector. Require its
+positive marker, capture success, complete request accounting, normal drain,
+normal graceful shutdown, and two post-stop HBM snapshots at or below 5%.
+Return sanitized WER, garbled-output count, graph capture/replay/eager counts,
+forbidden signatures, selector marker, and cleanup evidence. Do not start
+normal compile, ALL, C70 performance, realtime, package changes, or another
+unlisted experiment.
+
+Interpret W0 mechanically:
+
+- correct W0: the custom-op wrapper is necessary for corruption. The next local
+  repair must compare and correct its ForwardBatch slicing, output ownership,
+  cache-location mutation, and padded-tail behavior; `direct-graph-eager` is a
+  diagnostic only and must not become the production workaround.
+- garbled W0: the failure remains after bypassing the wrapper. The next local
+  diagnosis must compare direct NPU graph attention versus normal NPU attention
+  with isolated KV cache state, focusing on BSH/BSND layout, sequence-length
+  metadata, and cache writes.
+- capture/startup failure: report the first signature as a distinct capture
+  blocker and make no attention-correctness or performance claim.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3220,7 +3272,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-034 | handoff `fc021329`; SGLang `3c389d2f1` | NPU TopK preserves its eager `torch.ops.npu` dispatch inside the compile-safe context | Conditional D0-R, normal T1-R, then fully enabled A1-R exact10 correctness arms | completed; TopK hypothesis rejected | Declared tests passed, but D0-R remained garbled 70/70 with WER 1.4220; T1-R and A1-R correctly did not start |
 | 910C-035 | handoff `9041c9a0`; SGLang `9438420a6` | NPU RMSNorm and SiLU preserve their existing `torch_npu` dispatch inside the compile-safe context | Conditional D0-R2, normal T1-R2, then fully enabled A1-R2 exact10 correctness arms | completed; generic decoder dispatch hypothesis rejected | Declared tests passed, but D0-R2 remained garbled 70/70 with WER 1.4140; T1-R2 and A1-R2 correctly did not start |
 | 910C-036 | handoff `7b07596a`; SGLang `e45d64c9f` | Raw model forward with graph-safe decode-attention context retained but compile-safe fused-op preparation omitted | One `C0-context-eager` exact10 correctness arm | superseded before server execution | Replaced by the broader, independently scoped `910C-037` matrix to avoid a human round trip |
-| 910C-037 | handoff commit containing this row; SGLang `3295b12d3` | Separate graph-safe-attention, audio-tower-only prepared, and language-model-only prepared eager diagnostics | C0 first; if correct, independent A0 and L0 exact10 correctness arms | authorized; pending | Localize corruption to attention context, audio state, language state, or cross-scope preparation ordering; no normal compile, ALL, C70, realtime, package, or server code change |
+| 910C-037 | handoff `6c7f1756`; SGLang `3295b12d3` | Separate graph-safe-attention, audio-tower-only prepared, and language-model-only prepared eager diagnostics | C0 first; if correct, independent A0 and L0 exact10 correctness arms | completed; C0 corruption reproduced | C0 remained garbled; A0/L0 correctly did not start; the graph-safe route is necessary, but its custom-op wrapper remains unisolated from the terminal backend |
+| 910C-038 | handoff commit containing this row; SGLang `8ec282120` | Direct NPU graph attention with TC custom-op wrapper bypassed | One W0 direct-graph eager exact10 correctness arm | authorized; pending | Determine whether corruption belongs to the wrapper's ForwardBatch/output handling or remains in the direct NPU graph-attention backend; no normal compile, ALL, C70, realtime, package, or server code change |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
