@@ -3815,12 +3815,32 @@ as startup capture without evidence.
 defer count plus model-info fields `configured`, `run_count`, and
 `first_capture` (run index, bucket, window count). It does not alter capture,
 replay, graph pools, or compiled decode. Repeat only the startup-to-first-clip
-precheck with `SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1`; return the startup
-line and model-info before sending audio. If `configured=0`, fix the service
-process environment propagation before proceeding. If `configured=1` and
-`run_count>0` before clip A, identify that pre-request runner invocation from
-the logged PID and execution timeline. Only if `configured=1` and
-`run_count=0` may the three-clip transition procedure be retried.
+precheck with `SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1`; do not send audio
+until both import provenance and model-info satisfy the following gate.
+
+1. With the exact interpreter and environment used to launch the service,
+   print the resolved `__file__` for
+   `sglang_omni.models.qwen3_asr.encoder_cuda_graph`, the checkout HEAD, and
+   the tracked blob ID for that file. Return these three sanitized values with
+   the startup log line. The resolved file must belong to the declared clean
+   checkout at the handoff HEAD; an installed wheel, another worktree, or an
+   untracked copy invalidates the run.
+2. After the service is healthy but before any audio request, query
+   `model_info.encoder_cuda_graph.diagnostic_capture_defer`. Its dictionary
+   must contain `configured`, `deferred_count`, `remaining`, `run_count`, and
+   `first_capture`. Require `configured=1` and `run_count=0`. The earlier
+   response that omitted these fields is an import/response-provenance failure,
+   not evidence of an NPU startup capture or stale bytecode by itself.
+3. If the import or model-info gate fails, stop without sending clip A and
+   return the resolved module path, checkout/blob identity, startup line, and
+   complete key set of the encoder graph info. Do not delete bytecode caches,
+   reinstall packages, edit source, or infer the cause from `.pyc` files.
+
+If `configured=0` after the provenance gate passes, fix the service-process
+environment propagation before proceeding. If `configured=1` and `run_count>0`
+before clip A, identify that pre-request runner invocation from the logged PID
+and execution timeline. Only if `configured=1` and `run_count=0` may the
+three-clip transition procedure be retried.
 
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
