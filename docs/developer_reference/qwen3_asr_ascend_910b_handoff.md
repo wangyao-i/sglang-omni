@@ -3601,6 +3601,74 @@ change means capture installed a persistent stream or allocator context.  A
 `capture`-only flip that resolves by `release` is not the persistent
 contaminant.
 
+#### `910C-048` result and `910C-049` graph-pool isolation repair gate
+
+`910C-048` completed.  The four-point capture-state snapshot reported
+`count=0` for every non-memory section (fused_ops, tensor_metadata,
+module_training, runtime) across all three transitions (warmup, capture,
+release).  Only `memory_allocated`/`memory_reserved` changed, as expected
+from the graph's own static-buffer allocation.  This is a decisive negative
+result: **no Python-observable state is mutated by encoder graph capture**.
+The contamination therefore lives below the Python layer, in NPU driver
+state.  Two earlier observations constrain what that driver state can be:
+
+- `910C-045`: capture-only (never replayed) still garbles, so an actual
+  encoder graph replay is not required; capture/init alone is sufficient.
+- `910C-046 E-REL`: capture-then-release still garbles 2/20, so the
+  contamination is not removed by dropping the live graph object; it is a
+  persistent driver-side transition.
+- `910C-047`: encoder output is numerically identical before and after
+  capture+release (`allclose=True`), so the encoder is exonerated; the
+  corrupted consumer is compiled decode.
+
+The operator's handoff summary attributes this to
+`prepare_model_for_torch_compile`.  That is **incorrect**: the function is
+SGLang-internal, is never called by the omni encoder capture path (no
+reference exists anywhere under `sglang_omni/`), and runs only during decode
+graph capture.  The encoder capture path and the decode capture path share
+exactly one mutable NPU driver resource: the **default graph memory pool**.
+`encoder_cuda_graph.py` captures with
+`torch.cuda.graph(graph, capture_error_mode="thread_local")` and passes no
+`pool=`, so every encoder graph lands in the device's default graph pool,
+the same pool the SGLang decode graphs use.  NPU graph capture installs
+driver-side allocator and stream state scoped to that pool; capturing a
+second graph into the shared pool can leave the pool's allocator bookkeeping
+in a state that corrupts subsequent replay of the decode graphs already
+resident in it.
+
+`910C-049` repairs by isolating the encoder graphs into a dedicated private
+graph pool.  The repair is a minimal local change to
+`sglang_omni/models/qwen3_asr/encoder_cuda_graph.py`: allocate one
+`torch.cuda.graph_pool_handle()` per runner, retain it for the runner's
+lifetime, and pass it as `pool=` to `torch.cuda.graph(...)` in `_capture`.
+Non-NPU platforms keep the existing default-pool behavior (the defect is
+NPU-driver-specific).  This keeps every code path, bucket layout, and
+diagnostic identical; the only variable is pool ownership.  Local CPU unit
+tests remain delegated to the server (`sglang` absent locally).
+
+Execution: use the same accepted Omni/SGLang stack and clean-NPU environment
+as `910C-048`.  Run on one verified-clean NPU, one fresh service, serial
+only.  **Unset** every capture bypass/release/state-snapshot diagnostic and
+keep the rejected completion fence disabled; this is a normal-replay
+correctness gate, not a bypass probe.  Before hardware, run
+`tests/unit_test/qwen3_asr/test_encoder_cuda_graph.py`, the encoder/model-info
+focused set, and the complete Qwen3-ASR suite; stop on the first collection
+or test failure.  Then run the exact `910C-041` 20-item `max_new_tokens=2`
+E1 probe (encoder graph **on**, prefill off, decode graph on, compile on).
+
+Return the 20-request equality/garbled count and WER, encoder
+capture/signature/replay/fallback reasons, compile/decode graph counters,
+forbidden signatures, guard balance, drain, graceful cleanup, and two
+post-stop HBM snapshots.  Interpretation:
+
+- all 20 correct at the historical WER level: shared-pool contamination
+  confirmed and repaired; promote pool isolation to a reviewable repair,
+  then requalify `910C-040` E1 and the `910C-042` performance attribution;
+- still garbled with an isolated pool: the contamination is process-global
+  NPU driver state, not pool-scoped; escalate to a CANN/torch_npu minimal
+  reproduction capturing an encoder graph then replaying a decode graph;
+- a capture failure or any forbidden signature invalidates the arm.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3797,7 +3865,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-045 | handoff `af793d17`; Omni `8dab0b8f`; SGLang `5cb571995`; no server edit | Distinguish graph capture/init contamination from actual encoder/prefill replay | Serial E-CAP then P-CAP capture-only correctness arms on one clean NPU | completed; both arms garbled | Encoder and prefill replay were bypassed, but both combinations still corrupted the first compiled decode transition; capture/init plus retained graph state is sufficient |
 | 910C-046 | handoff `06f6043d`; Omni code `0948859a`; test fix `b28013f0`; SGLang `1cd6be1b5`; no server edit | Distinguish irreversible capture mutation from live graph/pool/static-buffer ownership | Serial E-REL then conditional P-REL capture-release correctness arms on one clean NPU | E-REL completed and remained garbled 2/20; P-REL not evidenced | Releasing the encoder graph prevented broad retained-graph corruption but did not protect two probe outputs. Encoder capture does not call `prepare_model_for_torch_compile`; correlate the remaining failures with lazy captures before claiming persistent global mutation |
 | 910C-047 | handoff `deb3a680`; Omni code `d3f71fb7`; SGLang `1cd6be1b5`; no server edit | Compare real encoder output immediately before capture with normal full-eager output after capture and release | One serial E1 capture-release parity probe on one clean NPU | completed; encoder exonerated, downstream state implicated | Parity `allclose=True` (encoder numerically identical across capture+release) yet outputs still garbled; disproves both the `prepare_model_for_torch_compile` mutation hypothesis and encoder-output corruption; contamination is in downstream device/compile runtime state visible only in compiled decode |
-| 910C-048 | handoff commit containing this row; Omni code `cf79b353`; SGLang as `910C-047`; no server edit | Attribute which runtime state transitions during capture persist through release | One serial E1 capture-state snapshot probe on one clean NPU | authorized; pending | Four-point snapshot (pre-warmup/pre-capture/post-capture/post-release) of fused-op dispatch, tensor `_version`/`data_ptr`, module training flags, stream/pool identity on first lazy capture only; section that flips in `capture` and persists through `release` names the contaminant; CPU unit tests delegated to server (sglang absent locally) |
+| 910C-048 | handoff `daf5c354`; Omni code `cf79b353`; SGLang as `910C-047`; no server edit | Attribute which runtime state transitions during capture persist through release | One serial E1 capture-state snapshot probe on one clean NPU | completed; all Python-visible sections clean, driver layer implicated | Every non-memory section reported count=0 across warmup/capture/release; no Python-observable state is mutated by encoder capture, so contamination is below the Python layer in NPU driver state; only memory counters moved (graph static-buffer allocation, expected) |
+| 910C-049 | handoff commit containing this row; Omni code `e9032edc`; SGLang as `910C-048`; no server edit | Repair shared default graph-pool contamination by capturing encoder graphs into a dedicated private pool | One serial E1 normal-replay correctness probe on one clean NPU (no bypass diagnostics) | authorized; pending | Encoder capture used the device default pool shared with decode graphs; per-runner `graph_pool_handle()` passed as `pool=` isolates driver-side allocator state; all-20-correct at historical WER confirms and repairs, still-garbled escalates to CANN/torch_npu minimal reproduction; CPU unit tests delegated to server |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
