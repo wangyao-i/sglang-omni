@@ -3255,6 +3255,80 @@ Interpret the results mechanically:
   common one-token or two-token boundary is a shared-lifecycle hypothesis to
   audit before duplicating fixes.
 
+#### `910C-042`: parallel stage-performance attribution before accuracy closure
+
+Accuracy remains a hard gate for acceptance, but it does not prevent
+diagnostic performance attribution.  Run `910C-042` in parallel with
+`910C-041` so the next local repair can address both correctness and the
+already-visible performance gap.  No result from a garbled compile-on arm is
+an acceptance, hard-target, or final-candidate measurement.
+
+Use this handoff commit and SGLang `54a8d042d`, with the same immutable source,
+package, kernel, corpus, and server constraints as `910C-041`.  Enable the
+existing request/encoder/guard recorder, but do not enable per-decode INFO
+logging because its volume would perturb the measurement.  Freeze one
+content-distinct 70-item warm-up and the 700-item exact10 C70 workload.  For an
+encoder-graph arm, finish deterministic signature saturation before timed
+measurement and require signature count/capture count not to grow while
+timing.  Capture rich model-info immediately before and after measurement and
+sample NPU resources at 0.5 seconds.  Each arm gets one fresh service; this is
+a screening pass, not the final three-repeat campaign.
+
+Use four physical NPUs when available.  Each lane runs its two arms serially
+on the same NPU while the four lanes run in parallel.  Use disjoint ports,
+event directories, benchmark outputs, and process/device visibility.  Apply
+the per-card preflight, graceful teardown, and two stable post-stop HBM
+snapshots from `910C-041`.
+
+| Same-card lane | Control | Treatment | Marginal question |
+|---|---|---|---|
+| `G` | decode graph, compile off | decode graph, compile on (`T1`) | cost/benefit of the now-correct TC-only path |
+| `E` | encoder+decode graphs, compile off | encoder+decode graphs, compile on (`E1`) | encoder graph/guard interaction with compile |
+| `P` | prefill+decode graphs, compile off | prefill+decode graphs, compile on (`P1`) | prefill graph interaction with compile |
+| `A` | encoder+prefill+decode graphs, compile off (`A0`) | all graphs+compile (`A1`) | complete-stack contention and utilization |
+
+Return sanitized aggregates for every arm, even when compile-on accuracy is
+bad:
+
+- request completion/error accounting, WER, garbled count, generated/decode
+  step count, and end-to-end latency/throughput;
+- encoder item count, batch count and histogram, average/max batch occupancy,
+  queue-wait p50/p95/max, execute p50/p95/max, graph capture/replay/fallback,
+  and signature counts before/after;
+- prefill forward count and elapsed p50/p95/max, prefill graph replay/eager
+  counts and bucket histogram;
+- decode forward count and elapsed p50/p95/max, elapsed per completed decode
+  step, decode graph replay/eager counts and bucket histogram;
+- execution-guard wait and hold p50/p95/max, acquisition count and balanced
+  wait/acquire/release counts;
+- NPU utilization, AI Core utilization, HBM and power mean/max, plus service
+  drain and cleanup state.
+
+Compare end-to-end latency or request throughput across an arm pair only when
+their completion and generated/decode-step distributions are sufficiently
+similar.  Otherwise compare prefill time, encoder time, guard time, and
+per-decode-step time; explicitly label end-to-end figures output-length
+contaminated.  Never use the bad-output arm to claim the 500 ms target.
+
+The required optimization decisions from this screening are:
+
+1. quantify how much of p95 is encoder queue/execute versus guard wait versus
+   prefill versus repeated decode;
+2. calculate encoder batch occupancy (historically only about three items per
+   batch against capacity eight) and decide whether a bounded batch-wait sweep
+   is the first throughput experiment;
+3. determine whether the coarse guard dominates and whether the next local
+   design should protect only NPU graph input update/device submission with
+   explicit stream/event ordering;
+4. report compiled-bucket coverage, since compiling only batch sizes 1 and 2
+   cannot establish the performance value of compile at C70;
+5. use measured stage lower bounds to assess whether 140 requests/s and p95
+   below 500 ms are feasible on one card before spending time on soak/repeats.
+
+Do not tune parameters during these arms, run realtime, perform a soak, or
+change source/packages.  Parameter optimization is a subsequent, bounded
+multi-card sweep selected from these stage results.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3443,8 +3517,9 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-037 | handoff `6c7f1756`; SGLang `3295b12d3` | Separate graph-safe-attention, audio-tower-only prepared, and language-model-only prepared eager diagnostics | C0 first; if correct, independent A0 and L0 exact10 correctness arms | completed; C0 corruption reproduced | C0 remained garbled; A0/L0 correctly did not start; the graph-safe route is necessary, but its custom-op wrapper remains unisolated from the terminal backend |
 | 910C-038 | handoff `a2c91ead`; SGLang `8ec282120` | Direct NPU graph attention with TC custom-op wrapper bypassed | One W0 direct-graph eager exact10 correctness arm | completed; wrapper localized | W0 was correct at WER 0.0183 with 0/70 garbled outputs; direct backend is not the first fault, and the bypass remains diagnostic only |
 | 910C-039 | handoff `e8b80db9`; SGLang `54a8d042d` | Preserve static NPU graph state within the registered decode-attention custom op | Real normal-compile T1, then conditional real normal-compile ALL A1 correctness arms | partial; T1 passed, A1 garbled | T1 returned WER 0.0167 with 0/70 garbled; A1 remained garbled around WER 1.39, proving only an unresolved full-combination interaction |
-| 910C-040 | handoff commit containing this row; SGLang `54a8d042d` | Split real normal-compile encoder+graph and prefill+graph interactions | Independent E1 encoder-compile and P1 prefill-compile exact10 correctness arms | authorized; pending | Separate the A1 failure into encoder/guard, prefill, two-independent-defect, or combined-state outcomes; no ALL/C70/realtime/package or server code change |
+| 910C-040 | handoff `02cc6166`; SGLang `54a8d042d`; no server edit | Split real normal-compile encoder+graph and prefill+graph interactions | Independent E1 encoder-compile and P1 prefill-compile exact10 correctness arms | completed; both feature combinations garbled | T1 compile-only remained correct, but both encoder+compile E1 and prefill+compile P1 produced garbled output; this proves two failing combinations but may still reflect a shared graph-state hand-off defect |
 | 910C-041 | handoff commit containing this row; SGLang `54a8d042d` | Token-boundary comparison of graph-produced state entering compiled decode | Four independent encoder/prefill on/off controls and compile-on probes at `max_new_tokens=1` and `2` | authorized; pending | Determine whether each graph-plus-compile defect corrupts the prefill/initial state or only the first compiled decode transition; no server source change |
+| 910C-042 | handoff commit containing this row; SGLang `54a8d042d` | Multi-NPU stage attribution while compile-combination accuracy remains open | Four same-card control/treatment lanes run in parallel at exact10 C70 with existing structured events | authorized; pending | Collect encoder, prefill, decode-step, guard, graph-bucket and NPU utilization costs; garbled arms are diagnostic only and cannot satisfy the hard target |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
