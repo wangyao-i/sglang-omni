@@ -154,6 +154,12 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._device = param.device
         self._dtype = param.dtype
         self._is_npu = current_platform.is_npu()
+        # NPU: capture into a private graph pool so encoder capture does not
+        # share the device default pool (and its driver-side allocator state)
+        # with the SGLang decode graphs already resident in it.
+        self._graph_pool = (
+            torch.cuda.graph_pool_handle() if self._is_npu else None
+        )
         cfg = audio_tower.config
 
         chunk_tokens = _get_feat_extract_output_lengths_int(cfg.n_window * 2)
@@ -460,7 +466,9 @@ class Qwen3ASREncoderLayerStackGraphRunner:
             diagnostic_reference = normalized[:diagnostic_total].detach().clone()
 
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph, capture_error_mode="thread_local"):
+        with torch.cuda.graph(
+            graph, pool=self._graph_pool, capture_error_mode="thread_local"
+        ):
             static_out = run_once()
         torch.cuda.synchronize(device)
         post_graph_capture_state = (

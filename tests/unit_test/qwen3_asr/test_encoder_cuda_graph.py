@@ -338,6 +338,42 @@ def test_capture_release_parity_passes_real_hidden_state_to_capture(monkeypatch)
     assert captured["diagnostic_total"] == 7
 
 
+def test_npu_runner_captures_into_private_graph_pool(monkeypatch):
+    pool = object()
+    monkeypatch.setattr(
+        encoder_cuda_graph.torch.cuda, "graph_pool_handle", lambda: pool
+    )
+    monkeypatch.setattr(
+        encoder_cuda_graph.current_platform, "is_npu", lambda: True
+    )
+    tower = SimpleNamespace(
+        parameters=lambda: iter([torch.nn.Parameter(torch.zeros(1))]),
+        config=SimpleNamespace(n_window=4, n_window_infer=8),
+    )
+
+    runner = Qwen3ASREncoderLayerStackGraphRunner(
+        tower, buckets=(128,), max_batch_size=1
+    )
+
+    assert runner._graph_pool is pool
+
+
+def test_non_npu_runner_uses_default_graph_pool(monkeypatch):
+    monkeypatch.setattr(
+        encoder_cuda_graph.current_platform, "is_npu", lambda: False
+    )
+    tower = SimpleNamespace(
+        parameters=lambda: iter([torch.nn.Parameter(torch.zeros(1))]),
+        config=SimpleNamespace(n_window=4, n_window_infer=8),
+    )
+
+    runner = Qwen3ASREncoderLayerStackGraphRunner(
+        tower, buckets=(128,), max_batch_size=1
+    )
+
+    assert runner._graph_pool is None
+
+
 def test_capture_state_delta_is_stable_and_bounded():
     before = {
         "fused_ops": {"decoder.norm": {"forward": "native"}},
