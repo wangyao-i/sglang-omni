@@ -3185,6 +3185,64 @@ mechanically:
   encoder and prefill state; next local work instruments their ordering and
   shared ForwardBatch/cache state.
 
+#### `910C-041`: graph-to-compiled-decode transition matrix
+
+`910C-040` completed both independent arms.  `E1-encoder-compile` and
+`P1-prefill-compile` both produced garbled output, while the already accepted
+T1 profile (compile plus decode graph only) remains correct.  This is evidence
+of two feature combinations, but it is not yet evidence of two unrelated
+defects: both combinations add a graph-produced state that is consumed by the
+first compiled decode step.
+
+Run this small, correctness-only transition matrix before making another
+source change.  Use this handoff commit and SGLang
+`origin/codex/qwen3-asr-torch-compile` at `54a8d042d`; the server must make no
+source, test, configuration-file, package, site-package, or commit change and
+must not rebuild `sgl-kernel-npu`.  The standard clean-worktree, headless
+OpenCV, holder-free, free-port, and two stable-HBM-snapshot preflight applies.
+Run the previously declared focused and full suites once before any service;
+their first collection or test failure stops the entire task.
+
+For each of the four rows below, start a fresh service, retain decode graph
+through bucket 70, the fixed exact10 corpus, deterministic temperature/seed,
+and the normal execution guard whenever encoder graph is enabled.  Submit the
+same fixed, content-distinct 20-item probe set serially twice: first with the
+documented transcription request field `max_new_tokens=1`, then with
+`max_new_tokens=2`.  Do not score WER for the truncated probes.  Instead,
+compare each normalized response with the matching compile-off control from
+the same feature profile and return only aggregate equality counts,
+garbled-output counts, request accounting, and graph replay/eager counters.
+The server may use runtime request fields or an existing benchmark-client
+option, but must not create or edit a helper source file.
+
+| Arm | Encoder graph | Prefill graph | Torch Compile | Purpose |
+|---|---:|---:|---:|---|
+| `E0-1/2` | on | off | off | Encoder graph reference at one and two generated tokens |
+| `E1-1/2` | on | off | on | Isolate encoder-graph to compiled-decode hand-off |
+| `P0-1/2` | off | on | off | Prefill graph reference at one and two generated tokens |
+| `P1-1/2` | off | on | on | Isolate prefill-graph to compiled-decode hand-off |
+
+Run all four arms even if an earlier compile-on arm diverges; they are
+independent and the goal is to avoid another server round trip.  Do not run
+ALL, C70, performance, realtime, package actions, or any unlisted experiment.
+Always use graceful shutdown and require two post-stop HBM snapshots at or
+below 5% before the next service.
+
+Interpret the results mechanically:
+
+- a compile-on mismatch already at one token locates that feature's defect at
+  encoder/prefill output production, input-embedding injection, or the
+  prefill logits/KV write itself, before a completed decode transition;
+- one-token equality followed by a two-token mismatch locates it at the
+  feature's state hand-off to the first compiled decode forward (KV/cache,
+  static input/output ownership, or ForwardBatch mutation);
+- equality at both limits contradicts the reported 140-item failure and
+  requires retaining the per-request result categories before widening the
+  probe; it does not authorize a performance run;
+- independent E and P outcomes select separate minimal local repairs.  A
+  common one-token or two-token boundary is a shared-lifecycle hypothesis to
+  audit before duplicating fixes.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3374,6 +3432,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-038 | handoff `a2c91ead`; SGLang `8ec282120` | Direct NPU graph attention with TC custom-op wrapper bypassed | One W0 direct-graph eager exact10 correctness arm | completed; wrapper localized | W0 was correct at WER 0.0183 with 0/70 garbled outputs; direct backend is not the first fault, and the bypass remains diagnostic only |
 | 910C-039 | handoff `e8b80db9`; SGLang `54a8d042d` | Preserve static NPU graph state within the registered decode-attention custom op | Real normal-compile T1, then conditional real normal-compile ALL A1 correctness arms | partial; T1 passed, A1 garbled | T1 returned WER 0.0167 with 0/70 garbled; A1 remained garbled around WER 1.39, proving only an unresolved full-combination interaction |
 | 910C-040 | handoff commit containing this row; SGLang `54a8d042d` | Split real normal-compile encoder+graph and prefill+graph interactions | Independent E1 encoder-compile and P1 prefill-compile exact10 correctness arms | authorized; pending | Separate the A1 failure into encoder/guard, prefill, two-independent-defect, or combined-state outcomes; no ALL/C70/realtime/package or server code change |
+| 910C-041 | handoff commit containing this row; SGLang `54a8d042d` | Token-boundary comparison of graph-produced state entering compiled decode | Four independent encoder/prefill on/off controls and compile-on probes at `max_new_tokens=1` and `2` | authorized; pending | Determine whether each graph-plus-compile defect corrupts the prefill/initial state or only the first compiled decode transition; no server source change |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
