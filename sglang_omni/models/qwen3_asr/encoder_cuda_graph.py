@@ -10,6 +10,7 @@ buckets only need to track total token count.
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 from collections import Counter
@@ -28,6 +29,12 @@ logger = logging.getLogger(__name__)
 def _capture_only_diagnostic_enabled() -> bool:
     return os.getenv(
         "SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_ONLY", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _capture_release_diagnostic_enabled() -> bool:
+    return os.getenv(
+        "SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE", ""
     ).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -116,6 +123,8 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._replay_count = 0
         self._replay_buckets: Counter[int] = Counter()
         self._eager_fallback_reasons: Counter[str] = Counter()
+        self._diagnostic_capture_release_count = 0
+        self._diagnostic_released_keys: set[Hashable] = set()
         self._capture_attention_metadata: VisionAttentionMetadata | None = None
 
     @property
@@ -271,6 +280,12 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         graph_key: Hashable = (
             (bucket_size, effective_window_lens) if self._is_npu else bucket_size
         )
+        if (
+            self._is_npu
+            and _capture_release_diagnostic_enabled()
+            and graph_key in getattr(self, "_diagnostic_released_keys", set())
+        ):
+            return self._fallback("diagnostic_capture_released")
         if graph_key in self._failed:
             return self._fallback("capture_failed")
 
@@ -300,6 +315,25 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 self._failed.add(graph_key)
                 return self._fallback("capture_failed")
             self._graphs[graph_key] = entry
+
+        if self._is_npu and _capture_release_diagnostic_enabled():
+            # Diagnostic only: distinguish an irreversible capture-time side
+            # effect from interference caused by a live NPUGraph/static-buffer
+            # owner. Synchronize capture completion, drop every strong
+            # reference owned by this runner, and collect before the eager
+            # encoder path resumes.
+            torch.cuda.synchronize(self._device)
+            released = self._graphs.pop(graph_key)
+            self._diagnostic_capture_release_count = (
+                getattr(self, "_diagnostic_capture_release_count", 0) + 1
+            )
+            if not hasattr(self, "_diagnostic_released_keys"):
+                self._diagnostic_released_keys = set()
+            self._diagnostic_released_keys.add(graph_key)
+            del entry, released
+            gc.collect()
+            torch.cuda.synchronize(self._device)
+            return self._fallback("diagnostic_capture_released")
 
         if self._is_npu and _capture_only_diagnostic_enabled():
             return self._fallback("diagnostic_capture_only")
@@ -351,6 +385,9 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 for bucket, count in sorted(captured_buckets.items())
             },
             "capture_failure_count": len(self._failed),
+            "diagnostic_capture_release_count": int(
+                getattr(self, "_diagnostic_capture_release_count", 0)
+            ),
             "replay_count": int(self._replay_count),
             "replay_buckets": {
                 str(bucket): int(count)

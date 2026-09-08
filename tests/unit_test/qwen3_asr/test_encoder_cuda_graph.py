@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sglang_omni.models.qwen3_asr import sglang_model
+from sglang_omni.models.qwen3_asr import encoder_cuda_graph, sglang_model
 from sglang_omni.models.qwen3_asr.encoder_cuda_graph import (
     Qwen3ASREncoderLayerStackGraphRunner,
     build_buckets,
@@ -208,6 +208,58 @@ def test_npu_capture_only_diagnostic_captures_without_replay(monkeypatch):
     assert len(runner._graphs) == 1
     assert replayed == []
     assert runner._eager_fallback_reasons == {"diagnostic_capture_only": 1}
+
+
+def test_npu_capture_release_diagnostic_drops_live_graph(monkeypatch):
+    runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
+    runner._is_npu = True
+    runner._device = torch.device("meta")
+    runner._max_seqlen = 8
+    runner._failed = set()
+    runner._graphs = {}
+    runner._npu_signature_capacity = 8
+    runner._npu_signature_capacity_reported = False
+    runner._reported_replays = set()
+    runner._replay_count = 0
+    runner._replay_buckets = Counter()
+    runner._eager_fallback_reasons = Counter()
+    runner._diagnostic_capture_release_count = 0
+    runner._diagnostic_released_keys = set()
+    runner._plan = lambda total, windows: (8, [8 - total])
+    graph = object()
+    capture_calls = []
+
+    def capture(bucket, window_lens=None):
+        capture_calls.append((bucket, window_lens))
+        return SimpleNamespace(
+            graph=graph,
+            hidden_states=None,
+            cu_seqlens=None,
+            attention_metadata=None,
+            output=None,
+        )
+
+    runner._capture = capture
+    synchronize_calls = []
+    monkeypatch.setattr(
+        encoder_cuda_graph.torch.cuda,
+        "synchronize",
+        lambda device=None: synchronize_calls.append(device),
+    )
+    monkeypatch.setenv("SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE", "1")
+
+    result = runner.run(torch.empty(7, 4), [7])
+
+    assert result is None
+    assert runner._graphs == {}
+    assert runner._diagnostic_capture_release_count == 1
+    assert runner._eager_fallback_reasons == {"diagnostic_capture_released": 1}
+    assert synchronize_calls == [runner._device, runner._device]
+
+    assert runner.run(torch.empty(7, 4), [7]) is None
+    assert len(capture_calls) == 1
+    assert runner._diagnostic_capture_release_count == 1
+    assert runner._eager_fallback_reasons == {"diagnostic_capture_released": 2}
 
 
 def test_encoder_graph_model_info_reports_replay_and_fallbacks():
