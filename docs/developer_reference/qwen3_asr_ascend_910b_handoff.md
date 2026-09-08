@@ -3139,6 +3139,52 @@ three-repeat performance, realtime, a package change, or another unlisted
 experiment. If T1 fails, do not start A1. If T1 passes and A1 fails, report A1
 as the first ALL-combination blocker.
 
+`910C-039` passed `T1-fixed`: real normal Torch Compile with encoder and
+prefill graphs disabled returned WER 0.0167 with 0/70 garbled outputs. The
+wrapper repair is therefore correct for the TC-only path. `A1-fixed` remained
+garbled at approximately WER 1.39. Because A1 simultaneously enables encoder
+graph, prefill graph, and the encoder/generation guard, it does **not** by
+itself prove an encoder-only interaction.
+
+#### `910C-040`: real-compile feature-combination split matrix
+
+No new source change is required. Use the exact reviewed code pair from
+`910C-039`: this handoff commit plus SGLang
+`origin/codex/qwen3-asr-torch-compile` at `54a8d042d`; leave
+`SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC` unset. The server must make zero source,
+test, configuration, package, or site-packages changes. Do not rebuild or
+reinstall `sgl-kernel-npu`.
+
+After the same clean-worktree, headless-OpenCV, no-holder, free-port, and two
+HBM-snapshot preflight, run the already-authorized focused and full suites. A
+preflight, collection, or test failure stops the whole matrix. Each accuracy
+arm uses a fresh service, normal `torch.compile`, decode graph through bucket
+70, a 70-item warm-up, and 140 exact10 measured requests. Return WER,
+garbled-output count, response accounting, compile/capture/replay/eager
+counters, encoder signature state, forbidden signatures, and cleanup.
+
+Run both independent arms even when the first has a garbled accuracy result:
+
+1. `E1-encoder-compile`: encoder graph and execution guard enabled; prefill
+   graph disabled; decode graph and normal Torch Compile enabled.
+2. `P1-prefill-compile`: encoder graph disabled; prefill and decode graphs plus
+   normal Torch Compile enabled. The encoder guard is absent by construction.
+
+Do not run ALL again, C70 performance, final three-repeat performance,
+realtime, a package change, or another unlisted experiment. Interpret results
+mechanically:
+
+- only E1 garbled: the blocker is the encoder-graph/guard plus compile
+  interaction; next local work instruments encoder graph replay/update and
+  compile-forward ordering.
+- only P1 garbled: the blocker is prefill-graph plus compile interaction; next
+  local work instruments the prefill PCG context and its transition to decode.
+- both garbled: there are at least two independent graph-plus-compile
+  compatibility defects; return both signatures before choosing a repair.
+- both correct while A1 remains garbled: the fault requires the combined
+  encoder and prefill state; next local work instruments their ordering and
+  shared ForwardBatch/cache state.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3326,7 +3372,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-036 | handoff `7b07596a`; SGLang `e45d64c9f` | Raw model forward with graph-safe decode-attention context retained but compile-safe fused-op preparation omitted | One `C0-context-eager` exact10 correctness arm | superseded before server execution | Replaced by the broader, independently scoped `910C-037` matrix to avoid a human round trip |
 | 910C-037 | handoff `6c7f1756`; SGLang `3295b12d3` | Separate graph-safe-attention, audio-tower-only prepared, and language-model-only prepared eager diagnostics | C0 first; if correct, independent A0 and L0 exact10 correctness arms | completed; C0 corruption reproduced | C0 remained garbled; A0/L0 correctly did not start; the graph-safe route is necessary, but its custom-op wrapper remains unisolated from the terminal backend |
 | 910C-038 | handoff `a2c91ead`; SGLang `8ec282120` | Direct NPU graph attention with TC custom-op wrapper bypassed | One W0 direct-graph eager exact10 correctness arm | completed; wrapper localized | W0 was correct at WER 0.0183 with 0/70 garbled outputs; direct backend is not the first fault, and the bypass remains diagnostic only |
-| 910C-039 | handoff commit containing this row; SGLang `54a8d042d` | Preserve static NPU graph state within the registered decode-attention custom op | Real normal-compile T1, then conditional real normal-compile ALL A1 correctness arms | authorized; pending | Verify the wrapper repair without diagnostic env selectors; no C70/final performance/realtime/package or server code change |
+| 910C-039 | handoff `e8b80db9`; SGLang `54a8d042d` | Preserve static NPU graph state within the registered decode-attention custom op | Real normal-compile T1, then conditional real normal-compile ALL A1 correctness arms | partial; T1 passed, A1 garbled | T1 returned WER 0.0167 with 0/70 garbled; A1 remained garbled around WER 1.39, proving only an unresolved full-combination interaction |
+| 910C-040 | handoff commit containing this row; SGLang `54a8d042d` | Split real normal-compile encoder+graph and prefill+graph interactions | Independent E1 encoder-compile and P1 prefill-compile exact10 correctness arms | authorized; pending | Separate the A1 failure into encoder/guard, prefill, two-independent-defect, or combined-state outcomes; no ALL/C70/realtime/package or server code change |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
