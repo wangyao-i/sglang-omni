@@ -3087,6 +3087,58 @@ Interpret W0 mechanically:
 - capture/startup failure: report the first signature as a distinct capture
   blocker and make no attention-correctness or performance claim.
 
+`910C-038` completed with a correct W0 result: WER 0.0183 and 0/70 garbled
+outputs. This localizes the defect to the custom-op wrapper, not the terminal
+NPU `forward_decode_graph` backend. The direct diagnostic remains forbidden as
+a production workaround because it removes the custom-op boundary required by
+normal Torch Compile.
+
+#### `910C-039`: NPU decode-attention wrapper repair qualification
+
+Local SGLang commit `54a8d042d` repairs the NPU TC decode branch inside
+`_unified_attention_with_output_impl`. It retains the registered custom-op
+boundary, but passes the original static graph Q/K/V tensors and ForwardBatch
+state straight to `forward_decode_graph`. It no longer applies generic PCG
+query/KV slicing, temporary cache-location or position replacement,
+`_attn_output` replacement, or padded-tail clearing to that branch. The
+special Prefix-MHA/LSE cases retain the prior generic behavior pending their
+own parity qualification. A CPU-focused test asserts that NPU decode-graph
+dispatch preserves the static tensors and all ForwardBatch identities.
+
+Use Git only: fetch this handoff commit and SGLang
+`origin/codex/qwen3-asr-torch-compile` at exact commit `54a8d042d`. The server
+must make zero source, test, configuration, package, or site-packages changes;
+do not rebuild or reinstall `sgl-kernel-npu`. Before running, require clean
+tracked worktrees, headless OpenCV, no holder/service process, a free port, and
+two HBM snapshots at or below 5%. A failed preflight, collection, or test
+failure stops all arms and returns the first blocker. Run the new Radix
+attention focused test, decode-runner/NPU dispatch/fused-op tests, Omni focused
+suites, and the full Qwen3-ASR suite.
+
+Use a fresh service process for each arm and leave
+`SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC` unset. This is a real `torch.compile`
+repair qualification, not a diagnostic selector:
+
+1. Run `T1-fixed`: encoder and prefill graphs disabled, decode graph enabled
+   through bucket 70, normal Torch Compile enabled, then 70-item warm-up and
+   140 exact10 measured requests. Require the actual compile marker, successful
+   decode capture, complete accounting, zero garbled output, normal accuracy,
+   no forbidden signature, and normal cleanup.
+2. Only if T1-fixed is correct, run fresh `A1-fixed`: encoder, prefill, decode
+   graph, execution guard, and normal Torch Compile all enabled, with the same
+   warm-up and 140-request exact10 correctness workload. Require positive
+   markers for all enabled graphs, zero encoder capture failure/fallback, zero
+   garbled output, normal accuracy, complete drain, and cleanup. Record encoder
+   signature count/capacity and any measurement-period growth, but do not make
+   a final performance claim from this arm.
+
+For every started arm return sanitized test counts, WER, garbled-output count,
+response accounting, compile/capture/replay/eager counters, encoder signature
+state, forbidden signatures, and cleanup. Do not run C70 performance, final
+three-repeat performance, realtime, a package change, or another unlisted
+experiment. If T1 fails, do not start A1. If T1 passes and A1 fails, report A1
+as the first ALL-combination blocker.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3273,7 +3325,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-035 | handoff `9041c9a0`; SGLang `9438420a6` | NPU RMSNorm and SiLU preserve their existing `torch_npu` dispatch inside the compile-safe context | Conditional D0-R2, normal T1-R2, then fully enabled A1-R2 exact10 correctness arms | completed; generic decoder dispatch hypothesis rejected | Declared tests passed, but D0-R2 remained garbled 70/70 with WER 1.4140; T1-R2 and A1-R2 correctly did not start |
 | 910C-036 | handoff `7b07596a`; SGLang `e45d64c9f` | Raw model forward with graph-safe decode-attention context retained but compile-safe fused-op preparation omitted | One `C0-context-eager` exact10 correctness arm | superseded before server execution | Replaced by the broader, independently scoped `910C-037` matrix to avoid a human round trip |
 | 910C-037 | handoff `6c7f1756`; SGLang `3295b12d3` | Separate graph-safe-attention, audio-tower-only prepared, and language-model-only prepared eager diagnostics | C0 first; if correct, independent A0 and L0 exact10 correctness arms | completed; C0 corruption reproduced | C0 remained garbled; A0/L0 correctly did not start; the graph-safe route is necessary, but its custom-op wrapper remains unisolated from the terminal backend |
-| 910C-038 | handoff commit containing this row; SGLang `8ec282120` | Direct NPU graph attention with TC custom-op wrapper bypassed | One W0 direct-graph eager exact10 correctness arm | authorized; pending | Determine whether corruption belongs to the wrapper's ForwardBatch/output handling or remains in the direct NPU graph-attention backend; no normal compile, ALL, C70, realtime, package, or server code change |
+| 910C-038 | handoff `a2c91ead`; SGLang `8ec282120` | Direct NPU graph attention with TC custom-op wrapper bypassed | One W0 direct-graph eager exact10 correctness arm | completed; wrapper localized | W0 was correct at WER 0.0183 with 0/70 garbled outputs; direct backend is not the first fault, and the bypass remains diagnostic only |
+| 910C-039 | handoff commit containing this row; SGLang `54a8d042d` | Preserve static NPU graph state within the registered decode-attention custom op | Real normal-compile T1, then conditional real normal-compile ALL A1 correctness arms | authorized; pending | Verify the wrapper repair without diagnostic env selectors; no C70/final performance/realtime/package or server code change |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
