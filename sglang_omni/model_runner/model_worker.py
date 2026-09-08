@@ -444,7 +444,41 @@ class ModelWorker:
         model = getattr(self.model_runner, "model", None)
         runner = getattr(model, "_encoder_graph_runner", None)
         info = getattr(runner, "model_info", None)
-        return info() if callable(info) else None
+        if not callable(info):
+            return None
+
+        data = info()
+        if not isinstance(data, dict):
+            return data
+
+        # Keep the provenance adjacent to the worker-owned graph counters.  In
+        # particular, do not infer the loaded runner implementation from a
+        # parent-process import or a ``.pyc`` pathname: the stage worker can
+        # own a different class object.  This small, path-free fingerprint
+        # distinguishes an older runner ``model_info`` method from an API
+        # response-shape error without changing graph execution.
+        method = getattr(type(runner), "model_info", None)
+        code = getattr(method, "__code__", None)
+        constants = getattr(code, "co_consts", ())
+        deferred_fields = (
+            "configured",
+            "deferred_count",
+            "remaining",
+            "run_count",
+            "first_capture",
+        )
+        result = dict(data)
+        result["runtime_identity"] = {
+            "runner_type": f"{type(runner).__module__}.{type(runner).__qualname__}",
+            "model_info_has_defer_provenance": all(
+                field in constants for field in deferred_fields
+            ),
+            "model_info_keys": sorted(data),
+            "diagnostic_capture_defer_keys": sorted(
+                data.get("diagnostic_capture_defer", {})
+            ),
+        }
+        return result
 
     def model_info(self) -> dict[str, Any]:
         from sglang.srt.runtime_context import get_model, get_serving

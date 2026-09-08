@@ -227,15 +227,47 @@ def test_model_worker_reports_actual_decode_graph_replays_by_bucket(
 
 
 def test_model_worker_exposes_encoder_graph_runner_info() -> None:
-    expected = {
-        "enabled": True,
-        "captured_graph_count": 2,
-        "replay_count": 7,
-    }
-    encoder_runner = SimpleNamespace(model_info=lambda: expected)
+    class _EncoderRunner:
+        def model_info(self):
+            return {
+                "enabled": True,
+                "captured_graph_count": 2,
+                "replay_count": 7,
+                "diagnostic_capture_defer": {
+                    "configured": 1,
+                    "deferred_count": 0,
+                    "remaining": 1,
+                    "run_count": 0,
+                    "first_capture": None,
+                },
+            }
+
+    encoder_runner = _EncoderRunner()
     worker = object.__new__(ModelWorker)
     worker.model_runner = SimpleNamespace(
         model=SimpleNamespace(_encoder_graph_runner=encoder_runner)
     )
 
-    assert ModelWorker._encoder_cuda_graph_info(worker) is expected
+    result = ModelWorker._encoder_cuda_graph_info(worker)
+
+    assert result is not None
+    assert result["enabled"] is True
+    assert result["captured_graph_count"] == 2
+    assert result["replay_count"] == 7
+    assert result["runtime_identity"] == {
+        "runner_type": f"{_EncoderRunner.__module__}.{_EncoderRunner.__qualname__}",
+        "model_info_has_defer_provenance": True,
+        "model_info_keys": [
+            "captured_graph_count",
+            "diagnostic_capture_defer",
+            "enabled",
+            "replay_count",
+        ],
+        "diagnostic_capture_defer_keys": [
+            "configured",
+            "deferred_count",
+            "first_capture",
+            "remaining",
+            "run_count",
+        ],
+    }

@@ -3883,6 +3883,46 @@ launch PID, worker PIDs, port owner, and module/cache paths; do not claim an
 NPU capture effect. If it passes, continue immediately in the same fresh
 process with the existing three-clip A/B/C transition procedure.
 
+`910C-051B` remained invalid, but its API response must not be interpreted as
+a top-level encoder-graph object: `/model_info` preserves each worker response
+under `stages[*].data`. Query and return
+`stages[*].data.encoder_cuda_graph`, including its complete key set, rather
+than a flattened or inferred `model_info.encoder_cuda_graph` path.
+
+#### `910C-051C` worker-owned runtime identity gate
+
+Before another capture or audio probe, use the handoff commit that adds
+`encoder_cuda_graph.runtime_identity`. This value is produced in
+`ModelWorker._encoder_cuda_graph_info()` by the stage worker immediately after
+calling the live runner's `model_info()`; it neither reloads modules nor
+changes graph capture, replay, pools, streams, or compile behavior. It
+contains only path-free fields:
+
+```text
+runner_type
+model_info_has_defer_provenance
+model_info_keys
+diagnostic_capture_defer_keys
+```
+
+Run one fresh, no-audio process with the existing source-only command and
+`SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1`. After health is ready, return
+the complete `stages[*].data.encoder_cuda_graph` object and require all of:
+
+1. `runtime_identity.model_info_has_defer_provenance=true`;
+2. `runtime_identity.diagnostic_capture_defer_keys` contains exactly
+   `configured`, `deferred_count`, `remaining`, `run_count`, and
+   `first_capture`;
+3. `diagnostic_capture_defer.configured=1`, `run_count=0`,
+   `deferred_count=0`, `remaining=1`, and `first_capture=null`; and
+4. `captured_graph_count=0` before any audio.
+
+If any field is absent or disagrees, stop without audio and return the raw
+stage-data shape plus launch and worker PIDs. This distinguishes an old runner
+method, a stale model-worker implementation, and API response routing without
+using `.pyc` paths as causal evidence. Only a successful gate may continue
+immediately with the existing A/B/C procedure in that same process.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -4084,7 +4124,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-050 | server script locally patched (not source-authoritative); source replacement `a7fda80f`; SGLang not required | Determine whether a synthetic two-graph torch_npu probe reproduces a runtime-level interaction | Run decode-first and encoder-first separately, each in a fresh verified-clean NPU process; no service/HTTP/benchmark | completed; no interaction reproduced, inconclusive for Qwen3-ASR | The initial script required fixes for torch scope and encoder-like conv/MLP shapes; its negative result cannot clear the real failure because it omits compiled decode, attention/KV, and production stream/pool lifecycle |
 | 910C-051 | Omni `606252b6`; SGLang as current exact E1 environment; no server edit | Isolate the real first encoder capture-to-compiled-decode transition in one service process | One fresh serial E1 process with `SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1`, then three cache-miss clips with one exact encoder signature | invalidated before comparison | Clip A was already garbled; returned model-info had defer configured state unavailable (`deferred=0`, `remaining=0`) and an existing graph/replays, so the mandatory A-before-capture condition was not met |
 | 910C-051A | `b76e8166`; Omni code with constructor/run/capture provenance; SGLang as exact `910C-051` environment | Determine whether the defer environment reached the serving model process or a runner invocation preceded clip A | One serial precheck only: startup log plus model-info before any audio under `SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1` | invalidated: source identity passed, runtime code identity did not | The on-disk module path, HEAD, and tracked blob matched `811ff448`, but runtime model-info omitted the new `configured`, `run_count`, and `first_capture` fields. No audio was sent; do not infer source mismatch, stale bytecode, or NPU capture without the source-only gate. |
-| 910C-051B | handoff commit containing this row; same source/SGLang as `910C-051A` | Prove the service executes the declared encoder graph module before any graph/capture conclusion | One fresh no-audio service precheck with an empty task-local `PYTHONPYCACHEPREFIX`, `PYTHONDONTWRITEBYTECODE=1`, and defer=1 | authorized; pending server run | Require module and cache paths, HEAD/blob identity, full five-key defer info, `configured=1`, and `run_count=0` before audio. If complete, immediately execute A/B/C in that same fresh process; otherwise return launch/worker/port ownership and stop. |
+| 910C-051B | `2229e61f`; same source/SGLang as `910C-051A` | Prove the service executes the declared encoder graph module before any graph/capture conclusion | One fresh no-audio source-only service precheck with an empty task-local cache prefix and defer=1 | invalidated: response-shape/runtime identity unresolved | Source path/HEAD/blob matched but the reported defer dictionary was incomplete. No audio was sent. `/model_info` stage nesting was not inspected, so this is neither bytecode nor NPU evidence. |
+| 910C-051C | handoff commit containing this row; same source/SGLang as `910C-051B` | Identify the live stage runner method and correctly read nested encoder graph data before capture attribution | One fresh no-audio source-only service precheck with defer=1 and worker-owned runtime identity | authorized; pending server run | Require `stages[*].data.encoder_cuda_graph.runtime_identity` plus the five defer fields, zero run/capture count, then immediately execute A/B/C only if all gates pass. |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
