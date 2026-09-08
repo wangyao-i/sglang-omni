@@ -3516,6 +3516,59 @@ Do not run ALL, C70, performance, soak, realtime, or additional arms under the
 release diagnostics.  `910C-042` remains separately authorized and serial;
 its performance data must not be mixed with `910C-046`.
 
+`910C-046 E-REL` completed with 2 of 20 probe outputs garbled after encoder
+capture and immediate release.  The returned evidence does not include a
+completed P-REL arm, so P-REL remains unclassified and must not be inferred
+from E-REL.  This result also does **not** prove that
+`prepare_model_for_torch_compile` mutated the encoder: the Qwen3-ASR encoder
+capture path does not call that helper.  The reduction from the broadly
+corrupt capture-retained result to 2/20 after release instead makes correlation
+with the requests that actually triggered the two lazy signature captures the
+next required check.
+
+#### `910C-047`: encoder capture-release output-parity boundary
+
+Use Omni code `d3f71fb7` with the same accepted SGLang commit and isolated
+environment as `910C-046`.  Run on one verified-clean NPU with one fresh
+service; multi-card parallel execution remains prohibited.  Set both
+`SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE=1` and
+`SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE_PARITY=1`, explicitly unset every
+other capture bypass/release diagnostic, and keep the rejected completion
+fence disabled.  The parity diagnostic uses the first real hidden-state input
+for the otherwise existing three capture warmups, saves the last pre-capture
+layer-stack output, releases the captured graph, then compares that reference
+with the normal post-release full-eager audio-tower fallback.  It does not
+change the subsequent compiled decode implementation.
+
+Before hardware, run `tests/unit_test/qwen3_asr/test_encoder_cuda_graph.py`,
+the encoder/model-info focused set used by `910C-046`, and the complete
+Qwen3-ASR suite.  Stop on the first collection or test failure.  Then run only
+the exact `910C-041` 20-item `max_new_tokens=2` E1 probe.  Do not run P-REL,
+ALL, C70, performance, soak, realtime, or any unlisted arm in this task.
+
+Return the 20-request accounting, equality/garbled count and WER; every
+`encoder capture-release parity` log line; and the full
+`model_info.encoder_cuda_graph.diagnostic_capture_release_parity` object.  Also
+return the capture-release count, released fallback count, live graph count,
+encoder replay count, compile/decode counters, forbidden signatures, drain,
+graceful cleanup, and two post-stop HBM snapshots.  Correlate each garbled
+request with the immediately preceding lazy capture/release and parity record;
+do not infer that all 20 requests shared one persistent state.
+
+Interpret the single arm as follows:
+
+- any parity mismatch means encoder output changed across capture; the next
+  repair belongs in encoder capture/attention/stream handling before compiled
+  decode;
+- parity matches but the same request is garbled means the encoder tensor is
+  numerically intact and capture changed downstream device/process state; the
+  next gate must isolate the NPU graph stream/pool or rebuild ordering;
+- parity matches and all 20 outputs recover means zero-filled capture or
+  missing real-input warmup is the trigger; promote real-input lazy capture to
+  a reviewable repair candidate and then requalify normal replay;
+- missing parity records, non-finite values, a capture failure, or a live graph
+  after release invalidates the arm.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3710,7 +3763,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-043 | handoff `970e9560`; code `b6966d4d`; SGLang `54a8d042d`; no server edit | Opt-in NPU device completion before each execution-guard hand-off | Parallel E1-F/P1-F two-token correctness probes | completed; hypothesis rejected | Both fenced arms remained garbled, so device completion alone does not repair the first compiled decode transition; fenced performance is invalid |
 | 910C-044 | handoff `53c1eccd`; SGLang `634303cdf`; no server edit | Make paged KV storage and cache locations explicit custom-op state | TC regression control and conditional combination arms | completed; rejected and reverted by SGLang `ca17cd413` | The explicit operands did not repair accuracy, regressed T1, and introduced a warm-up hang; do not reuse this implementation |
 | 910C-045 | handoff `af793d17`; Omni `8dab0b8f`; SGLang `5cb571995`; no server edit | Distinguish graph capture/init contamination from actual encoder/prefill replay | Serial E-CAP then P-CAP capture-only correctness arms on one clean NPU | completed; both arms garbled | Encoder and prefill replay were bypassed, but both combinations still corrupted the first compiled decode transition; capture/init plus retained graph state is sufficient |
-| 910C-046 | first handoff `e20cc11c` stopped at test; reauthorization commit containing this row; Omni code `0948859a`; test fix `b28013f0`; SGLang `1cd6be1b5`; no server edit | Distinguish irreversible capture mutation from live graph/pool/static-buffer ownership | Serial E-REL then P-REL capture-release correctness arms on one clean NPU | reauthorized; hardware pending | First attempt had 16 pass/1 fail/1 skip because the exact model-info assertion omitted the new zero-valued release counter; test-only fix landed, so rerun tests before the two hardware arms |
+| 910C-046 | handoff `06f6043d`; Omni code `0948859a`; test fix `b28013f0`; SGLang `1cd6be1b5`; no server edit | Distinguish irreversible capture mutation from live graph/pool/static-buffer ownership | Serial E-REL then conditional P-REL capture-release correctness arms on one clean NPU | E-REL completed and remained garbled 2/20; P-REL not evidenced | Releasing the encoder graph prevented broad retained-graph corruption but did not protect two probe outputs. Encoder capture does not call `prepare_model_for_torch_compile`; correlate the remaining failures with lazy captures before claiming persistent global mutation |
+| 910C-047 | handoff commit containing this row; Omni code `d3f71fb7`; SGLang `1cd6be1b5`; no server edit | Compare real encoder output immediately before capture with normal full-eager output after capture and release | One serial E1 capture-release parity probe on one clean NPU | authorized; hardware pending | Real hidden states seed the existing capture warmups only under the diagnostic env gate; model-info reports parity count/match/mismatch and bounded numerical summaries, allowing one run to separate encoder-output corruption from downstream NPU process-state contamination |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
