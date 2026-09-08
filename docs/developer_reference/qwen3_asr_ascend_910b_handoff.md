@@ -3463,8 +3463,13 @@ captured graph, graph pool, or static tensors.
 
 #### `910C-046`: serial capture-release ownership isolation
 
-Use Omni `0948859a` and SGLang `1cd6be1b5`.  Run on one verified-clean NPU,
-one fresh service at a time, with the same packages, kernels, exact10 corpus,
+The first attempt at handoff `e20cc11c` stopped before hardware because the
+existing exact model-info assertion omitted the new release counter's default
+value.  Test-only commit `b28013f0` adds the expected
+`diagnostic_capture_release_count: 0`; runtime behavior is unchanged.  Use the
+current handoff commit, which includes Omni code `0948859a`, test fix
+`b28013f0`, and SGLang `1cd6be1b5`.  Run on one verified-clean NPU, one fresh
+service at a time, with the same packages, kernels, exact10 corpus,
 deterministic settings, and profile controls as `910C-045`.  Explicitly unset
 the `910C-045` capture-only variables and keep the rejected completion fence
 disabled.  The isolated operator must not edit source, tests, configuration
@@ -3705,7 +3710,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-043 | handoff `970e9560`; code `b6966d4d`; SGLang `54a8d042d`; no server edit | Opt-in NPU device completion before each execution-guard hand-off | Parallel E1-F/P1-F two-token correctness probes | completed; hypothesis rejected | Both fenced arms remained garbled, so device completion alone does not repair the first compiled decode transition; fenced performance is invalid |
 | 910C-044 | handoff `53c1eccd`; SGLang `634303cdf`; no server edit | Make paged KV storage and cache locations explicit custom-op state | TC regression control and conditional combination arms | completed; rejected and reverted by SGLang `ca17cd413` | The explicit operands did not repair accuracy, regressed T1, and introduced a warm-up hang; do not reuse this implementation |
 | 910C-045 | handoff `af793d17`; Omni `8dab0b8f`; SGLang `5cb571995`; no server edit | Distinguish graph capture/init contamination from actual encoder/prefill replay | Serial E-CAP then P-CAP capture-only correctness arms on one clean NPU | completed; both arms garbled | Encoder and prefill replay were bypassed, but both combinations still corrupted the first compiled decode transition; capture/init plus retained graph state is sufficient |
-| 910C-046 | handoff commit containing this row; Omni `0948859a`; SGLang `1cd6be1b5`; no server edit | Distinguish irreversible capture mutation from live graph/pool/static-buffer ownership | Serial E-REL then P-REL capture-release correctness arms on one clean NPU | authorized; pending | Capture each auxiliary graph, destroy its graph, pool and static owners, then execute eager producer plus compiled decode |
+| 910C-046 | first handoff `e20cc11c` stopped at test; reauthorization commit containing this row; Omni code `0948859a`; test fix `b28013f0`; SGLang `1cd6be1b5`; no server edit | Distinguish irreversible capture mutation from live graph/pool/static-buffer ownership | Serial E-REL then P-REL capture-release correctness arms on one clean NPU | reauthorized; hardware pending | First attempt had 16 pass/1 fail/1 skip because the exact model-info assertion omitted the new zero-valued release counter; test-only fix landed, so rerun tests before the two hardware arms |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
