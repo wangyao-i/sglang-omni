@@ -3758,6 +3758,50 @@ the production Qwen3-ASR capture API, pool identity, warmup stream, input-copy
 ownership, and output lifetime against these vLLM-Omni invariants before
 changing production graph ownership again.
 
+#### `910C-051` real Qwen3 graph-to-compile transition probe
+
+The synthetic `910C-050` result is inconclusive. `910C-051` therefore tests
+the real service lifecycle with the existing Qwen3 encoder graph runner and
+the actual compiled SGLang decode path, while keeping the experiment bounded.
+Local commit `a7fda80f` adds the opt-in environment control
+`SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=N` (default `0`). On NPU only, it
+returns `None` for the first N *unseen encoder signatures* before capture; the
+normal audio-tower eager path then runs. This is an intentional diagnostic
+control, not an eager fallback. When the counter reaches zero, the next
+unseen signature follows the normal real encoder graph capture and replay
+path. `model_info.encoder_cuda_graph.diagnostic_capture_defer` reports the
+deferred count and remaining count.
+
+Run one fresh process on one verified-clean NPU with the exact E1 profile:
+encoder graph enabled, prefill graph disabled, decode graph enabled, torch
+compile enabled, and the existing guard/settings otherwise unchanged. Set
+`SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1`. Do not alter source, packages,
+or server configuration files.
+
+Use three distinct exact-10-second clips with the same Qwen3 encoder window
+signature. They must be distinct because replaying the same bytes can be
+satisfied by the pre-LM cache and would not call the encoder runner again.
+
+1. Send clip A. It must be a pre-LM cache miss and return correct normalized
+   text/expected WER through compiled decode. Immediately record model-info:
+   `deferred_count=1`, `remaining=0`, encoder `captured_graph_count=0`, and
+   encoder `replay_count=0` are required.
+2. Send clip B. It must also be a cache miss with the same encoder signature.
+   It must trigger normal encoder capture plus replay, return correct text,
+   and advance encoder `captured_graph_count` and `replay_count` to at least
+   one with no capture failure.
+3. Send clip C. It must be a cache miss with that signature, replay the same
+   encoder graph, return correct text, and increment encoder replay again.
+
+Return only sanitized per-step correctness/latency, the two model-info
+snapshots, encoder capture/replay/fallback counters, compile/decode graph
+counters, and server revisions. A correct A followed by garbled B or C proves
+the real encoder-capture-to-compiled-decode transition in one process. A
+correct A/B/C disproves that narrow transition hypothesis for the tested
+signature; it does not qualify the ALL configuration or close the prefill plus
+compile defect. Any cache hit, signature mismatch, capture failure, fallback,
+or teardown failure invalidates the run rather than supporting either result.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3956,7 +4000,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-047 | handoff `deb3a680`; Omni code `d3f71fb7`; SGLang `1cd6be1b5`; no server edit | Compare real encoder output immediately before capture with normal full-eager output after capture and release | One serial E1 capture-release parity probe on one clean NPU | completed; encoder exonerated, downstream state implicated | Parity `allclose=True` (encoder numerically identical across capture+release) yet outputs still garbled; disproves both the `prepare_model_for_torch_compile` mutation hypothesis and encoder-output corruption; contamination is in downstream device/compile runtime state visible only in compiled decode |
 | 910C-048 | handoff `daf5c354`; Omni code `cf79b353`; SGLang as `910C-047`; no server edit | Attribute which runtime state transitions during capture persist through release | One serial E1 capture-state snapshot probe on one clean NPU | completed; all Python-visible sections clean, driver layer implicated | Every non-memory section reported count=0 across warmup/capture/release; no Python-observable state is mutated by encoder capture, so contamination is below the Python layer in NPU driver state; only memory counters moved (graph static-buffer allocation, expected) |
 | 910C-049 | handoff `22d22ef1`; Omni code `e9032edc`; SGLang as `910C-048`; no server edit | Repair shared default graph-pool contamination by capturing encoder graphs into a dedicated private pool | One serial E1 normal-replay correctness probe on one clean NPU (no bypass diagnostics) | completed; hypothesis rejected, driver layer confirmed process-global | Private pool did not repair; E1 remained garbled 2/20, so contamination is not pool-scoped but process-global NPU driver state; combined with T1-fixed/E1/045/046/048 this isolates one encoder capture retroactively corrupting already-captured correctly-replaying decode graphs |
-| 910C-050 | handoff commit containing this row; Omni script revision `npu_two_graph_capture_corruption.py`; SGLang not required | Determine whether a synthetic two-graph torch_npu probe reproduces a runtime-level interaction | Run decode-first and encoder-first separately, each in a fresh verified-clean NPU process; no service/HTTP/benchmark | authorized; pending server run | Positive decode-first baseline/stability match followed by a changed post-capture hash is vendor-actionable evidence; negative synthetic output is explicitly inconclusive for Qwen3-ASR because it omits compiled decode, attention/KV, and production stream/pool lifecycle |
+| 910C-050 | server script locally patched (not source-authoritative); source replacement `a7fda80f`; SGLang not required | Determine whether a synthetic two-graph torch_npu probe reproduces a runtime-level interaction | Run decode-first and encoder-first separately, each in a fresh verified-clean NPU process; no service/HTTP/benchmark | completed; no interaction reproduced, inconclusive for Qwen3-ASR | The initial script required fixes for torch scope and encoder-like conv/MLP shapes; its negative result cannot clear the real failure because it omits compiled decode, attention/KV, and production stream/pool lifecycle |
+| 910C-051 | handoff commit containing this row; Omni code `a7fda80f` plus this diagnostic; SGLang as current exact E1 environment | Isolate the real first encoder capture-to-compiled-decode transition in one service process | One fresh serial E1 process with `SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1`, then three cache-miss clips with one exact encoder signature | authorized; pending server run | A must defer and remain correct; B must capture/replay and remain correct; C must replay and remain correct. Any cache hit, fallback, capture failure, signature mismatch, or cleanup failure invalidates the arm |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak

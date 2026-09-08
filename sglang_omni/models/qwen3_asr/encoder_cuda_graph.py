@@ -55,6 +55,30 @@ def _capture_release_state_snapshot_diagnostic_enabled() -> bool:
     ).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _capture_defer_calls_diagnostic_value() -> int:
+    """Return the opt-in count of first-seen signatures kept eager.
+
+    This gate exists only to compare a real request before and immediately
+    after its first encoder graph capture while preserving the same compiled
+    generation process. It deliberately does not count as an eager fallback:
+    the caller requested this diagnostic control path.
+    """
+    raw = os.getenv("SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES", "").strip()
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            "SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES must be a non-negative integer"
+        ) from exc
+    if value < 0:
+        raise ValueError(
+            "SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES must be a non-negative integer"
+        )
+    return value
+
+
 def _callable_label(value: Any) -> str | None:
     if value is None:
         return None
@@ -196,6 +220,10 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._diagnostic_pending_capture_state: dict[str, Any] | None = None
         self._diagnostic_state_snapshot_count = 0
         self._diagnostic_last_capture_state: dict[str, Any] | None = None
+        self._diagnostic_capture_defer_remaining = (
+            _capture_defer_calls_diagnostic_value() if self._is_npu else 0
+        )
+        self._diagnostic_capture_deferred_count = 0
         self._capture_attention_metadata: VisionAttentionMetadata | None = None
 
     @property
@@ -531,6 +559,21 @@ class Qwen3ASREncoderLayerStackGraphRunner:
 
         entry = self._graphs.get(graph_key)
         if entry is None:
+            if self._is_npu and getattr(
+                self, "_diagnostic_capture_defer_remaining", 0
+            ):
+                self._diagnostic_capture_defer_remaining -= 1
+                self._diagnostic_capture_deferred_count = getattr(
+                    self, "_diagnostic_capture_deferred_count", 0
+                ) + 1
+                logger.info(
+                    "[qwen3-asr] diagnostic deferring first encoder graph "
+                    "capture for bucket=%d windows=%d remaining=%d",
+                    bucket_size,
+                    len(effective_window_lens),
+                    self._diagnostic_capture_defer_remaining,
+                )
+                return None
             if self._is_npu and len(self._graphs) >= self._npu_signature_capacity:
                 if not self._npu_signature_capacity_reported:
                     logger.warning(
@@ -705,6 +748,14 @@ class Qwen3ASREncoderLayerStackGraphRunner:
             "diagnostic_capture_release_state": {
                 "count": int(getattr(self, "_diagnostic_state_snapshot_count", 0)),
                 "last": getattr(self, "_diagnostic_last_capture_state", None),
+            },
+            "diagnostic_capture_defer": {
+                "deferred_count": int(
+                    getattr(self, "_diagnostic_capture_deferred_count", 0)
+                ),
+                "remaining": int(
+                    getattr(self, "_diagnostic_capture_defer_remaining", 0)
+                ),
             },
             "replay_count": int(self._replay_count),
             "replay_buckets": {
