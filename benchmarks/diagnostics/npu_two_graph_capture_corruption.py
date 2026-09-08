@@ -1,17 +1,23 @@
-"""910C-050: vendor-actionable NPU driver-level minimal reproduction.
+"""910C-050: NPU two-graph capture interaction probe.
 
 Sixteen server-side gates (910C-032 .. 910C-049) localized a corruption in
 which enabling the Qwen3-ASR encoder CUDA graph garbles compiled decode,
 while every Python-observable state stays clean (910C-048) and a private
-graph pool does not help (910C-049). The narrow causal statement is:
+graph pool does not help (910C-049). The bounded working hypothesis is:
 
     one graph capture retroactively corrupts an already-captured,
     correctly-replaying graph in the same process, via process-global NPU
-    driver state.
+    runtime state.
 
-This script reproduces that defect with two independent synthetic graphs and
-NO model weights, so it and its output are fully exportable to the
-CANN/torch_npu owner. It runs on one clean NPU and prints a JSON verdict.
+This is a deliberately synthetic, fully exportable probe: it uses two
+independent graphs and no model weights, SGLang service, HTTP, benchmark
+client, or private data. A positive result is vendor-actionable evidence of a
+runtime-level two-graph interaction. A negative result is *inconclusive* for
+the Qwen3-ASR failure because this probe does not include Qwen3's compiled
+decode, KV-cache, attention, stream, or graph-pool lifecycle.
+
+Run one arm per fresh process. Mixing the two arms in one process would allow
+the first arm to contaminate the control and invalidate its interpretation.
 
 Main arm (decode-first, then encoder):
   1. capture graph A over a decode-like op sequence on a fixed static input;
@@ -115,6 +121,13 @@ class _CapturedGraph:
         return _hash(self.static_out)
 
 
+def _stable_replay_hashes(
+    graph: _CapturedGraph, torch, replays: int
+) -> set[str]:
+    """Replay repeatedly so a one-off match is not treated as a healthy graph."""
+    return {graph.replayed_hash(torch) for _ in range(replays)}
+
+
 def _build_ops(torch, d=256):
     dev = "npu"
     a_in = torch.randn(8, d, device=dev)
@@ -140,23 +153,24 @@ def _run_main_decode_first(torch, replays: int) -> dict:
     eager_ref_hash = _hash(fn_a())
 
     graph_a = _CapturedGraph(torch, fn_a)
-    pre_hash = graph_a.replayed_hash(torch)
-    replay_hashes = {pre_hash}
-    for _ in range(replays - 1):
-        replay_hashes.add(graph_a.replayed_hash(torch))
+    pre_hashes = _stable_replay_hashes(graph_a, torch, replays)
+    pre_hash = next(iter(pre_hashes))
 
     # Trigger: capture a second, distinct encoder-like graph into the process.
     graph_b = _CapturedGraph(torch, fn_b)
     _ = graph_b  # retained to mirror the live-resident-graph condition
 
-    post_hash = graph_a.replayed_hash(torch)
+    post_hashes = _stable_replay_hashes(graph_a, torch, replays)
+    post_hash = next(iter(post_hashes))
 
     return {
         "arm_order": "decode-first",
         "replays": replays,
         "a_baseline_matches_eager": bool(pre_hash == eager_ref_hash),
-        "a_replay_stable_before_other_capture": bool(len(replay_hashes) == 1),
+        "a_replay_stable_before_other_capture": bool(len(pre_hashes) == 1),
         "a_output_changed_after_encoder_capture": bool(pre_hash != post_hash),
+        "a_replay_stable_after_encoder_capture": bool(len(post_hashes) == 1),
+        "a_post_capture_matches_eager": bool(post_hash == eager_ref_hash),
         "eager_hash": eager_ref_hash,
         "pre_hash": pre_hash,
         "post_hash": post_hash,
@@ -173,8 +187,10 @@ def _run_control_encoder_first(torch, replays: int) -> dict:
     torch.manual_seed(0)
     fn_a, fn_b = _build_ops(torch)
 
+    eager_ref_hash = _hash(fn_b())
     graph_b = _CapturedGraph(torch, fn_b)
-    b_pre = graph_b.replayed_hash(torch)
+    b_pre_hashes = _stable_replay_hashes(graph_b, torch, replays)
+    b_pre = next(iter(b_pre_hashes))
 
     graph_a1 = _CapturedGraph(torch, fn_a)
     _ = graph_a1
@@ -182,12 +198,18 @@ def _run_control_encoder_first(torch, replays: int) -> dict:
     graph_a2 = _CapturedGraph(torch, fn_a)
     _ = graph_a2
 
-    b_post = graph_b.replayed_hash(torch)
+    b_post_hashes = _stable_replay_hashes(graph_b, torch, replays)
+    b_post = next(iter(b_post_hashes))
 
     return {
         "arm_order": "encoder-first",
         "replays": replays,
+        "b_baseline_matches_eager": bool(b_pre == eager_ref_hash),
+        "b_replay_stable_before_later_captures": bool(len(b_pre_hashes) == 1),
         "b_output_changed_after_later_captures": bool(b_pre != b_post),
+        "b_replay_stable_after_later_captures": bool(len(b_post_hashes) == 1),
+        "b_post_capture_matches_eager": bool(b_post == eager_ref_hash),
+        "eager_hash": eager_ref_hash,
         "b_pre_hash": b_pre,
         "b_post_hash": b_post,
     }
@@ -196,28 +218,60 @@ def _run_control_encoder_first(torch, replays: int) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--replays", type=int, default=8)
+    parser.add_argument(
+        "--arm",
+        choices=("decode-first", "encoder-first"),
+        default="decode-first",
+        help="Run exactly one arm. Execute the other arm in a new process.",
+    )
     args = parser.parse_args()
+    if args.replays < 2:
+        parser.error("--replays must be at least 2")
 
     torch = _require_npu()
-    main_arm = _run_main_decode_first(torch, args.replays)
-    control_arm = _run_control_encoder_first(torch, args.replays)
-    result = {
+    result: dict = {
         "versions": _versions(torch),
-        "main_decode_first": main_arm,
-        "control_encoder_first": control_arm,
-        "verdict": {
-            "driver_corruption_reproduced": bool(
-                main_arm["a_baseline_matches_eager"]
-                and main_arm["a_replay_stable_before_other_capture"]
-                and main_arm["a_output_changed_after_encoder_capture"]
-            ),
-            "order_dependent": bool(
-                control_arm["b_output_changed_after_later_captures"]
-            ),
-        },
+        "synthetic_probe_limitations": (
+            "Does not include Qwen3-ASR compiled decode, attention/KV cache, "
+            "or production stream/pool lifecycle; a negative result is inconclusive."
+        ),
     }
+    if args.arm == "decode-first":
+        main_arm = _run_main_decode_first(torch, args.replays)
+        reproduced = bool(
+            main_arm["a_baseline_matches_eager"]
+            and main_arm["a_replay_stable_before_other_capture"]
+            and main_arm["a_output_changed_after_encoder_capture"]
+            and main_arm["a_replay_stable_after_encoder_capture"]
+        )
+        result.update({
+            "arm": main_arm,
+            "verdict": {
+                "runtime_interaction_reproduced": reproduced,
+                "negative_result_is_inconclusive": not reproduced,
+            },
+        })
+        exit_code = 0 if reproduced else 1
+    else:
+        control_arm = _run_control_encoder_first(torch, args.replays)
+        result.update({
+            "arm": control_arm,
+            "verdict": {
+                "later_capture_changed_resident_graph": bool(
+                    control_arm["b_baseline_matches_eager"]
+                    and control_arm["b_replay_stable_before_later_captures"]
+                    and control_arm["b_output_changed_after_later_captures"]
+                    and control_arm["b_replay_stable_after_later_captures"]
+                ),
+                "negative_result_is_inconclusive": not control_arm[
+                    "b_output_changed_after_later_captures"
+                ],
+            },
+        })
+        # A healthy control is a valid diagnostic result, not a failed run.
+        exit_code = 0
     print(json.dumps(result, indent=2))
-    return 0 if result["verdict"]["driver_corruption_reproduced"] else 1
+    return exit_code
 
 
 if __name__ == "__main__":
