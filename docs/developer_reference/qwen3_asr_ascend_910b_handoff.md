@@ -3923,6 +3923,32 @@ method, a stale model-worker implementation, and API response routing without
 using `.pyc` paths as causal evidence. Only a successful gate may continue
 immediately with the existing A/B/C procedure in that same process.
 
+#### `910C-051D` spawn import-boundary probe
+
+`910C-051C` reported an empty `runtime_identity`, which cannot be emitted by
+the `f063a4f6` worker implementation. Before changing module reload behavior,
+run the dedicated no-NPU probe from the declared checkout with the exact
+service interpreter and the existing defer environment:
+
+```text
+python -B -m benchmarks.diagnostics.spawn_import_provenance \
+    --expected-root <declared-clean-checkout>
+```
+
+It starts one plain `multiprocessing.spawn` child and reports only path-free
+booleans for both parent and child: whether the encoder and model-worker
+modules resolve under the expected checkout, whether the live runner method
+contains all five defer keys, whether the model-worker method contains the
+`runtime_identity` wrapper, cache/bytecode mode, and inherited defer value.
+It creates no model, graph, NPU context, service listener, or audio request.
+
+If parent and child both pass, the remaining fault is service-stage routing or
+the reported response extraction, and the next local change must instrument
+that stage boundary. If the child differs from the parent, classify it as a
+reproducible spawn bootstrap/import problem and repair the executable or
+`sys.path` handoff based on the returned boolean that differs. Do not reload a
+module or make another graph claim before this probe has a result.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -4126,6 +4152,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-051A | `b76e8166`; Omni code with constructor/run/capture provenance; SGLang as exact `910C-051` environment | Determine whether the defer environment reached the serving model process or a runner invocation preceded clip A | One serial precheck only: startup log plus model-info before any audio under `SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1` | invalidated: source identity passed, runtime code identity did not | The on-disk module path, HEAD, and tracked blob matched `811ff448`, but runtime model-info omitted the new `configured`, `run_count`, and `first_capture` fields. No audio was sent; do not infer source mismatch, stale bytecode, or NPU capture without the source-only gate. |
 | 910C-051B | `2229e61f`; same source/SGLang as `910C-051A` | Prove the service executes the declared encoder graph module before any graph/capture conclusion | One fresh no-audio source-only service precheck with an empty task-local cache prefix and defer=1 | invalidated: response-shape/runtime identity unresolved | Source path/HEAD/blob matched but the reported defer dictionary was incomplete. No audio was sent. `/model_info` stage nesting was not inspected, so this is neither bytecode nor NPU evidence. |
 | 910C-051C | handoff commit containing this row; same source/SGLang as `910C-051B` | Identify the live stage runner method and correctly read nested encoder graph data before capture attribution | One fresh no-audio source-only service precheck with defer=1 and worker-owned runtime identity | authorized; pending server run | Require `stages[*].data.encoder_cuda_graph.runtime_identity` plus the five defer fields, zero run/capture count, then immediately execute A/B/C only if all gates pass. |
+| 910C-051D | handoff commit containing this row; no SGLang/NPU dependency | Reproduce or reject a Python spawn import mismatch without model construction | Parent/child source-provenance probe under the exact service interpreter and environment | authorized; pending server run | Compare checkout ownership and method capabilities on both sides of one plain spawn boundary; no service, graph, or audio is allowed. |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
