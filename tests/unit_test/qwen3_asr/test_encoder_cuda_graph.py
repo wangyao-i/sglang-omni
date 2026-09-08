@@ -8,6 +8,7 @@ import torch
 from sglang_omni.models.qwen3_asr import encoder_cuda_graph, sglang_model
 from sglang_omni.models.qwen3_asr.encoder_cuda_graph import (
     Qwen3ASREncoderLayerStackGraphRunner,
+    _capture_state_delta,
     build_buckets,
     window_lens_from_token_counts,
 )
@@ -337,6 +338,35 @@ def test_capture_release_parity_passes_real_hidden_state_to_capture(monkeypatch)
     assert captured["diagnostic_total"] == 7
 
 
+def test_capture_state_delta_is_stable_and_bounded():
+    before = {
+        "fused_ops": {"decoder.norm": {"forward": "native"}},
+        "tensor_metadata": {"parameter:weight": {"version": 0}},
+        "module_training": {"<root>": False},
+        "runtime": {"memory_allocated": 1},
+    }
+    after = {
+        "fused_ops": {"decoder.norm": {"forward": "native"}},
+        "tensor_metadata": {"parameter:weight": {"version": 1}},
+        "module_training": {"<root>": False},
+        "runtime": {"memory_allocated": 2},
+    }
+
+    delta = _capture_state_delta(before, after)
+
+    assert len(delta["before_digest"]) == 64
+    assert len(delta["after_digest"]) == 64
+    assert delta["sections"]["fused_ops"] == {"count": 0, "first_keys": []}
+    assert delta["sections"]["tensor_metadata"] == {
+        "count": 1,
+        "first_keys": ["parameter:weight"],
+    }
+    assert delta["sections"]["runtime"] == {
+        "count": 1,
+        "first_keys": ["memory_allocated"],
+    }
+
+
 def test_encoder_graph_model_info_reports_replay_and_fallbacks():
     runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
     runner._is_npu = True
@@ -364,6 +394,7 @@ def test_encoder_graph_model_info_reports_replay_and_fallbacks():
             "mismatch_count": 0,
             "last": None,
         },
+        "diagnostic_capture_release_state": {"count": 0, "last": None},
         "replay_count": 3,
         "replay_buckets": {"128": 3},
         "eager_fallback_count": 2,

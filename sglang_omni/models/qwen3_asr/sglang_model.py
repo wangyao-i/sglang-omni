@@ -165,6 +165,7 @@ class Qwen3ASRForConditionalGeneration(nn.Module):
             buckets=build_buckets(max_batch_size, max_tokens_per_clip),
             max_batch_size=max_batch_size,
         )
+        runner.set_diagnostic_model_root(self)
         runner.capture_all()
         self._encoder_graph_runner = runner
 

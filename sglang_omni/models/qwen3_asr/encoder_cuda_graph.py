@@ -11,6 +11,8 @@ buckets only need to track total token count.
 from __future__ import annotations
 
 import gc
+import hashlib
+import json
 import logging
 import os
 from collections import Counter
@@ -45,6 +47,51 @@ def _capture_release_parity_diagnostic_enabled() -> bool:
     return os.getenv(
         "SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE_PARITY", ""
     ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _capture_release_state_snapshot_diagnostic_enabled() -> bool:
+    return os.getenv(
+        "SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE_STATE_SNAPSHOT", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _callable_label(value: Any) -> str | None:
+    if value is None:
+        return None
+    function = getattr(value, "__func__", value)
+    module = getattr(function, "__module__", type(function).__module__)
+    qualname = getattr(function, "__qualname__", type(function).__qualname__)
+    return f"{module}.{qualname}"
+
+
+def _snapshot_digest(snapshot: dict[str, Any]) -> str:
+    encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _snapshot_section_delta(
+    before: dict[str, Any], after: dict[str, Any]
+) -> dict[str, Any]:
+    changed = sorted(
+        key for key in set(before) | set(after) if before.get(key) != after.get(key)
+    )
+    return {"count": len(changed), "first_keys": changed[:8]}
+
+
+def _capture_state_delta(
+    before: dict[str, Any], after: dict[str, Any]
+) -> dict[str, Any]:
+    sections = ("fused_ops", "tensor_metadata", "module_training", "runtime")
+    return {
+        "before_digest": _snapshot_digest(before),
+        "after_digest": _snapshot_digest(after),
+        "sections": {
+            section: _snapshot_section_delta(
+                before.get(section, {}), after.get(section, {})
+            )
+            for section in sections
+        },
+    }
 
 
 def build_buckets(max_batch: int, max_tokens_per_clip: int) -> tuple[int, ...]:
@@ -139,11 +186,136 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._diagnostic_parity_match_count = 0
         self._diagnostic_parity_mismatch_count = 0
         self._diagnostic_last_parity: dict[str, Any] | None = None
+        self._diagnostic_model_root: torch.nn.Module | None = None
+        self._diagnostic_pending_capture_state: dict[str, Any] | None = None
+        self._diagnostic_state_snapshot_count = 0
+        self._diagnostic_last_capture_state: dict[str, Any] | None = None
         self._capture_attention_metadata: VisionAttentionMetadata | None = None
 
     @property
     def tokens_per_window(self) -> int:
         return self._max_seqlen
+
+    def set_diagnostic_model_root(self, model: torch.nn.Module) -> None:
+        """Attach the complete model only for opt-in capture-state diagnostics."""
+        self._diagnostic_model_root = model
+
+    def _capture_state_snapshot(self) -> dict[str, Any]:
+        """Collect bounded, non-content state around one NPU graph capture."""
+        from sglang.kernels.fused_op import BaseFusedOp
+
+        root = getattr(self, "_diagnostic_model_root", None) or self._tower
+        fused_ops: dict[str, Any] = {}
+        module_training: dict[str, bool] = {}
+        for name, module in root.named_modules():
+            path = name or "<root>"
+            module_training[path] = bool(module.training)
+            if isinstance(module, BaseFusedOp):
+                fused_ops[path] = {
+                    "type": f"{type(module).__module__}.{type(module).__qualname__}",
+                    "is_torch_compile": bool(module.is_torch_compile),
+                    "forward": _callable_label(module._forward_method),
+                    "original_forward": _callable_label(
+                        module._original_forward_method
+                    ),
+                    "compiled_native": _callable_label(module._compiled_native),
+                }
+
+        tensor_metadata: dict[str, Any] = {}
+        for kind, named_tensors in (
+            ("parameter", root.named_parameters()),
+            ("buffer", root.named_buffers()),
+        ):
+            for name, tensor in named_tensors:
+                try:
+                    pointer = int(tensor.data_ptr())
+                except Exception:
+                    pointer = None
+                tensor_metadata[f"{kind}:{name}"] = {
+                    "shape": list(tensor.shape),
+                    "dtype": str(tensor.dtype),
+                    "device": str(tensor.device),
+                    "data_ptr": pointer,
+                    "version": int(getattr(tensor, "_version", -1)),
+                    "requires_grad": bool(tensor.requires_grad),
+                }
+
+        runtime: dict[str, Any] = {
+            "grad_enabled": bool(torch.is_grad_enabled()),
+            "capture_only": _capture_only_diagnostic_enabled(),
+            "capture_release": _capture_release_diagnostic_enabled(),
+            "capture_release_parity": _capture_release_parity_diagnostic_enabled(),
+        }
+        try:
+            from sglang.srt.distributed.device_communicators import pynccl_allocator
+
+            pool = getattr(pynccl_allocator, "_graph_pool_id", None)
+            runtime["symmetric_graph_pool"] = (
+                None
+                if pool is None
+                else f"{type(pool).__module__}.{type(pool).__qualname__}:{pool}"
+            )
+        except Exception as exc:
+            runtime["symmetric_graph_pool"] = f"unavailable:{type(exc).__name__}"
+
+        device_module = torch.get_device_module(self._device)
+        for field in ("memory_allocated", "memory_reserved"):
+            fn = getattr(device_module, field, None)
+            try:
+                runtime[field] = int(fn(self._device)) if callable(fn) else None
+            except Exception as exc:
+                runtime[field] = f"unavailable:{type(exc).__name__}"
+        try:
+            stream = device_module.current_stream(self._device)
+            runtime["current_stream"] = {
+                "type": f"{type(stream).__module__}.{type(stream).__qualname__}",
+                "handle": getattr(stream, "cuda_stream", None),
+            }
+        except Exception as exc:
+            runtime["current_stream"] = f"unavailable:{type(exc).__name__}"
+        try:
+            runtime["stream_capturing"] = bool(torch.cuda.is_current_stream_capturing())
+        except Exception as exc:
+            runtime["stream_capturing"] = f"unavailable:{type(exc).__name__}"
+
+        return {
+            "fused_ops": fused_ops,
+            "tensor_metadata": tensor_metadata,
+            "module_training": module_training,
+            "runtime": runtime,
+        }
+
+    def _record_capture_state_after_release(self) -> None:
+        pending = getattr(self, "_diagnostic_pending_capture_state", None)
+        if pending is None:
+            return
+        post_release = self._capture_state_snapshot()
+        self._diagnostic_pending_capture_state = None
+        transitions = {
+            "warmup": _capture_state_delta(
+                pending["pre_warmup"], pending["pre_graph_capture"]
+            ),
+            "capture": _capture_state_delta(
+                pending["pre_graph_capture"], pending["post_graph_capture"]
+            ),
+            "release": _capture_state_delta(
+                pending["post_graph_capture"], post_release
+            ),
+        }
+        self._diagnostic_state_snapshot_count = (
+            getattr(self, "_diagnostic_state_snapshot_count", 0) + 1
+        )
+        self._diagnostic_last_capture_state = transitions
+        logger.info(
+            "[qwen3-asr] encoder capture-state deltas warmup=%s capture=%s release=%s",
+            transitions["warmup"],
+            transitions["capture"],
+            transitions["release"],
+        )
+        # memory_allocated/memory_reserved deltas are dominated by the graph's
+        # static-buffer allocation and are expected; the diagnostic value is in
+        # fused_ops dispatch, tensor metadata version/data_ptr, module training,
+        # stream/pool identity changes.
 
     def capture_all(self) -> None:
         """Capture every bucket up front. A failed bucket stays eager."""
@@ -258,6 +430,14 @@ class Qwen3ASREncoderLayerStackGraphRunner:
             )
         self._capture_attention_metadata = attention_metadata
 
+        capture_state = (
+            self._is_npu
+            and _capture_release_diagnostic_enabled()
+            and _capture_release_state_snapshot_diagnostic_enabled()
+            and getattr(self, "_diagnostic_state_snapshot_count", 0) == 0
+        )
+        pre_warmup_state = self._capture_state_snapshot() if capture_state else None
+
         def run_once() -> torch.Tensor:
             with torch.no_grad():
                 return self._layer_stack(static_hs, static_cu)
@@ -270,6 +450,9 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 warmup_out = run_once()
         torch.cuda.current_stream(device).wait_stream(side)
         torch.cuda.synchronize(device)
+        pre_graph_capture_state = (
+            self._capture_state_snapshot() if capture_state else None
+        )
         diagnostic_reference = None
         if diagnostic_hidden_states is not None:
             assert warmup_out is not None and diagnostic_total is not None
@@ -279,6 +462,21 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph, capture_error_mode="thread_local"):
             static_out = run_once()
+        torch.cuda.synchronize(device)
+        post_graph_capture_state = (
+            self._capture_state_snapshot() if capture_state else None
+        )
+        if capture_state:
+            assert (
+                pre_warmup_state is not None
+                and pre_graph_capture_state is not None
+                and post_graph_capture_state is not None
+            )
+            self._diagnostic_pending_capture_state = {
+                "pre_warmup": pre_warmup_state,
+                "pre_graph_capture": pre_graph_capture_state,
+                "post_graph_capture": post_graph_capture_state,
+            }
         if diagnostic_reference is not None:
             self._diagnostic_pending_reference = diagnostic_reference
         logger.info(
@@ -376,6 +574,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
             del entry, released
             gc.collect()
             torch.cuda.synchronize(self._device)
+            self._record_capture_state_after_release()
             return self._fallback("diagnostic_capture_released")
 
         if self._is_npu and _capture_only_diagnostic_enabled():
@@ -494,6 +693,10 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                     getattr(self, "_diagnostic_parity_mismatch_count", 0)
                 ),
                 "last": getattr(self, "_diagnostic_last_parity", None),
+            },
+            "diagnostic_capture_release_state": {
+                "count": int(getattr(self, "_diagnostic_state_snapshot_count", 0)),
+                "last": getattr(self, "_diagnostic_last_capture_state", None),
             },
             "replay_count": int(self._replay_count),
             "replay_buckets": {
