@@ -3379,6 +3379,66 @@ Interpret the pair mechanically:
 - neither correct: reject the completion-only hypothesis and next compare
   graph-produced KV/static-buffer ownership at the first decode call.
 
+#### `910C-044`: explicit KV-state compile boundary and conditional ALL screen
+
+`910C-043` completed with both fenced arms still garbled, so device completion
+ordering is rejected as the graph-to-compiled-decode repair.  The stronger
+shared defect candidate is the registered decode-attention op's incomplete
+state contract: it declared only its output mutation while reading and writing
+the paged KV cache, cache locations, and attention metadata through hidden
+Python context.  SGLang `634303cdf` passes the layer's key/value cache storage
+and `out_cache_loc` as explicit custom-op operands and declares both cache
+buffers mutable.  This changes no kernel and copies no cache data; it makes the
+real alias/dependency boundary visible to Dynamo and NPUGraph.
+
+Use this handoff commit, SGLang `634303cdf`, and the unchanged server packages,
+kernel, exact10 corpus, deterministic settings, and Qwen3-ASR profile controls.
+Do not enable `SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE`; the fence is rejected
+and its default-off behavior is required.  The isolated operator must not edit
+source, tests, configuration files, packages, site-packages, kernels, or Git
+history.  Run the SGLang radix-attention and decode-runner suites, the Omni
+encoder/model-info suites, and the complete Qwen3-ASR suite once.  Any
+collection, registration, schema, fake-tensor, or test failure stops all arms
+and is returned with the first full traceback.
+
+After tests, use four clean NPUs to run these fresh-service accuracy arms in
+parallel with disjoint ports and evidence directories:
+
+| Arm | Encoder graph | Prefill graph | Decode graph | Compile | Purpose |
+|---|---:|---:|---:|---:|---|
+| `T1-KV` | off | off | on | on | Regression control for the accepted TC-only path |
+| `E1-KV` | on | off | on | on | Encoder-graph transition repair |
+| `P1-KV` | off | on | on | on | Prefill-graph transition repair |
+| `A1-KV` | on | on | on | on | Fully accelerated combination |
+
+Each arm first runs the exact `910C-041` 20-item two-token probe, then a
+content-distinct 70-item untruncated accuracy set even when another arm fails.
+Return equality/garbled counts, WER, request accounting, compile buckets,
+encoder signature/capture/replay/fallback, prefill replay/eager, decode
+replay/eager/buckets, guard balance, forbidden signatures, drain, and two
+post-stop HBM snapshots.  An arm is correct only with 0 garbled outputs, normal
+WER, complete accounting, positive requested feature counters, and zero
+unexpected fallback.
+
+To avoid another round trip, if and only if `A1-KV` passes both accuracy gates,
+keep that service alive, finish deterministic encoder-signature saturation,
+verify signature/capture counts stop growing, and run one diagnostic exact10
+C70 measurement (70 disjoint warm-up plus 700 measured).  Collect the complete
+`910C-042` stage/guard/NPU metric set.  This one repeat is a performance screen,
+not the final three-fresh-process hard gate.  Do not run soak or realtime.
+
+Interpretation:
+
+- E1-KV and P1-KV both correct: hidden KV dependency was the shared defect;
+  require A1-KV correctness before closing feature support;
+- one correct: retain the explicit state contract and instrument the remaining
+  producer's KV/cache-location values at first decode;
+- neither correct: explicit aliasing is insufficient; next compare captured
+  block-table/sequence metadata and static ForwardBatch ownership;
+- A1-KV correct: all identified acceleration features are functionally
+  supported, and its conditional C70 profile selects the next performance
+  optimization rather than reopening correctness diagnosis.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3570,7 +3630,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-040 | handoff `02cc6166`; SGLang `54a8d042d`; no server edit | Split real normal-compile encoder+graph and prefill+graph interactions | Independent E1 encoder-compile and P1 prefill-compile exact10 correctness arms | completed; both feature combinations garbled | T1 compile-only remained correct, but both encoder+compile E1 and prefill+compile P1 produced garbled output; this proves two failing combinations but may still reflect a shared graph-state hand-off defect |
 | 910C-041 | handoff `28e297c3`; SGLang `54a8d042d`; no server edit | Token-boundary comparison of graph-produced state entering compiled decode | Four independent encoder/prefill on/off controls and compile-on probes at `max_new_tokens=1` and `2` | completed; shared transition boundary found | Both E1 and P1 matched their controls at one generated token and diverged at two; the first compiled decode transition is the common failure boundary |
 | 910C-042 | handoff commit containing this row; SGLang `54a8d042d` | Multi-NPU stage attribution while compile-combination accuracy remains open | Four same-card control/treatment lanes run in parallel at exact10 C70 with existing structured events | authorized; pending | Collect encoder, prefill, decode-step, guard, graph-bucket and NPU utilization costs; garbled arms are diagnostic only and cannot satisfy the hard target |
-| 910C-043 | handoff commit containing this row; code `b6966d4d`; SGLang `54a8d042d` | Opt-in NPU device completion before each execution-guard hand-off | Parallel E1-F/P1-F two-token correctness probes | authorized; pending | Test whether asynchronous graph completion visibility is the shared graph-to-first-compiled-decode defect; fenced latency is invalid performance evidence |
+| 910C-043 | handoff `970e9560`; code `b6966d4d`; SGLang `54a8d042d`; no server edit | Opt-in NPU device completion before each execution-guard hand-off | Parallel E1-F/P1-F two-token correctness probes | completed; hypothesis rejected | Both fenced arms remained garbled, so device completion alone does not repair the first compiled decode transition; fenced performance is invalid |
+| 910C-044 | handoff commit containing this row; SGLang `634303cdf`; no server edit | Make paged KV storage and cache locations explicit custom-op state | Parallel T1/E1/P1/ALL accuracy arms, then conditional ALL C70 screen | authorized; pending | Test the hidden KV alias/dependency defect and, if ALL becomes correct, collect full stage performance in the same run |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
