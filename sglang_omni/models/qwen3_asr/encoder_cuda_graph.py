@@ -11,6 +11,7 @@ buckets only need to track total token count.
 from __future__ import annotations
 
 import logging
+import os
 from collections import Counter
 from collections.abc import Hashable
 from dataclasses import dataclass
@@ -22,6 +23,12 @@ from sglang.srt.layers.attention.vision import VisionAttentionMetadata
 from sglang_omni.platforms import current_platform
 
 logger = logging.getLogger(__name__)
+
+
+def _capture_only_diagnostic_enabled() -> bool:
+    return os.getenv(
+        "SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_ONLY", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def build_buckets(max_batch: int, max_tokens_per_clip: int) -> tuple[int, ...]:
@@ -293,6 +300,9 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 self._failed.add(graph_key)
                 return self._fallback("capture_failed")
             self._graphs[graph_key] = entry
+
+        if self._is_npu and _capture_only_diagnostic_enabled():
+            return self._fallback("diagnostic_capture_only")
 
         entry.hidden_states[:total].copy_(hidden_states)
         if not self._is_npu:

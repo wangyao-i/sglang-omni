@@ -181,6 +181,35 @@ def test_npu_replay_admits_multiple_signatures_with_global_bound():
     assert runner._eager_fallback_reasons == {"npu_signature_capacity": 1}
 
 
+def test_npu_capture_only_diagnostic_captures_without_replay(monkeypatch):
+    replayed = []
+    runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
+    runner._is_npu = True
+    runner._max_seqlen = 8
+    runner._failed = set()
+    runner._graphs = {}
+    runner._npu_signature_capacity = 2
+    runner._npu_signature_capacity_reported = False
+    runner._reported_replays = set()
+    runner._replay_count = 0
+    runner._replay_buckets = Counter()
+    runner._eager_fallback_reasons = Counter()
+    runner._plan = lambda total, windows: (8, [8 - total])
+    runner._capture = lambda *args, **kwargs: SimpleNamespace(
+        hidden_states=torch.zeros(8, 2),
+        cu_seqlens=torch.tensor([0, 4, 8], dtype=torch.int32),
+        attention_metadata=None,
+        graph=SimpleNamespace(replay=lambda: replayed.append(True)),
+        output=torch.zeros(8, 2),
+    )
+    monkeypatch.setenv("SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_ONLY", "1")
+
+    assert runner.run(torch.ones(4, 2), [4]) is None
+    assert len(runner._graphs) == 1
+    assert replayed == []
+    assert runner._eager_fallback_reasons == {"diagnostic_capture_only": 1}
+
+
 def test_encoder_graph_model_info_reports_replay_and_fallbacks():
     runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
     runner._is_npu = True
