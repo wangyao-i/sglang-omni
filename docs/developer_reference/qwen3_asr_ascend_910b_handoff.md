@@ -3329,6 +3329,56 @@ Do not tune parameters during these arms, run realtime, perform a soak, or
 change source/packages.  Parameter optimization is a subsequent, bounded
 multi-card sweep selected from these stage results.
 
+#### `910C-043`: NPU guard completion-fence transition probe
+
+`910C-041` found the same token boundary in both failing combinations: E1 and
+P1 match their compile-off controls at `max_new_tokens=1` and diverge at
+`max_new_tokens=2`.  Treat this as a shared graph-to-first-compiled-decode
+lifecycle hypothesis, not yet as two unrelated numerical defects.  Local code
+commit `b6966d4d` adds an opt-in completion callback to
+`FairDeviceExecutionGuard`.  On NPU, setting
+`SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE=1` makes the guard synchronize device
+work before handing its FIFO ticket to the next encoder or generation owner.
+The default remains unchanged.  This is a diagnostic correctness fence, not a
+performance implementation: it intentionally destroys asynchronous overlap.
+
+Use Omni `b6966d4d` and SGLang `54a8d042d`.  The isolated operator must make no
+source, test, configuration-file, package, site-package, kernel, or commit
+change.  Re-run the declared focused suites plus the complete Qwen3-ASR suite;
+the first collection or test failure stops this task.  Require the startup
+warning `NPU guard completion fence enabled` before sending a request.  A
+missing marker invalidates the arm.
+
+Run these two treatment arms independently and in parallel on two clean NPUs,
+using disjoint ports and evidence directories:
+
+| Arm | Encoder graph | Prefill graph | Decode graph | Compile | Fence |
+|---|---:|---:|---:|---:|---:|
+| `E1-F` | on | off | on | on | on |
+| `P1-F` | off | on | on | on | on |
+
+Reuse the exact `910C-041` deterministic 20-item probe, seed and request
+settings.  It is sufficient to run `max_new_tokens=2`; compare normalized
+outputs against the already preserved matching E0/P0 results.  Return request
+accounting, equality and garbled counts, WER only if the untruncated request is
+also run, encoder/prefill/decode graph counters, guard event balance, the fence
+startup marker, and clean drain/teardown evidence.  Do not run C70, report
+performance from a fenced arm, or substitute a global environment setting for
+the per-service variable above.  `910C-042` may continue concurrently on other
+NPUs, but its services and artifacts must remain independent.
+
+Interpret the pair mechanically:
+
+- both arms correct: missing NPU completion/visibility at the guard hand-off is
+  the shared cause; replace the coarse synchronization with producer-event to
+  consumer-stream ordering before performance qualification;
+- only E1-F correct: encoder graph completion ordering is confirmed, while the
+  prefill-to-decode transition needs a separate state/stream repair;
+- only P1-F correct: prefill graph completion ordering is confirmed, while the
+  encoder-to-generation transition needs a separate state/stream repair;
+- neither correct: reject the completion-only hypothesis and next compare
+  graph-produced KV/static-buffer ownership at the first decode call.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3518,8 +3568,9 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-038 | handoff `a2c91ead`; SGLang `8ec282120` | Direct NPU graph attention with TC custom-op wrapper bypassed | One W0 direct-graph eager exact10 correctness arm | completed; wrapper localized | W0 was correct at WER 0.0183 with 0/70 garbled outputs; direct backend is not the first fault, and the bypass remains diagnostic only |
 | 910C-039 | handoff `e8b80db9`; SGLang `54a8d042d` | Preserve static NPU graph state within the registered decode-attention custom op | Real normal-compile T1, then conditional real normal-compile ALL A1 correctness arms | partial; T1 passed, A1 garbled | T1 returned WER 0.0167 with 0/70 garbled; A1 remained garbled around WER 1.39, proving only an unresolved full-combination interaction |
 | 910C-040 | handoff `02cc6166`; SGLang `54a8d042d`; no server edit | Split real normal-compile encoder+graph and prefill+graph interactions | Independent E1 encoder-compile and P1 prefill-compile exact10 correctness arms | completed; both feature combinations garbled | T1 compile-only remained correct, but both encoder+compile E1 and prefill+compile P1 produced garbled output; this proves two failing combinations but may still reflect a shared graph-state hand-off defect |
-| 910C-041 | handoff commit containing this row; SGLang `54a8d042d` | Token-boundary comparison of graph-produced state entering compiled decode | Four independent encoder/prefill on/off controls and compile-on probes at `max_new_tokens=1` and `2` | authorized; pending | Determine whether each graph-plus-compile defect corrupts the prefill/initial state or only the first compiled decode transition; no server source change |
+| 910C-041 | handoff `28e297c3`; SGLang `54a8d042d`; no server edit | Token-boundary comparison of graph-produced state entering compiled decode | Four independent encoder/prefill on/off controls and compile-on probes at `max_new_tokens=1` and `2` | completed; shared transition boundary found | Both E1 and P1 matched their controls at one generated token and diverged at two; the first compiled decode transition is the common failure boundary |
 | 910C-042 | handoff commit containing this row; SGLang `54a8d042d` | Multi-NPU stage attribution while compile-combination accuracy remains open | Four same-card control/treatment lanes run in parallel at exact10 C70 with existing structured events | authorized; pending | Collect encoder, prefill, decode-step, guard, graph-bucket and NPU utilization costs; garbled arms are diagnostic only and cannot satisfy the hard target |
+| 910C-043 | handoff commit containing this row; code `b6966d4d`; SGLang `54a8d042d` | Opt-in NPU device completion before each execution-guard hand-off | Parallel E1-F/P1-F two-token correctness probes | authorized; pending | Test whether asynchronous graph completion visibility is the shared graph-to-first-compiled-decode defect; fenced latency is invalid performance evidence |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
