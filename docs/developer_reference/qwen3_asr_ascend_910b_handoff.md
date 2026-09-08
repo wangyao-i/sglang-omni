@@ -3669,6 +3669,73 @@ post-stop HBM snapshots.  Interpretation:
   reproduction capturing an encoder graph then replaying a decode graph;
 - a capture failure or any forbidden signature invalidates the arm.
 
+#### `910C-049` result and `910C-050` driver-level minimal reproduction
+
+`910C-049` completed: capturing encoder graphs into a dedicated private graph
+pool did **not** repair the corruption — the E1 probe remained garbled 2/20.
+Pool-scoped driver state is therefore not the contaminant; the defect is
+process-global NPU driver state.  Combined with the prior gates, the evidence
+now supports a precise and narrow causal statement:
+
+- `910C-039 T1-fixed` (encoder/prefill graphs off, decode graph + compile on)
+  returns WER 0.0167 with 0/70 garbled — the captured decode graphs replay
+  correctly when no encoder graph is ever captured.
+- `910C-040 E1` differs from T1-fixed **only** by enabling the encoder graph,
+  which lazily captures once on the first real encoder request — long after
+  the decode graphs were captured at startup and have been replaying
+  correctly.  The output then garbles.
+- `910C-045` capture-only (never replayed) still garbles, and `910C-046
+  E-REL` capture-then-release still garbles, so neither replay nor a live
+  retained graph is required; the capture action alone is sufficient.
+- `910C-048` reports count=0 for every Python-observable section across
+  warmup/capture/release, so no Python-layer state is mutated.
+
+The only consistent explanation is that **one encoder-graph capture
+retroactively corrupts NPU driver state held by the already-captured,
+correctly-replaying decode graphs in the same process**.  This is not a
+pool-scoped effect (private pool did not help) and not a Python effect (state
+snapshot is clean); it is a process-global driver-side interaction between
+two captured graphs.  Repair at the torch/omni level is not available; this
+requires a CANN/torch_npu-level defect report.
+
+`910C-050` builds that minimal reproduction so the defect can be handed to
+the vendor/runtime owner.  It is a single self-contained script that uses
+**only torch_npu and the model's own encoder layer-stack and decode-forward
+callables** — no SGLang service, no HTTP, no benchmark client.  The script
+runs on one clean NPU and performs, in order:
+
+1. capture a decode-style graph of the model's decode forward on a fixed
+   static input, then replay it N times and record a reference output hash;
+2. confirm the replayed output matches the eager reference (baseline healthy);
+3. capture one encoder layer-stack graph (the exact `_layer_stack` callable
+   used by `encoder_cuda_graph.py`) on its own static input;
+4. replay the decode graph again on the identical static input and re-hash;
+5. report whether the post-encoder-capture decode replay still matches the
+   step-2 reference.
+
+A mismatch at step 5 with a match at step 2 is the complete, vendor-actionable
+reproduction: a single process, two captured graphs, the second capture
+breaking the first.  The script must also run a control that captures the
+encoder graph **first** and the decode graph **second**, to report whether
+corruption is order-dependent (second-capture-breaks-first versus
+encoder-capture-specific).  All inputs are fixed synthetic tensors; no model
+weights, audio, or private data are required, so the script and its sanitized
+output can leave the isolated environment in full.
+
+Local implementation note: the reproduction script is authored at
+`benchmarks/diagnostics/npu_two_graph_capture_corruption.py` and committed
+alongside this handoff, per the source-authority rule.  It is self-contained
+and uses only `torch`/`torch_npu` — no SGLang service, no HTTP, no benchmark
+client, no model weights, no audio.  The server runs it read-only
+(`python benchmarks/diagnostics/npu_two_graph_capture_corruption.py`) on one
+verified-clean NPU and returns its stdout JSON: per-arm hashes and
+match/mismatch booleans, the two verdict booleans
+(`driver_corruption_reproduced`, `order_dependent`), and
+torch/torch_npu/CANN/device-count versions.  The script exits 0 when the
+main arm reproduces the corruption, 1 otherwise, 2 on import/device
+preflight failure.  Local CPU execution is not possible (no NPU, `sglang`
+absent); only `py_compile` and `git diff --check` are run locally.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -3866,7 +3933,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-046 | handoff `06f6043d`; Omni code `0948859a`; test fix `b28013f0`; SGLang `1cd6be1b5`; no server edit | Distinguish irreversible capture mutation from live graph/pool/static-buffer ownership | Serial E-REL then conditional P-REL capture-release correctness arms on one clean NPU | E-REL completed and remained garbled 2/20; P-REL not evidenced | Releasing the encoder graph prevented broad retained-graph corruption but did not protect two probe outputs. Encoder capture does not call `prepare_model_for_torch_compile`; correlate the remaining failures with lazy captures before claiming persistent global mutation |
 | 910C-047 | handoff `deb3a680`; Omni code `d3f71fb7`; SGLang `1cd6be1b5`; no server edit | Compare real encoder output immediately before capture with normal full-eager output after capture and release | One serial E1 capture-release parity probe on one clean NPU | completed; encoder exonerated, downstream state implicated | Parity `allclose=True` (encoder numerically identical across capture+release) yet outputs still garbled; disproves both the `prepare_model_for_torch_compile` mutation hypothesis and encoder-output corruption; contamination is in downstream device/compile runtime state visible only in compiled decode |
 | 910C-048 | handoff `daf5c354`; Omni code `cf79b353`; SGLang as `910C-047`; no server edit | Attribute which runtime state transitions during capture persist through release | One serial E1 capture-state snapshot probe on one clean NPU | completed; all Python-visible sections clean, driver layer implicated | Every non-memory section reported count=0 across warmup/capture/release; no Python-observable state is mutated by encoder capture, so contamination is below the Python layer in NPU driver state; only memory counters moved (graph static-buffer allocation, expected) |
-| 910C-049 | handoff commit containing this row; Omni code `e9032edc`; SGLang as `910C-048`; no server edit | Repair shared default graph-pool contamination by capturing encoder graphs into a dedicated private pool | One serial E1 normal-replay correctness probe on one clean NPU (no bypass diagnostics) | authorized; pending | Encoder capture used the device default pool shared with decode graphs; per-runner `graph_pool_handle()` passed as `pool=` isolates driver-side allocator state; all-20-correct at historical WER confirms and repairs, still-garbled escalates to CANN/torch_npu minimal reproduction; CPU unit tests delegated to server |
+| 910C-049 | handoff `22d22ef1`; Omni code `e9032edc`; SGLang as `910C-048`; no server edit | Repair shared default graph-pool contamination by capturing encoder graphs into a dedicated private pool | One serial E1 normal-replay correctness probe on one clean NPU (no bypass diagnostics) | completed; hypothesis rejected, driver layer confirmed process-global | Private pool did not repair; E1 remained garbled 2/20, so contamination is not pool-scoped but process-global NPU driver state; combined with T1-fixed/E1/045/046/048 this isolates one encoder capture retroactively corrupting already-captured correctly-replaying decode graphs |
+| 910C-050 | handoff commit containing this row; Omni script commit `2aa99501` (`benchmarks/diagnostics/npu_two_graph_capture_corruption.py`); SGLang not required | Vendor-actionable CANN/torch_npu reproduction of one encoder capture corrupting a resident decode graph | Single self-contained torch_npu script on one clean NPU; no service/HTTP/benchmark | authorized; script committed alongside this handoff, pending server run | Capture decode graph + replay + reference hash, then capture encoder layer-stack graph, then re-replay decode and re-hash; step-5 mismatch with step-2 match is the complete defect; includes an encoder-first/decode-second control for order dependence; synthetic tensors only so script and output are fully exportable; local run not possible (no NPU) |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
