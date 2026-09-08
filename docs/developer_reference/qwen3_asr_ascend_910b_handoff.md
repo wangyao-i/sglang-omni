@@ -3228,6 +3228,18 @@ ALL, C70, performance, realtime, package actions, or any unlisted experiment.
 Always use graceful shutdown and require two post-stop HBM snapshots at or
 below 5% before the next service.
 
+When multiple idle NPUs are available, the four service arms may run in
+parallel, with exactly one service process assigned to each physical NPU.  The
+operator must record the physical card/chip mapping, use disjoint ports and
+evidence directories, and perform the complete preflight and two post-stop HBM
+snapshots independently for every assigned NPU.  Do not place two arms on one
+NPU, share a service process across arms, or compare raw latency across cards;
+this task compares only each compile-on response with its same-profile,
+same-card compile-off control.  A card-level health, holder, startup, request,
+or cleanup failure invalidates only its arm, but its matching control and
+treatment must be rerun together on another clean card before drawing a
+numerical conclusion.
+
 Interpret the results mechanically:
 
 - a compile-on mismatch already at one token locates that feature's defect at
