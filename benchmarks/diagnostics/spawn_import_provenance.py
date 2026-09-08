@@ -50,17 +50,26 @@ def collect_provenance(expected_root: Path) -> dict[str, Any]:
     runner_constants = _method_constants(runner_type.model_info)
     worker_constants = _method_constants(worker_module.ModelWorker._encoder_cuda_graph_info)
     encoder_path = getattr(encoder_module, "__file__", None)
+    encoder_cache = getattr(encoder_module, "__cached__", None)
     worker_path = getattr(worker_module, "__file__", None)
+    worker_cache = getattr(worker_module, "__cached__", None)
+    pycache_prefix = Path(sys.pycache_prefix).resolve() if sys.pycache_prefix else None
 
     return {
         "pid": os.getpid(),
         "encoder_module_under_expected_root": _is_under(encoder_path, expected_root),
         "model_worker_module_under_expected_root": _is_under(worker_path, expected_root),
+        "encoder_cache_under_pycache_prefix": bool(
+            pycache_prefix and _is_under(encoder_cache, pycache_prefix)
+        ),
+        "model_worker_cache_under_pycache_prefix": bool(
+            pycache_prefix and _is_under(worker_cache, pycache_prefix)
+        ),
         "runner_model_info_has_defer_provenance": all(
             field in runner_constants for field in _DEFER_FIELDS
         ),
         "model_worker_has_runtime_identity": "runtime_identity" in worker_constants,
-        "pycache_prefix_is_set": bool(sys.pycache_prefix),
+        "pycache_prefix_is_set": pycache_prefix is not None,
         "dont_write_bytecode": bool(sys.dont_write_bytecode),
         "defer_env": os.environ.get("SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES"),
     }

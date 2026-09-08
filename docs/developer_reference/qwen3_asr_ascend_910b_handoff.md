@@ -3949,6 +3949,44 @@ reproducible spawn bootstrap/import problem and repair the executable or
 `sys.path` handoff based on the returned boolean that differs. Do not reload a
 module or make another graph claim before this probe has a result.
 
+#### `910C-051E` hash-validated source-cache gate
+
+`910C-051D` found that both its parent and child runner methods lacked the
+five-key implementation. This is consistent with an accepted stale timestamp
+`.pyc`, but `python -B` and `importlib.reload()` do not guarantee a source
+recompile: the former only suppresses bytecode writes and the latter may read
+the same valid cache entry. Do not delete checkout caches or edit source.
+
+Instead create one new task-local cache directory outside the checkout and,
+using the exact service interpreter, compile only the two affected source files
+with checked-hash invalidation. Then run the provenance probe with that same
+prefix on its parent command line:
+
+```text
+PYTHONPYCACHEPREFIX=<new-empty-task-cache> \
+python -X pycache_prefix=<new-empty-task-cache> -m compileall -q -f \
+    --invalidation-mode checked-hash \
+    sglang_omni/models/qwen3_asr/encoder_cuda_graph.py \
+    sglang_omni/model_runner/model_worker.py
+
+PYTHONPYCACHEPREFIX=<same-task-cache> \
+PYTHONDONTWRITEBYTECODE=1 \
+SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1 \
+python -B -X pycache_prefix=<same-task-cache> \
+    -m benchmarks.diagnostics.spawn_import_provenance \
+    --expected-root <declared-clean-checkout>
+```
+
+The returned parent and child objects must both report true for
+`encoder_cache_under_pycache_prefix`,
+`model_worker_cache_under_pycache_prefix`,
+`runner_model_info_has_defer_provenance`, and
+`model_worker_has_runtime_identity`. A failure is an interpreter/bootstrap
+launch defect, not a reason to reload modules or begin a service. If every
+field passes, launch the no-audio service with the identical task cache prefix
+and re-run `910C-051C`'s nested stage-data gate. The temporary cache is normal
+task output and may be removed after clean shutdown.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -4153,6 +4191,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-051B | `2229e61f`; same source/SGLang as `910C-051A` | Prove the service executes the declared encoder graph module before any graph/capture conclusion | One fresh no-audio source-only service precheck with an empty task-local cache prefix and defer=1 | invalidated: response-shape/runtime identity unresolved | Source path/HEAD/blob matched but the reported defer dictionary was incomplete. No audio was sent. `/model_info` stage nesting was not inspected, so this is neither bytecode nor NPU evidence. |
 | 910C-051C | handoff commit containing this row; same source/SGLang as `910C-051B` | Identify the live stage runner method and correctly read nested encoder graph data before capture attribution | One fresh no-audio source-only service precheck with defer=1 and worker-owned runtime identity | authorized; pending server run | Require `stages[*].data.encoder_cuda_graph.runtime_identity` plus the five defer fields, zero run/capture count, then immediately execute A/B/C only if all gates pass. |
 | 910C-051D | handoff commit containing this row; no SGLang/NPU dependency | Reproduce or reject a Python spawn import mismatch without model construction | Parent/child source-provenance probe under the exact service interpreter and environment | authorized; pending server run | Compare checkout ownership and method capabilities on both sides of one plain spawn boundary; no service, graph, or audio is allowed. |
+| 910C-051E | handoff commit containing this row; no SGLang/NPU dependency | Force and attest checked-hash bytecode for the two source-defined provenance methods | Task-local checked-hash cache, then parent/child provenance probe using the exact service interpreter | authorized; pending server run | Both processes must load encoder and ModelWorker cache entries from the temporary prefix and report the new method capabilities before any service starts. |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
