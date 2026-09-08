@@ -3987,6 +3987,62 @@ field passes, launch the no-audio service with the identical task cache prefix
 and re-run `910C-051C`'s nested stage-data gate. The temporary cache is normal
 task output and may be removed after clean shutdown.
 
+#### `910C-052` immutable wheel runtime gate
+
+`910C-051B` through `910C-051E` are historical import diagnostics and are
+superseded. Do not run another cache-prefix, reload, editable-install, or
+checkout-launched service probe. The standard isolated-server runtime is an
+immutable wheel installed into a new, task-scoped virtual environment; the
+checkout is a build input only and must not appear on the runtime import path.
+
+The server operator is authorized to create this new venv and install the
+locally built wheel with `--no-deps`. This is environment provisioning, not a
+source/package edit: it must not alter the existing serving environment,
+checkout contents, or dependencies. Use the exact current handoff commit and
+the existing serving interpreter, then run the following conceptual sequence
+with server-local temporary directories outside the checkout:
+
+```text
+# 1. Build exactly one wheel from the declared clean checkout.
+<serving-python> -m pip wheel --no-deps --no-build-isolation \
+    --wheel-dir <task-wheel-dir> <declared-clean-checkout>
+sha256sum <task-wheel-dir>/sglang_omni-*.whl
+
+# 2. Create a runtime-only environment that inherits the already-qualified
+#    NPU stack but installs the Omni wheel ahead of it.
+<serving-python> -m venv --system-site-packages <task-runtime-venv>
+<task-runtime-venv>/bin/python -m pip install --no-deps --force-reinstall \
+    <task-wheel-dir>/sglang_omni-*.whl
+
+# 3. From outside the checkout, attest the installed artifact before service.
+cd <task-runtime-directory-outside-checkout>
+<task-runtime-venv>/bin/python -m sglang_omni.diagnostics.runtime_artifact \
+    --forbid-root <declared-clean-checkout>
+```
+
+The returned JSON must be `valid=true`, with all of the following true:
+
+```text
+isolated_venv
+encoder_module_under_install_root
+model_worker_module_under_install_root
+encoder_record_hash_matches
+model_worker_record_hash_matches
+runner_model_info_has_defer_provenance
+model_worker_has_runtime_identity
+encoder_module_outside_forbidden_root
+model_worker_module_outside_forbidden_root
+```
+
+Return the wheel SHA-256, venv-local distribution version, and boolean report;
+do not return private paths. On any false field, stop before service startup.
+On success, start the service only with `<task-runtime-venv>/bin/python -m
+sglang_omni.cli`, from outside the checkout, using the unchanged approved E1
+arguments. Then repeat the no-audio nested-stage model-info gate once. This is
+the final runtime-identity gate; a pass immediately authorizes the A/B/C
+transition procedure in the same fresh service. The task venv and wheel cache
+may be removed after graceful shutdown.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -4192,6 +4248,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-051C | handoff commit containing this row; same source/SGLang as `910C-051B` | Identify the live stage runner method and correctly read nested encoder graph data before capture attribution | One fresh no-audio source-only service precheck with defer=1 and worker-owned runtime identity | authorized; pending server run | Require `stages[*].data.encoder_cuda_graph.runtime_identity` plus the five defer fields, zero run/capture count, then immediately execute A/B/C only if all gates pass. |
 | 910C-051D | handoff commit containing this row; no SGLang/NPU dependency | Reproduce or reject a Python spawn import mismatch without model construction | Parent/child source-provenance probe under the exact service interpreter and environment | authorized; pending server run | Compare checkout ownership and method capabilities on both sides of one plain spawn boundary; no service, graph, or audio is allowed. |
 | 910C-051E | handoff commit containing this row; no SGLang/NPU dependency | Force and attest checked-hash bytecode for the two source-defined provenance methods | Task-local checked-hash cache, then parent/child provenance probe using the exact service interpreter | authorized; pending server run | Both processes must load encoder and ModelWorker cache entries from the temporary prefix and report the new method capabilities before any service starts. |
+| 910C-052 | handoff commit containing this row; no NPU action before artifact attestation | Replace checkout/editable runtime with a wheel installed to a new task-scoped venv | Immutable wheel build, SHA record, isolated-venv install, and installed-file RECORD validation | authorized; pending server run | `valid=true` from the wheel runtime attestation is required before the one no-audio model-info gate; `910C-051B`--`E` are superseded and must not be rerun. |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
