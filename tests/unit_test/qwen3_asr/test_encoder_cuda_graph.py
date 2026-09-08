@@ -230,7 +230,10 @@ def test_npu_capture_defer_diagnostic_keeps_first_signature_eager(monkeypatch):
     runner._replay_buckets = Counter()
     runner._eager_fallback_reasons = Counter()
     runner._diagnostic_capture_defer_remaining = 1
+    runner._diagnostic_capture_defer_configured = 1
     runner._diagnostic_capture_deferred_count = 0
+    runner._diagnostic_run_count = 0
+    runner._diagnostic_first_capture = None
     runner._plan = lambda total, windows: (8, [8 - total])
     captures = []
     runner._capture = lambda *args, **kwargs: captures.append((args, kwargs)) or SimpleNamespace(
@@ -245,10 +248,16 @@ def test_npu_capture_defer_diagnostic_keeps_first_signature_eager(monkeypatch):
     assert captures == []
     assert runner._diagnostic_capture_deferred_count == 1
     assert runner._diagnostic_capture_defer_remaining == 0
+    assert runner._diagnostic_run_count == 1
     assert runner._eager_fallback_reasons == {}
 
     assert runner.run(torch.ones(4, 2), [4]) is not None
     assert len(captures) == 1
+    assert runner._diagnostic_first_capture == {
+        "run_index": 2,
+        "bucket_size": 8,
+        "window_count": 2,
+    }
 
 
 def test_npu_capture_defer_diagnostic_env_validation(monkeypatch):
@@ -476,7 +485,13 @@ def test_encoder_graph_model_info_reports_replay_and_fallbacks():
             "last": None,
         },
         "diagnostic_capture_release_state": {"count": 0, "last": None},
-        "diagnostic_capture_defer": {"deferred_count": 0, "remaining": 0},
+        "diagnostic_capture_defer": {
+            "configured": 0,
+            "deferred_count": 0,
+            "remaining": 0,
+            "run_count": 0,
+            "first_capture": None,
+        },
         "replay_count": 3,
         "replay_buckets": {"128": 3},
         "eager_fallback_count": 2,

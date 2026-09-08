@@ -223,8 +223,20 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._diagnostic_capture_defer_remaining = (
             _capture_defer_calls_diagnostic_value() if self._is_npu else 0
         )
+        self._diagnostic_capture_defer_configured = (
+            self._diagnostic_capture_defer_remaining
+        )
         self._diagnostic_capture_deferred_count = 0
+        self._diagnostic_run_count = 0
+        self._diagnostic_first_capture: dict[str, Any] | None = None
         self._capture_attention_metadata: VisionAttentionMetadata | None = None
+        if self._is_npu:
+            logger.info(
+                "[qwen3-asr] encoder graph runner created pid=%d "
+                "defer_captures=%d",
+                os.getpid(),
+                self._diagnostic_capture_defer_configured,
+            )
 
     @property
     def tokens_per_window(self) -> int:
@@ -534,6 +546,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self, hidden_states: torch.Tensor, window_lens: list[int]
     ) -> torch.Tensor | None:
         """Replay the recorded graph for a batch of hidden states."""
+        self._diagnostic_run_count = getattr(self, "_diagnostic_run_count", 0) + 1
         total = int(hidden_states.shape[0])
         if not window_lens or sum(window_lens) != total:
             return self._fallback("invalid_window_layout")
@@ -584,6 +597,12 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                     self._npu_signature_capacity_reported = True
                 return self._fallback("npu_signature_capacity")
             try:
+                if getattr(self, "_diagnostic_first_capture", None) is None:
+                    self._diagnostic_first_capture = {
+                        "run_index": int(self._diagnostic_run_count),
+                        "bucket_size": int(bucket_size),
+                        "window_count": len(effective_window_lens),
+                    }
                 capture_kwargs: dict[str, Any] = {
                     "window_lens": (effective_window_lens if self._is_npu else None)
                 }
@@ -750,12 +769,17 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 "last": getattr(self, "_diagnostic_last_capture_state", None),
             },
             "diagnostic_capture_defer": {
+                "configured": int(
+                    getattr(self, "_diagnostic_capture_defer_configured", 0)
+                ),
                 "deferred_count": int(
                     getattr(self, "_diagnostic_capture_deferred_count", 0)
                 ),
                 "remaining": int(
                     getattr(self, "_diagnostic_capture_defer_remaining", 0)
                 ),
+                "run_count": int(getattr(self, "_diagnostic_run_count", 0)),
+                "first_capture": getattr(self, "_diagnostic_first_capture", None),
             },
             "replay_count": int(self._replay_count),
             "replay_buckets": {
