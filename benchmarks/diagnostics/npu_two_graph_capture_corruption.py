@@ -80,7 +80,7 @@ def _hash(t) -> str:
     ).hexdigest()
 
 
-def _decode_like(x, w_qkv, w_o, w_norm, b_norm):
+def _decode_like(torch, x, w_qkv, w_o, w_norm, b_norm):
     """Decode-like: fused qkv projection, scaled attention-ish matmul, norm."""
     qkv = x @ w_qkv
     q, k, v = qkv.chunk(3, dim=-1)
@@ -91,10 +91,13 @@ def _decode_like(x, w_qkv, w_o, w_norm, b_norm):
     return torch.nn.functional.layer_norm(out + x, out.shape[-1:], w_norm, b_norm)
 
 
-def _encoder_like(x, w_conv, w1, w2):
+def _encoder_like(torch, x, w_conv, w1, w2):
     """Encoder-like: depthwise-ish conv + two-layer feed-forward stack."""
     y = torch.nn.functional.conv1d(
-        x.transpose(1, 2), w_conv, padding=w_conv.shape[-1] // 2, groups=x.shape[1]
+        x.transpose(1, 2),
+        w_conv,
+        padding=w_conv.shape[-1] // 2,
+        groups=x.shape[-1],
     ).transpose(1, 2)
     y = torch.nn.functional.gelu(y @ w1)
     return y @ w2
@@ -128,20 +131,24 @@ def _stable_replay_hashes(
     return {graph.replayed_hash(torch) for _ in range(replays)}
 
 
-def _build_ops(torch, d=256):
+def _build_ops(torch, d=256, encoder_channels=64):
     dev = "npu"
     a_in = torch.randn(8, d, device=dev)
     w_qkv = torch.randn(d, 3 * d, device=dev) * 0.02
     w_o = torch.randn(d, d, device=dev) * 0.02
     w_norm = torch.ones(d, device=dev)
     b_norm = torch.zeros(d, device=dev)
-    b_in = torch.randn(4, d, 64, device=dev)
-    w_conv = torch.randn(d, 1, 5, device=dev) * 0.02
-    w1 = torch.randn(d, d * 4, device=dev) * 0.02
-    w2 = torch.randn(d * 4, d, device=dev) * 0.02
+    # [batch, time, channels] becomes [batch, channels, time] for depthwise
+    # conv1d, then returns to [batch, time, channels] for the MLP.
+    b_in = torch.randn(4, 64, encoder_channels, device=dev)
+    w_conv = torch.randn(encoder_channels, 1, 5, device=dev) * 0.02
+    w1 = torch.randn(encoder_channels, encoder_channels * 4, device=dev) * 0.02
+    w2 = torch.randn(encoder_channels * 4, encoder_channels, device=dev) * 0.02
 
-    fn_a = lambda: _decode_like(a_in, w_qkv, w_o, w_norm, b_norm)  # noqa: E731
-    fn_b = lambda: _encoder_like(b_in, w_conv, w1, w2)  # noqa: E731
+    fn_a = lambda: _decode_like(  # noqa: E731
+        torch, a_in, w_qkv, w_o, w_norm, b_norm
+    )
+    fn_b = lambda: _encoder_like(torch, b_in, w_conv, w1, w2)  # noqa: E731
     return fn_a, fn_b
 
 
