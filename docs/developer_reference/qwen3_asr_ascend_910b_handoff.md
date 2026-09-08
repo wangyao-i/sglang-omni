@@ -3526,48 +3526,80 @@ corrupt capture-retained result to 2/20 after release instead makes correlation
 with the requests that actually triggered the two lazy signature captures the
 next required check.
 
-#### `910C-047`: encoder capture-release output-parity boundary
+#### `910C-047` result and `910C-048` capture-state snapshot gate
 
-Use Omni code `d3f71fb7` with the same accepted SGLang commit and isolated
-environment as `910C-046`.  Run on one verified-clean NPU with one fresh
-service; multi-card parallel execution remains prohibited.  Set both
+`910C-047` completed: the parity diagnostic returned `allclose=True` (encoder
+output is numerically identical immediately before and after capture+release),
+yet the probe outputs were still garbled. This **disproves** the hypothesis
+that `prepare_model_for_torch_compile` mutated the encoder (the encoder
+capture path never calls it) and **disproves** encoder-output corruption.
+The conclusion is narrower than the operator's summary: capture changes
+downstream device/compile runtime state that only becomes visible in the
+subsequent compiled decode, not in the encoder itself. The next gate must
+attribute *which* runtime state transitions during capture.
+
+`910C-048` instruments exactly that attribution.  It adds an opt-in
+capture-state snapshot diagnostic (local commit `cf79b353` on the
+`qwen3-asr-910b-opt` branch, files
+`sglang_omni/models/qwen3_asr/encoder_cuda_graph.py`,
+`sglang_omni/models/qwen3_asr/sglang_model.py`, and
+`tests/unit_test/qwen3_asr/test_encoder_cuda_graph.py`).  The diagnostic
+splits the capture lifecycle into four state points — pre-warmup,
+pre-graph-capture, post-graph-capture (after a `torch.cuda.synchronize`), and
+post-release — and snapshots, on the first lazy capture only, under both
 `SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE=1` and
-`SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE_PARITY=1`, explicitly unset every
-other capture bypass/release diagnostic, and keep the rejected completion
-fence disabled.  The parity diagnostic uses the first real hidden-state input
-for the otherwise existing three capture warmups, saves the last pre-capture
-layer-stack output, releases the captured graph, then compares that reference
-with the normal post-release full-eager audio-tower fallback.  It does not
-change the subsequent compiled decode implementation.
+`SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE_STATE_SNAPSHOT=1`:
 
-Before hardware, run `tests/unit_test/qwen3_asr/test_encoder_cuda_graph.py`,
-the encoder/model-info focused set used by `910C-046`, and the complete
-Qwen3-ASR suite.  Stop on the first collection or test failure.  Then run only
-the exact `910C-041` 20-item `max_new_tokens=2` E1 probe.  Do not run P-REL,
-ALL, C70, performance, soak, realtime, or any unlisted arm in this task.
+- `fused_ops`: per `BaseFusedOp` module — type, `is_torch_compile`, and the
+  resolved `forward` / `original_forward` / `compiled_native` callable labels;
+- `tensor_metadata`: per parameter and buffer — shape, dtype, device,
+  `data_ptr`, `_version`, `requires_grad`;
+- `module_training`: per-module training flag;
+- `runtime`: grad mode, diagnostic gates, `pynccl_allocator` graph-pool id,
+  `memory_allocated`/`memory_reserved`, current stream type/handle, and
+  `torch.cuda.is_current_stream_capturing()`; every NPU-runtime introspection
+  degrades to an `"unavailable:<ErrorType>"` string rather than failing.
 
-Return the 20-request accounting, equality/garbled count and WER; every
-`encoder capture-release parity` log line; and the full
-`model_info.encoder_cuda_graph.diagnostic_capture_release_parity` object.  Also
-return the capture-release count, released fallback count, live graph count,
-encoder replay count, compile/decode counters, forbidden signatures, drain,
-graceful cleanup, and two post-stop HBM snapshots.  Correlate each garbled
-request with the immediately preceding lazy capture/release and parity record;
-do not infer that all 20 requests shared one persistent state.
+It logs the per-section bounded delta (`count` plus first 8 changed keys) for
+the warmup, capture, and release transitions and exposes them in
+`model_info.encoder_cuda_graph.diagnostic_capture_release_state`.
+`memory_allocated`/`memory_reserved` deltas are dominated by the graph's
+static-buffer allocation and are expected; the diagnostic value is in
+fused-op dispatch flips, tensor `_version`/`data_ptr` changes, module
+training-flag flips, and stream/pool identity changes.  The diagnostic is
+inert unless both gates are set and runs at most once per service.
 
-Interpret the single arm as follows:
+Local checks run: `git diff --check` clean; `py_compile` clean.  Local CPU
+unit tests were **not** run because `sglang` is not installed in this local
+environment; the focused suites are delegated to the server.
 
-- any parity mismatch means encoder output changed across capture; the next
-  repair belongs in encoder capture/attention/stream handling before compiled
-  decode;
-- parity matches but the same request is garbled means the encoder tensor is
-  numerically intact and capture changed downstream device/process state; the
-  next gate must isolate the NPU graph stream/pool or rebuild ordering;
-- parity matches and all 20 outputs recover means zero-filled capture or
-  missing real-input warmup is the trigger; promote real-input lazy capture to
-  a reviewable repair candidate and then requalify normal replay;
-- missing parity records, non-finite values, a capture failure, or a live graph
-  after release invalidates the arm.
+`910C-048` execution: use the same accepted Omni/SGLang stack and clean-NPU
+environment as `910C-047`.  Run on one verified-clean NPU, one fresh service,
+serial only.  Set `SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE=1`,
+`SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE_PARITY=1`, and
+`SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE_STATE_SNAPSHOT=1`; unset every
+other capture bypass/release diagnostic and keep the rejected completion
+fence disabled.  Before hardware, run
+`tests/unit_test/qwen3_asr/test_encoder_cuda_graph.py`, the encoder/model-info
+focused set, and the complete Qwen3-ASR suite; stop on the first collection
+or test failure.  Then run only the exact `910C-041` 20-item
+`max_new_tokens=2` E1 probe.
+
+Return the full
+`model_info.encoder_cuda_graph.diagnostic_capture_release_state` object (the
+three warmup/capture/release transition deltas), every
+`encoder capture-state deltas` log line, the 20-request equality/garbled
+count and WER, the parity object, capture-release/released-fallback/live-graph
+counts, compile/decode counters, forbidden signatures, drain, graceful
+cleanup, and two post-stop HBM snapshots.  Interpretation: whichever section
+flips during the `capture` transition (but not `warmup`) and persists through
+`release` is the state that the next repair must isolate or restore — fused-op
+dispatch flip means a compiled forward was swapped permanently; tensor
+`_version`/`data_ptr` change means an in-place mutation or rebind of a weight
+or buffer; module training flip means a mode leak; stream/pool identity
+change means capture installed a persistent stream or allocator context.  A
+`capture`-only flip that resolves by `release` is not the persistent
+contaminant.
 
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
@@ -3764,7 +3796,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-044 | handoff `53c1eccd`; SGLang `634303cdf`; no server edit | Make paged KV storage and cache locations explicit custom-op state | TC regression control and conditional combination arms | completed; rejected and reverted by SGLang `ca17cd413` | The explicit operands did not repair accuracy, regressed T1, and introduced a warm-up hang; do not reuse this implementation |
 | 910C-045 | handoff `af793d17`; Omni `8dab0b8f`; SGLang `5cb571995`; no server edit | Distinguish graph capture/init contamination from actual encoder/prefill replay | Serial E-CAP then P-CAP capture-only correctness arms on one clean NPU | completed; both arms garbled | Encoder and prefill replay were bypassed, but both combinations still corrupted the first compiled decode transition; capture/init plus retained graph state is sufficient |
 | 910C-046 | handoff `06f6043d`; Omni code `0948859a`; test fix `b28013f0`; SGLang `1cd6be1b5`; no server edit | Distinguish irreversible capture mutation from live graph/pool/static-buffer ownership | Serial E-REL then conditional P-REL capture-release correctness arms on one clean NPU | E-REL completed and remained garbled 2/20; P-REL not evidenced | Releasing the encoder graph prevented broad retained-graph corruption but did not protect two probe outputs. Encoder capture does not call `prepare_model_for_torch_compile`; correlate the remaining failures with lazy captures before claiming persistent global mutation |
-| 910C-047 | handoff commit containing this row; Omni code `d3f71fb7`; SGLang `1cd6be1b5`; no server edit | Compare real encoder output immediately before capture with normal full-eager output after capture and release | One serial E1 capture-release parity probe on one clean NPU | authorized; hardware pending | Real hidden states seed the existing capture warmups only under the diagnostic env gate; model-info reports parity count/match/mismatch and bounded numerical summaries, allowing one run to separate encoder-output corruption from downstream NPU process-state contamination |
+| 910C-047 | handoff `deb3a680`; Omni code `d3f71fb7`; SGLang `1cd6be1b5`; no server edit | Compare real encoder output immediately before capture with normal full-eager output after capture and release | One serial E1 capture-release parity probe on one clean NPU | completed; encoder exonerated, downstream state implicated | Parity `allclose=True` (encoder numerically identical across capture+release) yet outputs still garbled; disproves both the `prepare_model_for_torch_compile` mutation hypothesis and encoder-output corruption; contamination is in downstream device/compile runtime state visible only in compiled decode |
+| 910C-048 | handoff commit containing this row; Omni code `cf79b353`; SGLang as `910C-047`; no server edit | Attribute which runtime state transitions during capture persist through release | One serial E1 capture-state snapshot probe on one clean NPU | authorized; pending | Four-point snapshot (pre-warmup/pre-capture/post-capture/post-release) of fused-op dispatch, tensor `_version`/`data_ptr`, module training flags, stream/pool identity on first lazy capture only; section that flips in `capture` and persists through `release` names the contaminant; CPU unit tests delegated to server (sglang absent locally) |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
