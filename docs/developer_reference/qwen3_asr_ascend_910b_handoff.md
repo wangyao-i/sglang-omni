@@ -3842,6 +3842,40 @@ before clip A, identify that pre-request runner invocation from the logged PID
 and execution timeline. Only if `configured=1` and `run_count=0` may the
 three-clip transition procedure be retried.
 
+`910C-051A` confirmed the source checkout path, HEAD, and tracked blob, but
+the running service still omitted the three fields introduced by `811ff448`.
+That is an invalid precheck. It does not prove a different source file was
+imported: a stale bytecode code object or a preloaded parent process can retain
+the source file name while executing older definitions.
+
+#### `910C-051B` source-only runtime import gate
+
+Before any further A/B/C request, start one new service process from the
+declared clean checkout with a task-local **empty** Python cache prefix and no
+bytecode writes. The task-local prefix must be outside the repository and may
+be removed at normal task cleanup; do not delete or modify any repository
+`__pycache__`, package, source, or configuration file. Set all of the
+following only for this service command:
+
+```text
+SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1
+PYTHONDONTWRITEBYTECODE=1
+PYTHONPYCACHEPREFIX=<new-empty-task-local-directory>
+```
+
+Before the service starts, return the launch interpreter's resolved module
+path and `__cached__` path for `encoder_cuda_graph`, plus checkout HEAD and
+tracked blob ID. The cached path must resolve under the task-local prefix, not
+an existing checkout `__pycache__`. After the service is healthy and before
+audio, require the full five-key `diagnostic_capture_defer` dictionary with
+`configured=1` and `run_count=0`.
+
+If that dictionary is still incomplete, stop without audio and classify the
+failure as a service worker/bootstrap or endpoint-routing mismatch. Return the
+launch PID, worker PIDs, port owner, and module/cache paths; do not claim an
+NPU capture effect. If it passes, continue immediately in the same fresh
+process with the existing three-clip A/B/C transition procedure.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -4042,7 +4076,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-049 | handoff `22d22ef1`; Omni code `e9032edc`; SGLang as `910C-048`; no server edit | Repair shared default graph-pool contamination by capturing encoder graphs into a dedicated private pool | One serial E1 normal-replay correctness probe on one clean NPU (no bypass diagnostics) | completed; hypothesis rejected, driver layer confirmed process-global | Private pool did not repair; E1 remained garbled 2/20, so contamination is not pool-scoped but process-global NPU driver state; combined with T1-fixed/E1/045/046/048 this isolates one encoder capture retroactively corrupting already-captured correctly-replaying decode graphs |
 | 910C-050 | server script locally patched (not source-authoritative); source replacement `a7fda80f`; SGLang not required | Determine whether a synthetic two-graph torch_npu probe reproduces a runtime-level interaction | Run decode-first and encoder-first separately, each in a fresh verified-clean NPU process; no service/HTTP/benchmark | completed; no interaction reproduced, inconclusive for Qwen3-ASR | The initial script required fixes for torch scope and encoder-like conv/MLP shapes; its negative result cannot clear the real failure because it omits compiled decode, attention/KV, and production stream/pool lifecycle |
 | 910C-051 | Omni `606252b6`; SGLang as current exact E1 environment; no server edit | Isolate the real first encoder capture-to-compiled-decode transition in one service process | One fresh serial E1 process with `SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1`, then three cache-miss clips with one exact encoder signature | invalidated before comparison | Clip A was already garbled; returned model-info had defer configured state unavailable (`deferred=0`, `remaining=0`) and an existing graph/replays, so the mandatory A-before-capture condition was not met |
-| 910C-051A | handoff commit containing this row; Omni code with constructor/run/capture provenance; SGLang as exact `910C-051` environment | Determine whether the defer environment reached the serving model process or a runner invocation preceded clip A | One serial precheck only: startup log plus model-info before any audio under `SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1` | authorized; pending server run | Require `configured=1` and `run_count=0` before audio. Otherwise report the owning PID and first-capture provenance; do not send the A/B/C probe |
+| 910C-051A | `b76e8166`; Omni code with constructor/run/capture provenance; SGLang as exact `910C-051` environment | Determine whether the defer environment reached the serving model process or a runner invocation preceded clip A | One serial precheck only: startup log plus model-info before any audio under `SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1` | invalidated: source identity passed, runtime code identity did not | The on-disk module path, HEAD, and tracked blob matched `811ff448`, but runtime model-info omitted the new `configured`, `run_count`, and `first_capture` fields. No audio was sent; do not infer source mismatch, stale bytecode, or NPU capture without the source-only gate. |
+| 910C-051B | handoff commit containing this row; same source/SGLang as `910C-051A` | Prove the service executes the declared encoder graph module before any graph/capture conclusion | One fresh no-audio service precheck with an empty task-local `PYTHONPYCACHEPREFIX`, `PYTHONDONTWRITEBYTECODE=1`, and defer=1 | authorized; pending server run | Require module and cache paths, HEAD/blob identity, full five-key defer info, `configured=1`, and `run_count=0` before audio. If complete, immediately execute A/B/C in that same fresh process; otherwise return launch/worker/port ownership and stop. |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
