@@ -3255,13 +3255,14 @@ Interpret the results mechanically:
   common one-token or two-token boundary is a shared-lifecycle hypothesis to
   audit before duplicating fixes.
 
-#### `910C-042`: parallel stage-performance attribution before accuracy closure
+#### `910C-042`: serial stage-performance attribution before accuracy closure
 
 Accuracy remains a hard gate for acceptance, but it does not prevent
-diagnostic performance attribution.  Run `910C-042` in parallel with
-`910C-041` so the next local repair can address both correctness and the
-already-visible performance gap.  No result from a garbled compile-on arm is
-an acceptance, hard-target, or final-candidate measurement.
+diagnostic performance attribution.  No result from a garbled compile-on arm
+is an acceptance, hard-target, or final-candidate measurement.  This task is
+still authorized, but all future server services and arms must run serially;
+the earlier multi-NPU parallel authorization is superseded because it proved
+operationally unreliable on the isolated server.
 
 Use this handoff commit and SGLang `54a8d042d`, with the same immutable source,
 package, kernel, corpus, and server constraints as `910C-041`.  Enable the
@@ -3274,11 +3275,12 @@ timing.  Capture rich model-info immediately before and after measurement and
 sample NPU resources at 0.5 seconds.  Each arm gets one fresh service; this is
 a screening pass, not the final three-repeat campaign.
 
-Use four physical NPUs when available.  Each lane runs its two arms serially
-on the same NPU while the four lanes run in parallel.  Use disjoint ports,
-event directories, benchmark outputs, and process/device visibility.  Apply
-the per-card preflight, graceful teardown, and two stable post-stop HBM
-snapshots from `910C-041`.
+Use one verified-clean physical NPU.  Run every control and treatment as a
+fresh service, one at a time, on that same NPU.  Between services require
+graceful teardown, a free port, no residual holder, and two stable HBM
+snapshots at or below 5%.  Keep disjoint event directories and benchmark
+outputs.  Do not overlap service startup, warm-up, measurement, teardown, or
+resource monitoring across arms.
 
 | Same-card lane | Control | Treatment | Marginal question |
 |---|---|---|---|
@@ -3327,7 +3329,7 @@ The required optimization decisions from this screening are:
 
 Do not tune parameters during these arms, run realtime, perform a soak, or
 change source/packages.  Parameter optimization is a subsequent, bounded
-multi-card sweep selected from these stage results.
+serial sweep selected from these stage results.
 
 #### `910C-043`: NPU guard completion-fence transition probe
 
@@ -3381,63 +3383,75 @@ Interpret the pair mechanically:
 
 #### `910C-044`: explicit KV-state compile boundary and conditional ALL screen
 
-`910C-043` completed with both fenced arms still garbled, so device completion
-ordering is rejected as the graph-to-compiled-decode repair.  The stronger
-shared defect candidate is the registered decode-attention op's incomplete
-state contract: it declared only its output mutation while reading and writing
-the paged KV cache, cache locations, and attention metadata through hidden
-Python context.  SGLang `634303cdf` passes the layer's key/value cache storage
-and `out_cache_loc` as explicit custom-op operands and declares both cache
-buffers mutable.  This changes no kernel and copies no cache data; it makes the
-real alias/dependency boundary visible to Dynamo and NPUGraph.
+The explicit KV-state change in SGLang `634303cdf` did not repair correctness.
+The TC-only control regressed, and the new path also introduced a warm-up hang,
+so the remaining arms and conditional performance screen were not valid.
+Reject that implementation rather than building further diagnostics on it.
+SGLang `ca17cd413` reverts `634303cdf` and restores the accepted
+`54a8d042d` behavior.  No server-side source change was made.
 
-Use this handoff commit, SGLang `634303cdf`, and the unchanged server packages,
-kernel, exact10 corpus, deterministic settings, and Qwen3-ASR profile controls.
-Do not enable `SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE`; the fence is rejected
-and its default-off behavior is required.  The isolated operator must not edit
-source, tests, configuration files, packages, site-packages, kernels, or Git
-history.  Run the SGLang radix-attention and decode-runner suites, the Omni
-encoder/model-info suites, and the complete Qwen3-ASR suite once.  Any
-collection, registration, schema, fake-tensor, or test failure stops all arms
-and is returned with the first full traceback.
+#### `910C-045`: serial graph-capture-only transition isolation
 
-After tests, use four clean NPUs to run these fresh-service accuracy arms in
-parallel with disjoint ports and evidence directories:
+The token boundary remains precise: TC-only is correct, encoder+TC and
+prefill+TC match their controls for one generated token, and both diverge on
+the first compiled decode transition.  Completion fencing and explicit KV
+operands are rejected.  The next discriminator is whether graph
+initialization/capture alone contaminates compiled decode state, or whether an
+actual encoder/prefill graph replay is required.
 
-| Arm | Encoder graph | Prefill graph | Decode graph | Compile | Purpose |
-|---|---:|---:|---:|---:|---|
-| `T1-KV` | off | off | on | on | Regression control for the accepted TC-only path |
-| `E1-KV` | on | off | on | on | Encoder-graph transition repair |
-| `P1-KV` | off | on | on | on | Prefill-graph transition repair |
-| `A1-KV` | on | on | on | on | Fully accelerated combination |
+Use Omni `8dab0b8f` and SGLang `5cb571995`.  The latter includes revert
+`ca17cd413`; do not test `634303cdf`.  Run on one clean physical NPU, with one
+fresh service at a time.  All arms from `910C-045` onward are serial: do not
+start a second service, benchmark client, resource monitor, or cleanup on
+another NPU concurrently.  Between arms require graceful shutdown, a free
+port, no residual holder, and two HBM snapshots at or below 5%.
 
-Each arm first runs the exact `910C-041` 20-item two-token probe, then a
-content-distinct 70-item untruncated accuracy set even when another arm fails.
-Return equality/garbled counts, WER, request accounting, compile buckets,
-encoder signature/capture/replay/fallback, prefill replay/eager, decode
-replay/eager/buckets, guard balance, forbidden signatures, drain, and two
-post-stop HBM snapshots.  An arm is correct only with 0 garbled outputs, normal
-WER, complete accounting, positive requested feature counters, and zero
-unexpected fallback.
+Before the arms, run the SGLang radix-attention/decode-runner suites, the Omni
+encoder/model-info suites, and the complete Qwen3-ASR suite once.  Stop on the
+first collection or test failure.  Keep server packages, kernels, exact10
+corpus, deterministic request settings, and all unrelated profile values
+unchanged.  The isolated operator must not edit source, tests, configuration
+files, packages, site-packages, kernels, or Git history.
 
-To avoid another round trip, if and only if `A1-KV` passes both accuracy gates,
-keep that service alive, finish deterministic encoder-signature saturation,
-verify signature/capture counts stop growing, and run one diagnostic exact10
-C70 measurement (70 disjoint warm-up plus 700 measured).  Collect the complete
-`910C-042` stage/guard/NPU metric set.  This one repeat is a performance screen,
-not the final three-fresh-process hard gate.  Do not run soak or realtime.
+Run these arms sequentially, each with the exact `910C-041` 20-item
+`max_new_tokens=2` probe followed by the content-distinct 70-item untruncated
+accuracy set:
 
-Interpretation:
+| Order | Arm | Encoder graph | Prefill graph | Decode graph | Compile | Diagnostic |
+|---:|---|---:|---:|---:|---:|---|
+| 1 | `E-CAP` | capture only | off | on | on | `SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_ONLY=1` |
+| 2 | `P-CAP` | off | capture only | on | on | `SGLANG_NPU_PREFILL_GRAPH_CAPTURE_ONLY=1` |
 
-- E1-KV and P1-KV both correct: hidden KV dependency was the shared defect;
-  require A1-KV correctness before closing feature support;
-- one correct: retain the explicit state contract and instrument the remaining
-  producer's KV/cache-location values at first decode;
-- neither correct: explicit aliasing is insufficient; next compare captured
-  block-table/sequence metadata and static ForwardBatch ownership;
-- A1-KV correct: all identified acceleration features are functionally
-  supported, and its conditional C70 profile selects the next performance
-  optimization rather than reopening correctness diagnosis.
+For `E-CAP`, require positive encoder captured-graph/signature counts,
+`replay_count=0`, and a positive `diagnostic_capture_only` eager-fallback
+reason.  The diagnostic intentionally captures each real NPU encoder
+signature and then executes the full encoder eagerly.  For `P-CAP`, require
+positive prefill graph capture/startup attestation, zero request-time prefill
+replay delta, and a positive standard-eager delta.  The diagnostic leaves
+startup capture enabled but routes request prefill through eager execution.
+Both arms retain normal decode graph replay and Torch Compile markers.
+
+Return request accounting, normalized equality/garbled counts, WER, compile
+buckets, encoder capture/signature/replay/fallback reasons, prefill
+replay/eager deltas, decode replay/eager/buckets, guard balance, forbidden
+signatures, drain, and cleanup evidence.  A missing capture-only marker or a
+positive replay delta for the bypassed graph invalidates its arm.
+
+Interpret each arm independently:
+
+- correct capture-only output means actual graph replay is necessary for that
+  feature's corruption; next compare the replay-produced output and first
+  compiled-decode inputs without changing capture;
+- garbled capture-only output means graph initialization/capture is sufficient
+  to contaminate later compiled decode state; next audit capture ordering,
+  persistent module/context mutation, and static buffer ownership;
+- different E/P outcomes demonstrate different mechanisms; matching outcomes
+  support one shared graph-lifecycle repair, but do not by themselves prove
+  two independent defects.
+
+Do not run ALL, C70, performance, soak, realtime, or any unlisted experiment
+under these diagnostic bypasses.  After `910C-045`, run the still-authorized
+`910C-042` performance attribution only as a separate serial task.
 
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
@@ -3629,9 +3643,10 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-039 | handoff `e8b80db9`; SGLang `54a8d042d` | Preserve static NPU graph state within the registered decode-attention custom op | Real normal-compile T1, then conditional real normal-compile ALL A1 correctness arms | partial; T1 passed, A1 garbled | T1 returned WER 0.0167 with 0/70 garbled; A1 remained garbled around WER 1.39, proving only an unresolved full-combination interaction |
 | 910C-040 | handoff `02cc6166`; SGLang `54a8d042d`; no server edit | Split real normal-compile encoder+graph and prefill+graph interactions | Independent E1 encoder-compile and P1 prefill-compile exact10 correctness arms | completed; both feature combinations garbled | T1 compile-only remained correct, but both encoder+compile E1 and prefill+compile P1 produced garbled output; this proves two failing combinations but may still reflect a shared graph-state hand-off defect |
 | 910C-041 | handoff `28e297c3`; SGLang `54a8d042d`; no server edit | Token-boundary comparison of graph-produced state entering compiled decode | Four independent encoder/prefill on/off controls and compile-on probes at `max_new_tokens=1` and `2` | completed; shared transition boundary found | Both E1 and P1 matched their controls at one generated token and diverged at two; the first compiled decode transition is the common failure boundary |
-| 910C-042 | handoff commit containing this row; SGLang `54a8d042d` | Multi-NPU stage attribution while compile-combination accuracy remains open | Four same-card control/treatment lanes run in parallel at exact10 C70 with existing structured events | authorized; pending | Collect encoder, prefill, decode-step, guard, graph-bucket and NPU utilization costs; garbled arms are diagnostic only and cannot satisfy the hard target |
+| 910C-042 | handoff commit containing this row; SGLang `54a8d042d` | Serial stage attribution while compile-combination accuracy remains open | Same-NPU control/treatment arms run one fresh service at a time at exact10 C70 with existing structured events | authorized; pending; serial policy supersedes multi-NPU plan | Collect encoder, prefill, decode-step, guard, graph-bucket and NPU utilization costs; garbled arms are diagnostic only and cannot satisfy the hard target |
 | 910C-043 | handoff `970e9560`; code `b6966d4d`; SGLang `54a8d042d`; no server edit | Opt-in NPU device completion before each execution-guard hand-off | Parallel E1-F/P1-F two-token correctness probes | completed; hypothesis rejected | Both fenced arms remained garbled, so device completion alone does not repair the first compiled decode transition; fenced performance is invalid |
-| 910C-044 | handoff commit containing this row; SGLang `634303cdf`; no server edit | Make paged KV storage and cache locations explicit custom-op state | Parallel T1/E1/P1/ALL accuracy arms, then conditional ALL C70 screen | authorized; pending | Test the hidden KV alias/dependency defect and, if ALL becomes correct, collect full stage performance in the same run |
+| 910C-044 | handoff `53c1eccd`; SGLang `634303cdf`; no server edit | Make paged KV storage and cache locations explicit custom-op state | TC regression control and conditional combination arms | completed; rejected and reverted by SGLang `ca17cd413` | The explicit operands did not repair accuracy, regressed T1, and introduced a warm-up hang; do not reuse this implementation |
+| 910C-045 | handoff commit containing this row; Omni `8dab0b8f`; SGLang `5cb571995`; no server edit | Distinguish graph capture/init contamination from actual encoder/prefill replay | Serial E-CAP then P-CAP capture-only correctness arms on one clean NPU | authorized; pending | Capture remains real while request replay is bypassed; classify each feature independently before the next repair |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
