@@ -27,14 +27,23 @@ logger = logging.getLogger(__name__)
 
 
 def _capture_only_diagnostic_enabled() -> bool:
-    return os.getenv(
-        "SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_ONLY", ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_ONLY", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _capture_release_diagnostic_enabled() -> bool:
     return os.getenv(
         "SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _capture_release_parity_diagnostic_enabled() -> bool:
+    return os.getenv(
+        "SGLANG_OMNI_ENCODER_GRAPH_CAPTURE_RELEASE_PARITY", ""
     ).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -125,6 +134,11 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._eager_fallback_reasons: Counter[str] = Counter()
         self._diagnostic_capture_release_count = 0
         self._diagnostic_released_keys: set[Hashable] = set()
+        self._diagnostic_pending_reference: torch.Tensor | None = None
+        self._diagnostic_parity_count = 0
+        self._diagnostic_parity_match_count = 0
+        self._diagnostic_parity_mismatch_count = 0
+        self._diagnostic_last_parity: dict[str, Any] | None = None
         self._capture_attention_metadata: VisionAttentionMetadata | None = None
 
     @property
@@ -198,11 +212,22 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         bucket_size: int,
         *,
         window_lens: tuple[int, ...] | None = None,
+        diagnostic_hidden_states: torch.Tensor | None = None,
+        diagnostic_total: int | None = None,
     ) -> _CapturedGraph:
         """Record one graph for a bucket-sized packed input."""
         device, dtype = self._device, self._dtype
         d_model = self._tower.ln_post.normalized_shape[0]
         static_hs = torch.zeros(bucket_size, d_model, device=device, dtype=dtype)
+        if diagnostic_hidden_states is not None:
+            if diagnostic_total is None:
+                diagnostic_total = int(diagnostic_hidden_states.shape[0])
+            if not 0 < diagnostic_total <= bucket_size:
+                raise ValueError(
+                    "encoder capture parity needs a valid real-token count, got "
+                    f"total={diagnostic_total} bucket={bucket_size}"
+                )
+            static_hs[:diagnostic_total].copy_(diagnostic_hidden_states)
 
         max_windows = self._max_windows_for(bucket_size)
         if self._is_npu:
@@ -239,17 +264,26 @@ class Qwen3ASREncoderLayerStackGraphRunner:
 
         side = torch.cuda.Stream(device)
         side.wait_stream(torch.cuda.current_stream(device))
+        warmup_out = None
         with torch.cuda.stream(side):
             for _ in range(3):
-                run_once()
+                warmup_out = run_once()
         torch.cuda.current_stream(device).wait_stream(side)
         torch.cuda.synchronize(device)
+        diagnostic_reference = None
+        if diagnostic_hidden_states is not None:
+            assert warmup_out is not None and diagnostic_total is not None
+            normalized = warmup_out.squeeze(0) if warmup_out.dim() == 3 else warmup_out
+            diagnostic_reference = normalized[:diagnostic_total].detach().clone()
 
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph, capture_error_mode="thread_local"):
             static_out = run_once()
+        if diagnostic_reference is not None:
+            self._diagnostic_pending_reference = diagnostic_reference
         logger.info(
-            "[qwen3-asr] captured encoder layer-stack graph bucket=%d windows=%d out=%s",
+            "[qwen3-asr] captured encoder layer-stack graph bucket=%d "
+            "windows=%d out=%s",
             bucket_size,
             len(sizes),
             tuple(static_out.shape),
@@ -301,10 +335,19 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                     self._npu_signature_capacity_reported = True
                 return self._fallback("npu_signature_capacity")
             try:
-                entry = self._capture(
-                    bucket_size,
-                    window_lens=(effective_window_lens if self._is_npu else None),
-                )
+                capture_kwargs: dict[str, Any] = {
+                    "window_lens": (effective_window_lens if self._is_npu else None)
+                }
+                if (
+                    self._is_npu
+                    and _capture_release_diagnostic_enabled()
+                    and _capture_release_parity_diagnostic_enabled()
+                ):
+                    capture_kwargs.update(
+                        diagnostic_hidden_states=hidden_states,
+                        diagnostic_total=total,
+                    )
+                entry = self._capture(bucket_size, **capture_kwargs)
             except Exception as exc:
                 logger.warning(
                     "[qwen3-asr] encoder graph capture failed for bucket=%d: %s; "
@@ -364,6 +407,62 @@ class Qwen3ASREncoderLayerStackGraphRunner:
             out = out.squeeze(0)
         return out[:total].clone()
 
+    def record_capture_release_eager_output(self, output: torch.Tensor) -> None:
+        """Compare post-release eager encoder output with pre-capture output.
+
+        This diagnostic is deliberately evaluated only after the normal full
+        audio-tower fallback has run.  It distinguishes encoder-output
+        corruption from a process/device state change that first becomes
+        visible in the subsequent compiled decode path.
+        """
+        reference = getattr(self, "_diagnostic_pending_reference", None)
+        if reference is None:
+            return
+        self._diagnostic_pending_reference = None
+        actual = (
+            output.squeeze(0) if output.dim() == 3 and output.shape[0] == 1 else output
+        )
+        shape_match = tuple(reference.shape) == tuple(actual.shape)
+        reference_nonfinite = int((~torch.isfinite(reference)).sum().item())
+        actual_nonfinite = int((~torch.isfinite(actual)).sum().item())
+        allclose = False
+        max_abs = None
+        mean_abs = None
+        if shape_match:
+            diff = (actual.float() - reference.float()).abs()
+            max_abs = float(diff.max().item()) if diff.numel() else 0.0
+            mean_abs = float(diff.mean().item()) if diff.numel() else 0.0
+            allclose = bool(
+                torch.allclose(actual.float(), reference.float(), rtol=1e-3, atol=3e-2)
+            )
+
+        self._diagnostic_parity_count = getattr(self, "_diagnostic_parity_count", 0) + 1
+        counter_name = (
+            "_diagnostic_parity_match_count"
+            if allclose
+            else "_diagnostic_parity_mismatch_count"
+        )
+        setattr(self, counter_name, getattr(self, counter_name, 0) + 1)
+        self._diagnostic_last_parity = {
+            "shape_match": shape_match,
+            "allclose": allclose,
+            "max_abs": max_abs,
+            "mean_abs": mean_abs,
+            "reference_nonfinite": reference_nonfinite,
+            "actual_nonfinite": actual_nonfinite,
+        }
+        logger.info(
+            "[qwen3-asr] encoder capture-release parity shape_match=%s "
+            "allclose=%s max_abs=%s mean_abs=%s reference_nonfinite=%d "
+            "actual_nonfinite=%d",
+            shape_match,
+            allclose,
+            max_abs,
+            mean_abs,
+            reference_nonfinite,
+            actual_nonfinite,
+        )
+
     def _fallback(self, reason: str) -> None:
         self._eager_fallback_reasons[reason] += 1
 
@@ -388,6 +487,14 @@ class Qwen3ASREncoderLayerStackGraphRunner:
             "diagnostic_capture_release_count": int(
                 getattr(self, "_diagnostic_capture_release_count", 0)
             ),
+            "diagnostic_capture_release_parity": {
+                "count": int(getattr(self, "_diagnostic_parity_count", 0)),
+                "match_count": int(getattr(self, "_diagnostic_parity_match_count", 0)),
+                "mismatch_count": int(
+                    getattr(self, "_diagnostic_parity_mismatch_count", 0)
+                ),
+                "last": getattr(self, "_diagnostic_last_parity", None),
+            },
             "replay_count": int(self._replay_count),
             "replay_buckets": {
                 str(bucket): int(count)
