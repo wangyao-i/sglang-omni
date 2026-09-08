@@ -3854,14 +3854,21 @@ Before any further A/B/C request, start one new service process from the
 declared clean checkout with a task-local **empty** Python cache prefix and no
 bytecode writes. The task-local prefix must be outside the repository and may
 be removed at normal task cleanup; do not delete or modify any repository
-`__pycache__`, package, source, or configuration file. Set all of the
-following only for this service command:
+`__pycache__`, package, source, or configuration file. Do not use the
+installed `sgl-omni` console script for this gate: its interpreter has already
+started before it can demonstrate that the Python initialization options were
+accepted. Replace only the launch prefix of the existing service command with:
 
 ```text
-SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1
-PYTHONDONTWRITEBYTECODE=1
-PYTHONPYCACHEPREFIX=<new-empty-task-local-directory>
+PYTHONPYCACHEPREFIX=<new-empty-task-local-directory> \
+PYTHONDONTWRITEBYTECODE=1 \
+SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1 \
+python -B -X pycache_prefix=<new-empty-task-local-directory> \
+    -m sglang_omni.cli serve <the-existing-unchanged-serve-arguments>
 ```
+
+The environment variables are retained for child-process inheritance; the
+`-X pycache_prefix` option is required on the parent interpreter command line.
 
 Before the service starts, return the launch interpreter's resolved module
 path and `__cached__` path for `encoder_cuda_graph`, plus checkout HEAD and
