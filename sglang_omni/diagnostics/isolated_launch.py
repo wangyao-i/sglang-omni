@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import os
 import sys
 import sysconfig
@@ -121,6 +122,92 @@ def collect_isolation_report(forbidden_root: Path) -> dict[str, bool]:
     }
 
 
+def _module_import_report(forbidden_root: Path) -> dict[str, bool]:
+    """Inspect the two worker-owned modules without creating device state."""
+    from sglang_omni.models.qwen3_asr import encoder_cuda_graph
+    from sglang_omni.model_runner import model_worker
+
+    root = forbidden_root.resolve()
+    encoder_path = Path(encoder_cuda_graph.__file__).resolve()
+    worker_path = Path(model_worker.__file__).resolve()
+    runner_constants = getattr(
+        encoder_cuda_graph.Qwen3ASREncoderLayerStackGraphRunner.model_info,
+        "__code__",
+    ).co_consts
+    worker_constants = getattr(
+        model_worker.ModelWorker._encoder_cuda_graph_info,
+        "__code__",
+    ).co_consts
+
+    def constants_contain(constants: tuple[object, ...], expected: str) -> bool:
+        return any(
+            value == expected
+            or (
+                isinstance(value, (tuple, frozenset))
+                and constants_contain(value, expected)
+            )
+            for value in constants
+        )
+
+    return {
+        "child_checkout_absent_from_sys_path": not any(
+            _is_under(Path.cwd() if not entry else Path(entry), root)
+            for entry in sys.path
+        ),
+        "child_encoder_module_outside_forbidden_root": not _is_under(
+            encoder_path, root
+        ),
+        "child_model_worker_module_outside_forbidden_root": not _is_under(
+            worker_path, root
+        ),
+        "child_runner_has_defer_provenance": all(
+            constants_contain(runner_constants, field)
+            for field in (
+                "configured",
+                "deferred_count",
+                "remaining",
+                "run_count",
+                "first_capture",
+            )
+        ),
+        "child_worker_has_runtime_identity": constants_contain(
+            worker_constants, "runtime_identity"
+        ),
+    }
+
+
+def _spawn_import_attestation(
+    queue: multiprocessing.queues.Queue, forbidden_root_text: str
+) -> None:
+    report = _module_import_report(Path(forbidden_root_text))
+    queue.put(report)
+
+
+def collect_spawn_import_report(forbidden_root: Path) -> dict[str, bool]:
+    """Attest the exact standard-library spawn import boundary used by stages."""
+    context = multiprocessing.get_context("spawn")
+    queue = context.Queue()
+    process = context.Process(
+        target=_spawn_import_attestation,
+        args=(queue, str(forbidden_root.resolve())),
+    )
+    process.start()
+    try:
+        report = queue.get(timeout=30)
+    finally:
+        process.join(timeout=30)
+        if process.is_alive():
+            process.kill()
+            process.join()
+        queue.close()
+    if process.exitcode != 0:
+        raise RuntimeError(f"spawn import attestation child exited {process.exitcode}")
+    if not isinstance(report, dict):
+        raise RuntimeError("spawn import attestation returned no report")
+    report["child_valid"] = all(report.values())
+    return report
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--forbid-root", required=True)
@@ -133,6 +220,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--install-site-guard",
         action="store_true",
         help="Install the task-venv site startup guard and exit.",
+    )
+    parser.add_argument(
+        "--attest-spawn-child",
+        action="store_true",
+        help="Attest imports in one standard-library spawn child and exit.",
     )
     parser.add_argument("args", nargs=argparse.REMAINDER)
     return parser.parse_args(argv)
@@ -147,6 +239,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     sanitize_import_path(Path(args.forbid_root))
     report = collect_isolation_report(Path(args.forbid_root))
     report["valid"] = all(report.values())
+    if args.attest_spawn_child:
+        if not report["valid"]:
+            print(json.dumps(report, sort_keys=True))
+            return 1
+        child_report = collect_spawn_import_report(Path(args.forbid_root))
+        report.update(child_report)
+        report["valid"] = all(report.values())
+        print(json.dumps(report, sort_keys=True))
+        return 0 if report["valid"] else 1
     if args.attest:
         print(json.dumps(report, sort_keys=True))
         return 0 if report["valid"] else 1

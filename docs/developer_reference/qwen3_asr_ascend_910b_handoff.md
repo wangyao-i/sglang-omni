@@ -4109,6 +4109,30 @@ only if this wrapper itself has an unambiguous bootstrap/test defect. It may
 not change serving, model, graph, compile, dependency, or benchmark behavior.
 Return the allowed text-only repair record defined at the top of this handoff.
 
+#### `910C-053E` standard spawn-child import gate
+
+`910C-053D` established the parent interpreter gate but the later service
+response did not contain the expected worker provenance. That response alone
+does not prove that a child loaded an editable checkout: standard-library
+`spawn` normally replaces its child path with the parent's preparation data.
+Before another service launch, test that exact process boundary without model
+construction, weights, graph, audio, or NPU initialization:
+
+```text
+export SGLANG_OMNI_FORBID_IMPORT_ROOT=<declared-clean-checkout>
+<task-runtime-venv>/bin/python -I -m sglang_omni.diagnostics.isolated_launch \
+    --forbid-root <declared-clean-checkout> --attest-spawn-child
+```
+
+The combined JSON must be `valid=true`, including all parent `910C-053D`
+booleans and the child booleans: no checkout on `sys.path`, both encoder and
+ModelWorker modules outside the checkout, all five defer provenance fields,
+and worker `runtime_identity` support. A failure is definitive import-runtime
+evidence: stop before service and replace the system-site-packages task venv
+with a dependency-complete pure wheel runtime. A pass means the old
+`/model_info` shape is a stage/runner response issue, not evidence that spawn
+loaded stale source; then repair that response contract locally before audio.
+
 #### `910C-053C` real encoder-capture transition probe
 
 Use the `910C-053B`-attested task venv and its wheel as the only runtime. Run
@@ -4354,7 +4378,8 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-053 | `20964b79`; exact attested `910C-052B` wheel venv | Execute the first valid encoder-capture-to-compiled-decode transition experiment | One fresh E1 service: no-audio nested-stage gate, then distinct same-signature A/B/C | invalidated before service | The service was started from the checkout, so its runtime path contract was breached. This is not graph or compile evidence and must not be used for attribution. |
 | 910C-053B | `bcd04cbd`; new wheel from that commit | Establish the only allowed wheel-service launcher | Wheel install, task-venv `sitecustomize` guard, `python -I` isolated-launch attestation, then unchanged E1 service through the same wrapper | superseded before valid service | Parent attestation alone passed, but the child-runtime gate was not hard enough. Do not attribute this failure to graph/compile or spawn semantics. |
 | 910C-053D | handoff commit containing this row; new wheel from that commit | Establish checkout-free imports before every parent and child module load | Wheel install, guarded task venv, `python -I` attestation, then unchanged E1 service through the same wrapper | authorized; pending server run | `valid=true` requires the prior fields plus `site_guard_installed` and an exact forbid-root environment match. Stop before service on any false value. |
-| 910C-053C | exact attested guarded task venv | Execute the first valid encoder-capture-to-compiled-decode transition experiment | One fresh E1 service: no-audio nested-stage gate, then distinct same-signature A/B/C | blocked on 910C-053D | A correct/deferred, B correct/capture, C correct/replay sequence rejects the narrow encoder transition hypothesis; a correct A then garbled B/C confirms it. |
+| 910C-053E | handoff commit containing this row; exact guarded task venv | Directly attest standard-library spawn child imports before service | One parent/one child module-origin and method-capability JSON gate | authorized; pending server run | A failed child requires a pure wheel dependency runtime; a passed child rejects stale spawn import as the explanation for old model-info shape. |
+| 910C-053C | exact attested guarded task venv | Execute the first valid encoder-capture-to-compiled-decode transition experiment | One fresh E1 service: no-audio nested-stage gate, then distinct same-signature A/B/C | blocked on 910C-053E | A correct/deferred, B correct/capture, C correct/replay sequence rejects the narrow encoder transition hypothesis; a correct A then garbled B/C confirms it. |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
