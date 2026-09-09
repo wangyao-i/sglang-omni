@@ -411,6 +411,58 @@ reserved for a qualified `ALL` profile.
 An item-level C70 run may accompany steps 1 through 4 to expose its performance
 direction and bottleneck. It is intentionally not a substitute for step 5.
 
+## `910C-056`: memory-budgeted sparse compile buckets
+
+`910C-055` established an allocation limit, not a hardware batch-size limit.
+With the existing KV-cache reservation and prefix compile policy, requesting
+compile max batch 8 compiled `[1, 2, 4, 8]` cumulatively and exhausted the
+remaining HBM during startup. Do not describe `[1, 2]` as the maximum supported
+compile shape.
+
+Use Omni `fcc2fb64` with SGLang `edc504ff6` (based on the correctness-qualified
+`1d5aa4b8e`). The new `asr.engine.torch_compile_bs` list selects a sparse subset
+of the already captured decode buckets. Omitting it preserves the legacy
+`torch_compile_max_bs` prefix behavior.
+
+Run this task serially on one clean NPU. The server must not edit source or
+packages. First run the new SGLang bucket-selection tests, the existing NPU
+decode/radix-attention tests, the Omni runtime-schema test, and the existing
+Qwen3-ASR focused correctness suites. Stop on the first failure.
+
+Before starting a service, read the retained `910C-054` and `910C-055` artifacts
+and report:
+
+- the exact padded decode-bucket histogram for the A1 C70 workload;
+- current `mem_fraction_static`, KV-pool bytes/token capacity, and maximum
+  observed live KV tokens;
+- available HBM before capture and, where logged, after each compiled bucket in
+  the failed prefix `[1, 2, 4, 8]` capture.
+
+Choose one reduced `mem_fraction_static` for all following arms. It must still
+provide at least 1.25 times the maximum observed live KV tokens; if the retained
+artifacts cannot prove that capacity, stop rather than guessing. Rank buckets
+above 2 by observed `bucket_hits * bucket_size`. Let `H1` and `H2` be the first
+and second ranked buckets.
+
+Run fresh-process arm M1 with compile buckets `[1, 2, H1]`. Require model-info
+to report exactly those compile buckets, every requested graph path to replay,
+zero eager fallback/capture failure, normal WER, 140/140 correctness, and clean
+drain. If startup OOMs, stop and return the memory budget. If M1 passes, run the
+700-request exact10 C70 measurement and retain latency, throughput, bucket,
+guard, NPU utilization, and HBM evidence.
+
+Run fresh-process arm M2 with `[1, 2, H1, H2]` only when M1 leaves at least the
+larger of 4 GiB or 1.25 times the observed M1 capture increment free after
+capture. Apply the same correctness and C70 gates. Never proceed to a third
+bucket, soak, or realtime in this task. Gracefully stop each service and require
+HBM to return to the pre-run baseline before the next arm.
+
+Return one sanitized table containing the memory-budget calculation, histogram,
+selected buckets, startup/capture result, compile/replay/fallback counters,
+WER, p95, throughput, utilization, post-capture free HBM, and cleanup state for
+each attempted arm. Raw logs, paths, transcripts, and profiler files remain on
+the isolated server.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
