@@ -65,6 +65,12 @@ def test_invalid_engine_mem_fraction_static_raises() -> None:
         EngineArgs(mem_fraction_static=1.0)
 
 
+def test_engine_explicit_torch_compile_batch_sizes_reach_overrides() -> None:
+    args = EngineArgs(torch_compile_bs=[1, 32, 70])
+
+    assert args.overrides()["torch_compile_bs"] == [1, 32, 70]
+
+
 def test_invalid_model_group_values_raise() -> None:
     with pytest.raises(ValueError, match="max_seq_len"):
         FactoryArgs(max_seq_len=0)

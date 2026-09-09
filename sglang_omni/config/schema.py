@@ -86,6 +86,7 @@ class EngineArgs(BaseModel):
     disable_cuda_graph: bool | None = None
     enable_torch_compile: bool | None = None
     torch_compile_max_bs: int | None = Field(default=None, ge=1)
+    torch_compile_bs: list[int] | None = None
     cpu_offload_gb: int | None = Field(default=None, ge=0)
     quantization: str | None = Field(default=None, min_length=1)
     disable_custom_all_reduce: bool | None = None
