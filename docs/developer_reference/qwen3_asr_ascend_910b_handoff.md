@@ -4052,6 +4052,47 @@ only the immutable-wheel attestation as `910C-052B`; do not start a service or
 touch an NPU until its JSON is `valid=true`. This is a correction to the gate,
 not a new graph experiment.
 
+`910C-052B` passed: the immutable wheel runtime reported `valid=true` with
+wheel SHA-256 prefix `a40d12f`. This closes runtime provenance. Earlier
+checkout-path, console-script, pycache-prefix, and spawn-probe gates are
+historical diagnostics only and must not be repeated or used to qualify the
+current runtime.
+
+#### `910C-053` real encoder-capture transition probe
+
+Use the attested `910C-052B` task venv and its wheel as the only runtime. Run
+one fresh E1 service from outside the checkout with the exact existing E1
+arguments: encoder graph enabled, prefill graph disabled, decode graph enabled,
+torch compile enabled, guard enabled, and
+`SGLANG_OMNI_ENCODER_GRAPH_DEFER_CAPTURES=1`. Do not modify source, packages,
+or service configuration; do not run a new wheel or venv setup during this
+task.
+
+After health is ready and before audio, query `/model_info` and read the raw
+stage result at `stages[*].data.encoder_cuda_graph`. Require the worker-owned
+object to report a nonempty `runtime_identity`, the exact five-key
+`diagnostic_capture_defer`, `configured=1`, `run_count=0`,
+`deferred_count=0`, `remaining=1`, `first_capture=null`, and
+`captured_graph_count=0`. Any mismatch stops the task without audio.
+
+If the no-audio gate passes, immediately run the existing three distinct,
+same-signature exact-10-second clips A/B/C in that same process:
+
+1. A must be a cache miss and correct through compiled decode while deferring
+   capture (`deferred_count=1`, no capture or replay);
+2. B must be a cache miss, trigger one normal encoder capture/replay, and be
+   correct; and
+3. C must be a cache miss, replay that graph, and be correct.
+
+Any incorrect normalized output, cache hit, signature mismatch, capture
+failure, eager fallback, endpoint/device error, non-drained service, or
+teardown failure ends the task at its first occurrence. Return only the wheel
+SHA prefix, runtime identity/key sets, per-step success/correctness summary,
+counter deltas, and health/cleanup status. A correct A then garbled B/C is now
+valid evidence of the real graph-capture-to-compiled-decode transition; a
+correct A/B/C rejects that narrow hypothesis and permits the prefill-plus-
+compile transition probe next.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -4257,8 +4298,9 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-051C | handoff commit containing this row; same source/SGLang as `910C-051B` | Identify the live stage runner method and correctly read nested encoder graph data before capture attribution | One fresh no-audio source-only service precheck with defer=1 and worker-owned runtime identity | authorized; pending server run | Require `stages[*].data.encoder_cuda_graph.runtime_identity` plus the five defer fields, zero run/capture count, then immediately execute A/B/C only if all gates pass. |
 | 910C-051D | handoff commit containing this row; no SGLang/NPU dependency | Reproduce or reject a Python spawn import mismatch without model construction | Parent/child source-provenance probe under the exact service interpreter and environment | authorized; pending server run | Compare checkout ownership and method capabilities on both sides of one plain spawn boundary; no service, graph, or audio is allowed. |
 | 910C-051E | handoff commit containing this row; no SGLang/NPU dependency | Force and attest checked-hash bytecode for the two source-defined provenance methods | Task-local checked-hash cache, then parent/child provenance probe using the exact service interpreter | authorized; pending server run | Both processes must load encoder and ModelWorker cache entries from the temporary prefix and report the new method capabilities before any service starts. |
-| 910C-052 | handoff commit containing this row; no NPU action before artifact attestation | Replace checkout/editable runtime with a wheel installed to a new task-scoped venv | Immutable wheel build, SHA record, isolated-venv install, and installed-file RECORD validation | authorized; pending server run | `valid=true` from the wheel runtime attestation is required before the one no-audio model-info gate; `910C-051B`--`E` are superseded and must not be rerun. |
-| 910C-052B | handoff commit containing this row; no service/NPU action | Correct the immutable-wheel attestation's CPython folded-constant false negative | Rebuild one wheel and repeat only the installed-artifact JSON gate | authorized; pending server run | The corrected recursive constant check plus a CPU regression must yield `valid=true`; any remaining false field is a real runtime-artifact discrepancy. |
+| 910C-052 | `715fddf1`; no NPU action before artifact attestation | Replace checkout/editable runtime with a wheel installed to a new task-scoped venv | Immutable wheel build, SHA record, isolated-venv install, and installed-file RECORD validation | initial implementation false-negative | CPython folded nested literal keys into a tuple, so a correct wheel was incorrectly reported invalid; no service/NPU ran. |
+| 910C-052B | `f3ca69d6`; no service/NPU action | Correct the immutable-wheel attestation's CPython folded-constant false negative | Rebuild one wheel and repeat only the installed-artifact JSON gate | passed | `valid=true`, wheel SHA-256 prefix `a40d12f`; code, wheel RECORD, venv isolation, and provenance checks all passed. |
+| 910C-053 | handoff commit containing this row; exact attested `910C-052B` wheel venv | Execute the first valid encoder-capture-to-compiled-decode transition experiment | One fresh E1 service: no-audio nested-stage gate, then distinct same-signature A/B/C | authorized; pending server run | No cache/import workaround is allowed. A correct/deferred, B correct/capture, C correct/replay sequence rejects the narrow encoder transition hypothesis; a correct A then garbled B/C confirms it. |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
