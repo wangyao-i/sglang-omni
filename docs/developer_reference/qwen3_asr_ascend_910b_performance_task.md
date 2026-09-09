@@ -497,6 +497,59 @@ completed capture bucket, free HBM immediately before it, the first complete
 OOM traceback, resolved KV token/byte capacity, and cleanup state. Do not retry
 with another memory fraction or bucket in this task.
 
+### `910C-056B`: overnight KV attribution and full compile-coverage qualification
+
+Corrected M1c passed with `max_total_tokens=32768`,
+`mem_fraction_static=0.80`, and compile buckets `[1,2,70]`. Its 140-request
+correctness gate had WER 0.0161 with no garbled output. The 700-request C70 run
+had WER 0.0164, p95 1.442 seconds, throughput 59.88 requests/s, RTFx 598.8,
+and 22% HBM use. This is the best result so far, but it still misses the
+0.500-second p95 and 140-request/s hard targets.
+
+The improvement is not yet attributable solely to bucket 70 because the same
+arm reduced the KV pool from 435,584 to 32,768 tokens. Run the following arms
+serially. Every arm must use a fresh service process, the pinned exact10 corpus,
+the fully enabled ALL feature profile, `max_total_tokens=32768`,
+`mem_fraction_static=0.80`, graceful shutdown, and confirmed HBM recovery before
+the next arm. Do not edit source, tests, packages, configuration files, or
+documentation on the isolated server.
+
+1. **K0 control:** use compile buckets `[1,2]`. Run one 700-request C70
+   measurement. Require normal WER, zero garbled output/failure/fallback,
+   exact compile-list attestation, graph replay evidence, drain, and clean HBM
+   recovery. K0 isolates the gain from KV-pool right-sizing.
+2. **F13 treatment:** use all captured decode buckets
+   `[1,2,4,8,12,16,24,32,40,48,56,64,70]`. Require startup and model-info to
+   attest the exact list. Run 140-request correctness first, then one
+   700-request C70 measurement only if correctness passes. Apply the same
+   accuracy, fallback, health, and cleanup gates.
+3. If F13 OOMs during capture, preserve the first complete OOM and memory
+   evidence, clean up, and run one pre-authorized **F8 fallback** in a fresh
+   process with `[1,2,32,40,48,56,64,70]`. Apply the F13 gates. Do not try any
+   other subset.
+
+If F13, or F8 when used, passes correctness and its first C70 run, perform two
+additional fresh-process C70 repeats of that same winning profile. These three
+C70 measurements are the overnight reproducibility set; do not use an in-process
+`--repeats 3` loop. Stop the set on the first accuracy, request-accounting,
+fallback, OOM, health, or cleanup failure.
+
+For the first successful C70 run of the winning full-coverage profile, retain
+one bounded performance-attribution capture using existing observability only:
+raw and padded decode-bucket histograms, compiled-versus-eager forward counts,
+Dynamo graph-break/recompile counts, encoder batch and queue-wait time, guard
+wait/hold time, prefill/decode timing, AI Core utilization, power, HBM peak,
+and wall-clock/latency distribution. Profiling must not be enabled for the
+other two C70 repeats. Do not run soak or realtime.
+
+Return one sanitized comparison table for old A1, M1c, K0, F13, and attempted
+F8, plus the three-repeat table for the winning profile. Include resolved KV
+tokens/bytes, compile buckets, capture time/peak HBM, correctness, WER,
+garbled/failure/fallback counts, decode coverage, p50/p95/p99/max, throughput,
+RTFx, utilization, queue/guard timing, and cleanup. Explicitly calculate the
+KV-sizing contribution (K0 versus old A1), sparse bucket-70 contribution (M1c
+versus K0), and full-coverage contribution (F13 or F8 versus K0 and M1c).
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
