@@ -15,7 +15,9 @@ from sglang_omni.diagnostics.runtime_artifact import (
     _record_hash_matches,
 )
 from sglang_omni.diagnostics.isolated_launch import (
+    _SITE_GUARD_MARKER,
     collect_isolation_report,
+    install_site_guard,
     sanitize_import_path,
 )
 
@@ -90,3 +92,24 @@ def test_isolated_launch_rejects_checkout_working_directory(
 
     with pytest.raises(RuntimeError, match="outside the checkout"):
         sanitize_import_path(checkout)
+
+
+def test_isolated_launch_installs_idempotent_task_site_guard(tmp_path: Path) -> None:
+    site_packages = tmp_path / "site-packages"
+
+    installed = install_site_guard(site_packages)
+
+    assert installed == site_packages / "sitecustomize.py"
+    assert _SITE_GUARD_MARKER in installed.read_text(encoding="utf-8")
+    assert install_site_guard(site_packages) == installed
+
+
+def test_isolated_launch_refuses_to_overwrite_existing_sitecustomize(
+    tmp_path: Path,
+) -> None:
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    (site_packages / "sitecustomize.py").write_text("user setup\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="fresh task venv"):
+        install_site_guard(site_packages)

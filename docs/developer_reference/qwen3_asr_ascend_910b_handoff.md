@@ -4073,9 +4073,18 @@ or modify the existing serving environment.
 
 Build one wheel from this handoff commit and install it into a fresh task venv
 as in `910C-052B`. From a task directory outside the checkout, use only this
-standard launcher for both its no-service preflight and service process:
+standard launch chain for both its no-service preflight and service process.
+First install a venv-local startup guard. It is not an editable install and
+does not modify the checkout or existing serving environment; it is written
+only to the newly created task venv and refuses to overwrite a pre-existing
+`sitecustomize.py`:
 
 ```text
+<task-runtime-venv>/bin/python -I -m sglang_omni.diagnostics.isolated_launch \
+    --forbid-root <declared-clean-checkout> --install-site-guard
+
+export SGLANG_OMNI_FORBID_IMPORT_ROOT=<declared-clean-checkout>
+
 <task-runtime-venv>/bin/python -I -m sglang_omni.diagnostics.isolated_launch \
     --forbid-root <declared-clean-checkout> --attest
 
@@ -4088,9 +4097,11 @@ Do not add `-S`: it can suppress the virtual-environment site-packages needed
 for the installed wheel. The `--attest` JSON must be `valid=true` with
 `isolated_interpreter=true`, `cwd_outside_forbidden_root=true`,
 `checkout_absent_from_sys_path=true`, and
-`launcher_outside_forbidden_root=true`. The wrapper removes the declared
-checkout from the parent import path before importing the serving CLI; spawn
-children inherit that sanitized path. If the gate fails, stop before service
+`launcher_outside_forbidden_root=true`, `site_guard_installed=true`, and
+`forbid_root_environment_matches=true`. The guard removes the declared
+checkout during Python site initialization, before either the parent or a
+spawned stage worker imports Omni. The wrapper repeats the same parent-path
+check before importing the serving CLI. If the gate fails, stop before service
 startup and return only its booleans plus the wheel SHA prefix.
 
 The operator is authorized to make a server-local, commit-backed correction
@@ -4341,8 +4352,9 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-052 | `715fddf1`; no NPU action before artifact attestation | Replace checkout/editable runtime with a wheel installed to a new task-scoped venv | Immutable wheel build, SHA record, isolated-venv install, and installed-file RECORD validation | initial implementation false-negative | CPython folded nested literal keys into a tuple, so a correct wheel was incorrectly reported invalid; no service/NPU ran. |
 | 910C-052B | `f3ca69d6`; no service/NPU action | Correct the immutable-wheel attestation's CPython folded-constant false negative | Rebuild one wheel and repeat only the installed-artifact JSON gate | passed | `valid=true`, wheel SHA-256 prefix `a40d12f`; code, wheel RECORD, venv isolation, and provenance checks all passed. |
 | 910C-053 | `20964b79`; exact attested `910C-052B` wheel venv | Execute the first valid encoder-capture-to-compiled-decode transition experiment | One fresh E1 service: no-audio nested-stage gate, then distinct same-signature A/B/C | invalidated before service | The service was started from the checkout, so its runtime path contract was breached. This is not graph or compile evidence and must not be used for attribution. |
-| 910C-053B | handoff commit containing this row; new wheel from that commit | Establish the only allowed wheel-service launcher | Wheel install, `python -I` isolated-launch attestation, then unchanged E1 service through the same wrapper | authorized; pending server run | `valid=true` requires isolated interpreter, cwd outside checkout, no checkout entry on `sys.path`, and wheel-owned launcher. Stop before service on any false value. |
-| 910C-053C | exact attested `910C-053B` wheel venv | Execute the first valid encoder-capture-to-compiled-decode transition experiment | One fresh E1 service: no-audio nested-stage gate, then distinct same-signature A/B/C | blocked on 910C-053B | A correct/deferred, B correct/capture, C correct/replay sequence rejects the narrow encoder transition hypothesis; a correct A then garbled B/C confirms it. |
+| 910C-053B | `bcd04cbd`; new wheel from that commit | Establish the only allowed wheel-service launcher | Wheel install, task-venv `sitecustomize` guard, `python -I` isolated-launch attestation, then unchanged E1 service through the same wrapper | superseded before valid service | Parent attestation alone passed, but the child-runtime gate was not hard enough. Do not attribute this failure to graph/compile or spawn semantics. |
+| 910C-053D | handoff commit containing this row; new wheel from that commit | Establish checkout-free imports before every parent and child module load | Wheel install, guarded task venv, `python -I` attestation, then unchanged E1 service through the same wrapper | authorized; pending server run | `valid=true` requires the prior fields plus `site_guard_installed` and an exact forbid-root environment match. Stop before service on any false value. |
+| 910C-053C | exact attested guarded task venv | Execute the first valid encoder-capture-to-compiled-decode transition experiment | One fresh E1 service: no-audio nested-stage gate, then distinct same-signature A/B/C | blocked on 910C-053D | A correct/deferred, B correct/capture, C correct/replay sequence rejects the narrow encoder transition hypothesis; a correct A then garbled B/C confirms it. |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
