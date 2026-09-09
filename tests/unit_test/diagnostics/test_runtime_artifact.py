@@ -3,13 +3,20 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from sglang_omni.diagnostics.runtime_artifact import (
     _constants_contain,
     _is_under,
     _record_hash_matches,
+)
+from sglang_omni.diagnostics.isolated_launch import (
+    collect_isolation_report,
+    sanitize_import_path,
 )
 
 
@@ -56,3 +63,30 @@ def test_record_hash_matches_installed_file(tmp_path: Path) -> None:
     assert _record_hash_matches(distribution, package)
     package.write_bytes(b"modified payload\n")
     assert not _record_hash_matches(distribution, package)
+
+
+def test_isolated_launch_removes_checkout_entries(monkeypatch, tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    outside = tmp_path / "runtime"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+    monkeypatch.setattr(sys, "path", [str(checkout), str(outside), ""])
+
+    retained = sanitize_import_path(checkout)
+
+    assert retained == [str(outside), ""]
+    report = collect_isolation_report(checkout)
+    assert report["cwd_outside_forbidden_root"]
+    assert report["checkout_absent_from_sys_path"]
+
+
+def test_isolated_launch_rejects_checkout_working_directory(
+    monkeypatch, tmp_path: Path
+) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    monkeypatch.chdir(checkout)
+
+    with pytest.raises(RuntimeError, match="outside the checkout"):
+        sanitize_import_path(checkout)

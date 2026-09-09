@@ -13,19 +13,24 @@ completed run must replace or close the previous task here before another
 server-side variable is introduced.
 
 **Server source-code authority rule (hard constraint):** the isolated server
-is an execution and evidence environment, not a development authority. Its
-operator may check out only the exact repository commits named by the current
-handoff, run the authorized commands, retain raw evidence locally, and perform
-the declared cleanup. The operator must not edit source, tests, configuration
-files, benchmark code, or documentation; create commits; apply unreviewed
-patches; or repair a failure in place. If execution indicates that code must
-change, stop at the first complete failure and return the affected repository,
-file/symbol or operation boundary, proposed change, supporting sanitized
-evidence, and required test coverage to the local Codex owner. The local owner
-implements, reviews, tests, and commits the change, updates this handoff, and
-only then authorizes a fresh-process server verification at that exact commit.
-Historical server-side diagnostic commits remain evidence records but are not
-precedent for future server edits.
+is primarily an execution and evidence environment. Its operator may check out
+the exact repository commits named by the current handoff, run authorized
+commands, retain raw evidence locally, and perform declared cleanup. To reduce
+diagnostic round trips, the operator may also make one bounded, non-semantic
+diagnostic repair when the current task expressly permits it: test-only fixes,
+launch/bootstrap or import-provenance fixes, evidence-script corrections, and
+additive observability. Each such repair must be its own commit and the text
+return must name its commit, files/symbols, concise diff summary, focused-test
+result, and the first complete failure that justified it. The server must not
+alter model semantics, graph/compile execution, accuracy/performance settings,
+dependencies, benchmark inputs, configuration policy, or documentation unless
+the handoff explicitly authorizes that exact change. It must not apply an
+unreviewed patch or silently repair a failed gate. Raw patches, wheels, logs,
+audio, and other files remain server-local: the operator returns only sanitized
+text evidence. The local Codex owner reconstructs any accepted server repair,
+reviews/tests/commits it, updates this handoff, and then authorizes a
+fresh-process verification. Historical server-side diagnostic commits remain
+evidence records, not automatic precedent for future edits.
 
 ## Scope and status
 
@@ -4016,7 +4021,7 @@ sha256sum <task-wheel-dir>/sglang_omni-*.whl
 
 # 3. From outside the checkout, attest the installed artifact before service.
 cd <task-runtime-directory-outside-checkout>
-<task-runtime-venv>/bin/python -m sglang_omni.diagnostics.runtime_artifact \
+<task-runtime-venv>/bin/python -I -m sglang_omni.diagnostics.runtime_artifact \
     --forbid-root <declared-clean-checkout>
 ```
 
@@ -4058,9 +4063,44 @@ checkout-path, console-script, pycache-prefix, and spawn-probe gates are
 historical diagnostics only and must not be repeated or used to qualify the
 current runtime.
 
-#### `910C-053` real encoder-capture transition probe
+#### `910C-053B` isolated wheel launch gate
 
-Use the attested `910C-052B` task venv and its wheel as the only runtime. Run
+`910C-053` did not start a valid wheel service: although the wheel attestation
+passed, the service was launched from the checkout and an inherited editable
+path remained eligible for imports. This is a bootstrap-contract failure, not
+graph, capture, compile, or NPU evidence. Do not reload modules, delete caches,
+or modify the existing serving environment.
+
+Build one wheel from this handoff commit and install it into a fresh task venv
+as in `910C-052B`. From a task directory outside the checkout, use only this
+standard launcher for both its no-service preflight and service process:
+
+```text
+<task-runtime-venv>/bin/python -I -m sglang_omni.diagnostics.isolated_launch \
+    --forbid-root <declared-clean-checkout> --attest
+
+<task-runtime-venv>/bin/python -I -m sglang_omni.diagnostics.isolated_launch \
+    --forbid-root <declared-clean-checkout> -- \
+    serve <the unchanged approved E1 arguments>
+```
+
+Do not add `-S`: it can suppress the virtual-environment site-packages needed
+for the installed wheel. The `--attest` JSON must be `valid=true` with
+`isolated_interpreter=true`, `cwd_outside_forbidden_root=true`,
+`checkout_absent_from_sys_path=true`, and
+`launcher_outside_forbidden_root=true`. The wrapper removes the declared
+checkout from the parent import path before importing the serving CLI; spawn
+children inherit that sanitized path. If the gate fails, stop before service
+startup and return only its booleans plus the wheel SHA prefix.
+
+The operator is authorized to make a server-local, commit-backed correction
+only if this wrapper itself has an unambiguous bootstrap/test defect. It may
+not change serving, model, graph, compile, dependency, or benchmark behavior.
+Return the allowed text-only repair record defined at the top of this handoff.
+
+#### `910C-053C` real encoder-capture transition probe
+
+Use the `910C-053B`-attested task venv and its wheel as the only runtime. Run
 one fresh E1 service from outside the checkout with the exact existing E1
 arguments: encoder graph enabled, prefill graph disabled, decode graph enabled,
 torch compile enabled, guard enabled, and
@@ -4300,7 +4340,9 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-051E | handoff commit containing this row; no SGLang/NPU dependency | Force and attest checked-hash bytecode for the two source-defined provenance methods | Task-local checked-hash cache, then parent/child provenance probe using the exact service interpreter | authorized; pending server run | Both processes must load encoder and ModelWorker cache entries from the temporary prefix and report the new method capabilities before any service starts. |
 | 910C-052 | `715fddf1`; no NPU action before artifact attestation | Replace checkout/editable runtime with a wheel installed to a new task-scoped venv | Immutable wheel build, SHA record, isolated-venv install, and installed-file RECORD validation | initial implementation false-negative | CPython folded nested literal keys into a tuple, so a correct wheel was incorrectly reported invalid; no service/NPU ran. |
 | 910C-052B | `f3ca69d6`; no service/NPU action | Correct the immutable-wheel attestation's CPython folded-constant false negative | Rebuild one wheel and repeat only the installed-artifact JSON gate | passed | `valid=true`, wheel SHA-256 prefix `a40d12f`; code, wheel RECORD, venv isolation, and provenance checks all passed. |
-| 910C-053 | handoff commit containing this row; exact attested `910C-052B` wheel venv | Execute the first valid encoder-capture-to-compiled-decode transition experiment | One fresh E1 service: no-audio nested-stage gate, then distinct same-signature A/B/C | authorized; pending server run | No cache/import workaround is allowed. A correct/deferred, B correct/capture, C correct/replay sequence rejects the narrow encoder transition hypothesis; a correct A then garbled B/C confirms it. |
+| 910C-053 | `20964b79`; exact attested `910C-052B` wheel venv | Execute the first valid encoder-capture-to-compiled-decode transition experiment | One fresh E1 service: no-audio nested-stage gate, then distinct same-signature A/B/C | invalidated before service | The service was started from the checkout, so its runtime path contract was breached. This is not graph or compile evidence and must not be used for attribution. |
+| 910C-053B | handoff commit containing this row; new wheel from that commit | Establish the only allowed wheel-service launcher | Wheel install, `python -I` isolated-launch attestation, then unchanged E1 service through the same wrapper | authorized; pending server run | `valid=true` requires isolated interpreter, cwd outside checkout, no checkout entry on `sys.path`, and wheel-owned launcher. Stop before service on any false value. |
+| 910C-053C | exact attested `910C-053B` wheel venv | Execute the first valid encoder-capture-to-compiled-decode transition experiment | One fresh E1 service: no-audio nested-stage gate, then distinct same-signature A/B/C | blocked on 910C-053B | A correct/deferred, B correct/capture, C correct/replay sequence rejects the narrow encoder transition hypothesis; a correct A then garbled B/C confirms it. |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak
