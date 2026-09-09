@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import contextmanager
 from typing import Any, Callable
 
 import torch
@@ -37,6 +38,8 @@ from sglang_omni.utils.gpu_memory import format_bytes_gib, get_process_gpu_memor
 logger = logging.getLogger(__name__)
 
 _NPU_GUARD_COMPLETION_FENCE_ENV = "SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE"
+_NPU_GUARD_SCOPE_ENV = "SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE"
+_NPU_GUARD_SCOPES = frozenset({"forward", "graph"})
 
 
 def _env_enabled(name: str) -> bool:
@@ -60,6 +63,25 @@ def _npu_guard_completion_fence(reference: torch.Tensor) -> Callable[[], None] |
         "synchronized before every guard handoff (diagnostic only)"
     )
     return synchronize
+
+
+def _npu_guard_scope() -> str:
+    scope = os.getenv(_NPU_GUARD_SCOPE_ENV, "forward").strip().lower()
+    if scope not in _NPU_GUARD_SCOPES:
+        raise ValueError(
+            f"Unsupported {_NPU_GUARD_SCOPE_ENV}={scope!r}; expected one of "
+            f"{sorted(_NPU_GUARD_SCOPES)}"
+        )
+    return scope
+
+
+@contextmanager
+def _hold_graph_execution_guard(
+    guard: FairDeviceExecutionGuard,
+    phase: str,
+):
+    with guard.hold(label=f"generation_{phase}_graph"):
+        yield
 
 
 class Qwen3ASREngineBuilder(AsrEngineBuilder):
@@ -140,6 +162,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
         self.audio_encoder_service: Any = None
         self._should_wait_for_encode: Callable[[], bool] | None = None
         self._device_execution_guard: FairDeviceExecutionGuard | None = None
+        self._device_execution_guard_scope = "forward"
 
     def pre_infra_setup(self, checkpoint_dir: str) -> None:
         self.model_path = checkpoint_dir
@@ -259,6 +282,17 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
             )
             else None
         )
+        self._device_execution_guard_scope = (
+            _npu_guard_scope()
+            if self._device_execution_guard is not None
+            else "forward"
+        )
+        if self._device_execution_guard_scope == "graph":
+            logger.warning(
+                "Qwen3-ASR NPU execution guard narrowed to graph dispatch; "
+                "this opt-in candidate requires hardware correctness and "
+                "performance qualification"
+            )
         self._log_memory_checkpoint("post_cuda_graph_capture")
         if self.enable_encoder_cuda_graph:
             from sglang_omni.models.qwen3_asr.audio_lengths import (
@@ -302,12 +336,26 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
     def make_model_runner(self, model_worker: Any, output_proc: Any) -> Any:
         from sglang_omni.model_runner.base import ModelRunner
 
+        guard = getattr(self, "_device_execution_guard", None)
+        scope = getattr(self, "_device_execution_guard_scope", "forward")
+        runner_guard = guard
+        if guard is not None and scope == "graph":
+            sglang_runner = getattr(model_worker, "model_runner", None)
+            if sglang_runner is None:
+                raise RuntimeError(
+                    "graph-scoped NPU execution guard requires the live SGLang "
+                    "model runner"
+                )
+            sglang_runner._external_graph_execution_context_factory = (
+                lambda phase: _hold_graph_execution_guard(guard, phase)
+            )
+            runner_guard = None
+        model_worker._device_execution_guard = guard
+        model_worker._device_execution_guard_scope = scope
         return ModelRunner(
             model_worker,
             output_proc,
-            device_execution_guard=getattr(
-                self, "_device_execution_guard", None
-            ),
+            device_execution_guard=runner_guard,
         )
 
     def should_wait_for_encode(self) -> bool:

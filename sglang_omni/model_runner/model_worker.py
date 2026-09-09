@@ -507,6 +507,17 @@ class ModelWorker:
             "prefill_cuda_graph": self._prefill_cuda_graph_info(),
             "decode_cuda_graph": self._decode_cuda_graph_info(),
             "encoder_cuda_graph": self._encoder_cuda_graph_info(),
+            "device_execution_guard": self._device_execution_guard_info(),
+        }
+
+    def _device_execution_guard_info(self) -> dict[str, Any] | None:
+        guard = getattr(self, "_device_execution_guard", None)
+        if guard is None:
+            return None
+        snapshot = getattr(guard, "snapshot", None)
+        return {
+            "scope": getattr(self, "_device_execution_guard_scope", "forward"),
+            "stats": snapshot() if callable(snapshot) else None,
         }
 
     def update_weights_from_disk(self, payload: dict[str, Any]) -> tuple[bool, str]:

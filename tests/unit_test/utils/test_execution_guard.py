@@ -73,3 +73,20 @@ def test_completion_fence_failure_does_not_strand_later_tickets() -> None:
             pass
     with guard.hold() as (ticket, _wait_ns):
         assert ticket == 1
+
+
+def test_guard_snapshot_reports_labeled_balanced_intervals() -> None:
+    guard = FairDeviceExecutionGuard()
+
+    with guard.hold(label="generation_decode_graph"):
+        pass
+    with guard.hold(label="encoder"):
+        pass
+
+    snapshot = guard.snapshot()
+    assert snapshot["next_ticket"] == 2
+    assert snapshot["serving_ticket"] == 2
+    assert snapshot["outstanding"] == 0
+    assert snapshot["labels"]["generation_decode_graph"]["acquire_count"] == 1
+    assert snapshot["labels"]["encoder"]["acquire_count"] == 1
+    assert snapshot["labels"]["generation_decode_graph"]["hold_total_ms"] >= 0
