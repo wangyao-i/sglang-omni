@@ -463,6 +463,40 @@ WER, p95, throughput, utilization, post-capture free HBM, and cleanup state for
 each attempted arm. Raw logs, paths, transcripts, and profiler files remain on
 the isolated server.
 
+### `910C-056A` correction after invalid M1
+
+The first returned M1 is not a valid execution of the gate: it used two new
+high buckets (`[1, 2, 64, 70]`) instead of `[1, 2, H1]`, reported the requested
+`mem_fraction_static=0.80` while attributing 46.5 GiB of KV cache to `0.837`,
+and estimated the additional compile requirement without a measured capture
+peak. Preserve that startup failure as evidence, but do not use it to declare
+`[1, 2]` a device limit or choose another memory fraction by trial and error.
+
+Repeat only corrected M1 in a fresh process. From the retained successful A1
+run, compute:
+
+```text
+required_tokens = max(32768, ceil(1.5 * peak_live_kv_tokens))
+```
+
+Set `asr.engine.max_total_tokens=required_tokens` explicitly and retain
+`mem_fraction_static=0.80`. This caps the oversized KV pool directly while
+preserving at least one native maximum-context request and 50% headroom over
+the observed C70 live-token peak. Before graph capture, require the worker's
+resolved configuration/startup accounting to report the requested static
+fraction, the explicit token cap, and the resulting KV-pool bytes. Any missing
+or different value stops the run before capture.
+
+Use exactly `[1, 2, H1]`, where H1 is the single highest
+`bucket_hits * bucket_size` bucket from the retained A1 histogram. Do not add
+H2, do not substitute both 64 and 70, and do not use `torch_compile_max_bs`.
+Require startup logs and model-info to attest that exact compile list. If graph
+capture passes, continue in the same service through 140-request correctness
+and one 700-request exact10 C70 measurement. If it OOMs, return the last
+completed capture bucket, free HBM immediately before it, the first complete
+OOM traceback, resolved KV token/byte capacity, and cleanup state. Do not retry
+with another memory fraction or bucket in this task.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
