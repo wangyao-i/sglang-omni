@@ -6,7 +6,11 @@ import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
-from sglang_omni.diagnostics.runtime_artifact import _is_under, _record_hash_matches
+from sglang_omni.diagnostics.runtime_artifact import (
+    _constants_contain,
+    _is_under,
+    _record_hash_matches,
+)
 
 
 def test_is_under_rejects_sibling_path(tmp_path: Path) -> None:
@@ -21,6 +25,16 @@ def test_is_under_rejects_sibling_path(tmp_path: Path) -> None:
 
     assert _is_under(nested, root)
     assert not _is_under(sibling, root)
+
+
+def test_constants_contain_handles_compiler_folded_literal_tuple() -> None:
+    source = "def report():\n    return {'defer': {'configured': 1, 'run_count': 0}}\n"
+    module = compile(source, "report.py", "exec")
+    report = next(item for item in module.co_consts if getattr(item, "co_name", None) == "report")
+
+    assert _constants_contain(report.co_consts, "configured")
+    assert _constants_contain(report.co_consts, "run_count")
+    assert not _constants_contain(report.co_consts, "missing")
 
 
 def test_record_hash_matches_installed_file(tmp_path: Path) -> None:

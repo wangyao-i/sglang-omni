@@ -25,6 +25,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _code_constants_contain(constants: tuple[Any, ...], expected: str) -> bool:
+    """Match constants nested by Python's literal-container folding."""
+    for value in constants:
+        if value == expected:
+            return True
+        if isinstance(value, (tuple, frozenset)) and _code_constants_contain(
+            value, expected
+        ):
+            return True
+    return False
+
+
 @dataclass
 class ModelWorkerConfig:
     model_arch_override: str | None = None
@@ -471,7 +483,7 @@ class ModelWorker:
         result["runtime_identity"] = {
             "runner_type": f"{type(runner).__module__}.{type(runner).__qualname__}",
             "model_info_has_defer_provenance": all(
-                field in constants for field in deferred_fields
+                _code_constants_contain(constants, field) for field in deferred_fields
             ),
             "model_info_keys": sorted(data),
             "diagnostic_capture_defer_keys": sorted(

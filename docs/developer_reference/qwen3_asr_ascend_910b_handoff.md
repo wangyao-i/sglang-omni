@@ -4043,6 +4043,15 @@ the final runtime-identity gate; a pass immediately authorizes the A/B/C
 transition procedure in the same fresh service. The task venv and wheel cache
 may be removed after graceful shutdown.
 
+`910C-052` found one attestation implementation defect: CPython may fold the
+five nested defer-field strings into a tuple inside `co_consts`, so a direct
+top-level membership test reports a false negative even for the correct wheel.
+The repaired gate recursively checks folded literal containers and has a CPU
+regression test. Rebuild the wheel from the repair handoff commit and repeat
+only the immutable-wheel attestation as `910C-052B`; do not start a service or
+touch an NPU until its JSON is `valid=true`. This is a correction to the gate,
+not a new graph experiment.
+
 The project requires every currently failing acceleration path to be repaired;
 disabling it is not an acceptable close condition. Qualify these changes
 separately and then in combination:
@@ -4249,6 +4258,7 @@ For each remote run, add a row here after reviewing its redacted result:
 | 910C-051D | handoff commit containing this row; no SGLang/NPU dependency | Reproduce or reject a Python spawn import mismatch without model construction | Parent/child source-provenance probe under the exact service interpreter and environment | authorized; pending server run | Compare checkout ownership and method capabilities on both sides of one plain spawn boundary; no service, graph, or audio is allowed. |
 | 910C-051E | handoff commit containing this row; no SGLang/NPU dependency | Force and attest checked-hash bytecode for the two source-defined provenance methods | Task-local checked-hash cache, then parent/child provenance probe using the exact service interpreter | authorized; pending server run | Both processes must load encoder and ModelWorker cache entries from the temporary prefix and report the new method capabilities before any service starts. |
 | 910C-052 | handoff commit containing this row; no NPU action before artifact attestation | Replace checkout/editable runtime with a wheel installed to a new task-scoped venv | Immutable wheel build, SHA record, isolated-venv install, and installed-file RECORD validation | authorized; pending server run | `valid=true` from the wheel runtime attestation is required before the one no-audio model-info gate; `910C-051B`--`E` are superseded and must not be rerun. |
+| 910C-052B | handoff commit containing this row; no service/NPU action | Correct the immutable-wheel attestation's CPython folded-constant false negative | Rebuild one wheel and repeat only the installed-artifact JSON gate | authorized; pending server run | The corrected recursive constant check plus a CPU regression must yield `valid=true`; any remaining false field is a real runtime-artifact discrepancy. |
 
 The returned evidence may contain commit IDs, package versions, command lines,
 test names, tensor shapes/dtypes, aggregate latency/throughput/accuracy, peak

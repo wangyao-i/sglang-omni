@@ -40,6 +40,15 @@ def _method_constants(method: Any) -> tuple[Any, ...]:
     return tuple(getattr(getattr(method, "__code__", None), "co_consts", ()))
 
 
+def _constants_contain(constants: tuple[Any, ...], expected: str) -> bool:
+    for value in constants:
+        if value == expected:
+            return True
+        if isinstance(value, (tuple, frozenset)) and _constants_contain(value, expected):
+            return True
+    return False
+
+
 def collect_provenance(expected_root: Path) -> dict[str, Any]:
     """Return path-free, JSON-safe provenance for the active code objects."""
     encoder_module = importlib.import_module(
@@ -66,7 +75,7 @@ def collect_provenance(expected_root: Path) -> dict[str, Any]:
             pycache_prefix and _is_under(worker_cache, pycache_prefix)
         ),
         "runner_model_info_has_defer_provenance": all(
-            field in runner_constants for field in _DEFER_FIELDS
+            _constants_contain(runner_constants, field) for field in _DEFER_FIELDS
         ),
         "model_worker_has_runtime_identity": "runtime_identity" in worker_constants,
         "pycache_prefix_is_set": pycache_prefix is not None,

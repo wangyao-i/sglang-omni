@@ -36,6 +36,16 @@ def _is_under(path: Path, root: Path) -> bool:
     return True
 
 
+def _constants_contain(constants: tuple[Any, ...], expected: str) -> bool:
+    """Match constants nested by Python's literal-container folding."""
+    for value in constants:
+        if value == expected:
+            return True
+        if isinstance(value, (tuple, frozenset)) and _constants_contain(value, expected):
+            return True
+    return False
+
+
 def _record_hash_matches(
     distribution: importlib.metadata.Distribution,
     path: Path,
@@ -97,7 +107,7 @@ def collect_runtime_artifact_integrity(
             distribution, worker_path
         ),
         "runner_model_info_has_defer_provenance": all(
-            field in runner_constants for field in _DEFER_FIELDS
+            _constants_contain(runner_constants, field) for field in _DEFER_FIELDS
         ),
         "model_worker_has_runtime_identity": "runtime_identity" in worker_constants,
         "encoder_module_outside_forbidden_root": (
