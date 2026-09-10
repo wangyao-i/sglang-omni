@@ -845,6 +845,81 @@ live, cleans up fully, and materially improves M1c end-to-end performance.
 Otherwise retain broad forward scope and close guard narrowing. Do not edit
 the server or test another guard scope.
 
+`910C-060` ran and is rejected on its own predeclared gates. It was live:
+correctness completed 140/140 with zero garbled output, 4,707 ordered
+update/replay pairs, zero update-thread markers, and a final guard state of
+`next=serving=5324, outstanding=0`. It failed the gate that comes first: the
+140-request WER was `0.0778` against the qualified `0.0161` band, so the run
+should have stopped before C70. Its C70 result also does not materially beat
+M1c, at p95 1.75 seconds and 52.79 requests/s against 1.442 seconds and 59.88
+requests/s, and teardown HBM was not confirmed. `910C-059` Arm G returned the
+same `0.0778`, so both narrowed scopes share one accuracy signature rather than
+two independent regressions. Treat guard narrowing as closed and retain the
+broad `forward` scope.
+
+### `910C-061`: ordered update with the qualified forward guard
+
+`910C-059` established that ordered input update removes the helper-thread/join
+liveness failure, but Arm O ran under the qualified `forward` guard and never
+returned accuracy, latency, or graph-counter fields. Ordered execution is the
+change intended for upstream, so its behavior under the qualified guard scope
+is still unqualified: every accuracy-bearing `910C-059`/`060` measurement used
+a narrowed scope, and both narrowed scopes returned the same 140-request WER
+`0.0778`.
+
+The product target is a 0.500-second p95 at 140 requests/s. The currently
+qualified exact10 reference is `910C-056B` M1c: 140-request WER `0.0161`,
+700-request WER `0.0164`, p95 1.442 seconds, 59.88 requests/s, RTFx 598.8.
+
+Use exactly SGLang `e4d18390a` and SGLang-Omni `21e755be`, with
+`SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=ordered` and
+`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=forward` (or that variable unset; the
+resolved scope must be `forward`). Keep every M1c setting fixed:
+`max_total_tokens=32768`, `mem_fraction_static=0.80`, compile buckets
+`[1,2,70]`, and all acceleration paths enabled.
+
+Before starting any service, read the retained `910C-059` Arm O artifacts and
+state in one line whether they contain a WER field and a latency field. This
+settles whether Arm O's accuracy can be recovered instead of rerun; it does not
+replace the run below.
+
+Then start one fresh process, and only after healthy chips, idle baseline HBM
+with no holder, a free port, clean tracked worktrees, and attested commit
+identity. Require startup logs and model-info to attest the resolved guard
+scope, the exact compile list, and the ordered update mode. Run, in order:
+
+1. batch one and the cold concurrency-8 gate;
+2. the 140-request correctness workload, stopping immediately unless every
+   request completes with WER inside the qualified band, zero garbled output,
+   zero failed/timeout/missing/duplicate/unexpected results, and zero eager
+   fallbacks;
+3. only after correctness passes, one 700-request exact10 C70 measurement;
+4. graceful shutdown, then idle HBM, a free port, and no residual holder.
+
+Stop on the first unit failure, `ordered_update_begin` without
+`ordered_update_return`, `ordered_replay_begin` without `ordered_replay_return`,
+90 seconds without a completion, accuracy or fallback failure, device error, or
+cleanup failure. Do not retry with another scope, ordering, token cap, bucket
+set, or memory fraction.
+
+Return request validity and counts, WER, garbled count, wall time, latency
+mean/p50/p90/p95/p99/max, throughput, RTFx, and RTF; encoder, prefill, and
+decode capture/replay/fallback counters with replay buckets; the attested
+compile list and guard scope; per-label guard wait/acquire/release counts with
+wait and hold maxima and the final ticket/outstanding state; ordered
+update/replay begin and return counts; whether any `update_thread_*` marker
+occurred; and graceful cleanup, port, and HBM state.
+
+Ordered mode with the `forward` guard qualifies for upstream only if the
+140-request WER stays inside the qualified band, C70 accuracy matches M1c, C70
+p95 and throughput do not regress against M1c's 1.442 seconds and 59.88
+requests/s, and cleanup returns the device to baseline. If ordered mode cannot
+hold the qualified accuracy under the qualified guard, ordered execution must
+be re-examined before it is proposed upstream, and the retained candidate
+remains the configuration that produced the M1c result. No server source, test,
+dependency, benchmark, configuration policy, or documentation edit is
+authorized.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
