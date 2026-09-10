@@ -566,7 +566,10 @@ Candidate revisions are:
   `caa1d2916` (explicit-state attention) and `b03400e5a` (integrator graph
   dispatch context);
 - sglang-omni branch `qwen3-asr-guard-scope` at the handoff commit containing
-  this task (code through `f24d6220`), based on `c50996e7`.
+  this reauthorization (code through `fb5110a9`), based on `c50996e7`. This
+  includes the graph-scope implementation, labeled timing, and the legacy
+  runner/test compatibility correction required by the first `910C-057`
+  preflight.
 
 The new paths are opt-in. Their absence must preserve the already qualified
 behavior. Execute the following arms serially on one clean NPU. Every arm uses
@@ -574,8 +577,9 @@ a fresh service, graceful shutdown, port release, and verified HBM recovery.
 Do not run arms in parallel and do not edit source, tests, packages, or the
 bucket list on the isolated server.
 
-Before the first service, check out clean worktrees at Omni `ec2c2eeb` and
-SGLang `b03400e5a`. Run the candidate-focused suites before starting any arm:
+Before the first service, check out clean worktrees at the Omni handoff commit
+containing this reauthorization and SGLang `b03400e5a`. Run the
+candidate-focused suites before starting any arm:
 SGLang `test/registered/unit/layers/test_radix_attention.py`,
 `test/registered/unit/runner/test_decode_cuda_graph_runner.py`, and
 `test/registered/unit/model_executor/test_external_graph_execution_context.py`;
