@@ -283,19 +283,23 @@ def test_standard_forward_holds_configured_device_execution_guard(
 
     class RecordingGuard:
         @contextmanager
-        def hold(self):
-            calls.append("guard_enter")
+        def hold(self, *, label: str = "default"):
+            calls.append(f"guard_enter:{label}")
             try:
                 yield 0, 0
             finally:
-                calls.append("guard_exit")
+                calls.append(f"guard_exit:{label}")
 
     runner = _runner(calls, custom_result=None)
     runner._device_execution_guard = RecordingGuard()
     runner.execute(_scheduler_output(is_prefill=True))
 
-    assert calls.index("guard_enter") < calls.index("standard_forward")
-    assert calls.index("standard_forward") < calls.index("guard_exit")
+    assert calls.index("guard_enter:generation_prefill_forward") < calls.index(
+        "standard_forward"
+    )
+    assert calls.index("standard_forward") < calls.index(
+        "guard_exit:generation_prefill_forward"
+    )
 
 
 @pytest.mark.parametrize(

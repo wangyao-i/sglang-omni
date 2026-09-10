@@ -483,7 +483,9 @@ class ModelRunner:
                                 event_name="npu_execution_guard_wait",
                                 metadata={"owner": "generation", "phase": phase},
                             )
-                        with guard.hold() as (guard_ticket, wait_ns):
+                        with guard.hold(
+                            label=f"generation_{phase}_forward"
+                        ) as (guard_ticket, wait_ns):
                             acquired_ns = time.monotonic_ns()
                             for request in requests:
                                 _diag_emit(

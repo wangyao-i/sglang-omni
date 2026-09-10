@@ -432,7 +432,7 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
                 event_name="npu_execution_guard_wait",
                 metadata={"owner": "encoder", "batch_size": len(items)},
             )
-        with guard.hold() as (guard_ticket, wait_ns):
+        with guard.hold(label="encoder_batch") as (guard_ticket, wait_ns):
             acquired_ns = time.monotonic_ns()
             for request_id in request_ids:
                 _diag_emit(

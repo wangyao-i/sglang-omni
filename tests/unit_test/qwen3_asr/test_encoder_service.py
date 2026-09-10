@@ -151,12 +151,12 @@ def test_encoder_batch_holds_configured_device_execution_guard() -> None:
 
     class RecordingGuard:
         @contextmanager
-        def hold(self):
-            calls.append("guard_enter")
+        def hold(self, *, label: str = "default"):
+            calls.append(f"guard_enter:{label}")
             try:
                 yield 0, 0
             finally:
-                calls.append("guard_exit")
+                calls.append(f"guard_exit:{label}")
 
     model = _StubModel()
     original = model.get_audio_feature
@@ -175,7 +175,11 @@ def test_encoder_batch_holds_configured_device_execution_guard() -> None:
 
     service.encode_item(_item(7, 3))
 
-    assert calls == ["guard_enter", "encode", "guard_exit"]
+    assert calls == [
+        "guard_enter:encoder_batch",
+        "encode",
+        "guard_exit:encoder_batch",
+    ]
 
 
 def test_submit_returns_before_encoding_completes() -> None:
