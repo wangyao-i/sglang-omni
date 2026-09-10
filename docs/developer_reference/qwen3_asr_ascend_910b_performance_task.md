@@ -700,6 +700,32 @@ first failure and return its complete sanitized boundary.  Do not run the AC
 or AG candidates and do not edit server source, tests, packages, configuration,
 or documentation.
 
+### `910C-058R`: identify the unreturned guard holder from retained evidence
+
+Do not rerun hardware and do not describe 70 waiters as a FIFO deadlock without
+identifying the holder. Read only the retained `910C-058` server log, request
+events, poller snapshots, and model-info payloads. For each label
+(`encoder_batch`, `generation_prefill_model`, and
+`generation_decode_model`), return:
+
+- wait, acquired, and released event counts;
+- minimum and maximum acquired ticket, duplicate tickets, and gaps;
+- every acquired ticket without a matching release, including thread, phase,
+  request/batch identity, acquisition time, and last event inside its body;
+- every release without a matching acquire;
+- final `next_ticket`, `serving_ticket`, and `outstanding`, plus their last
+  change timestamps.
+
+Then classify exactly one outcome: reentrant self-wait when one host thread
+requests a second ticket before releasing its first; holder-side device stall
+when one guarded encoder/model call does not return; guard state-machine defect
+when all acquired tickets were released but serving did not advance or the
+next waiter did not wake; or observation gap when retained evidence lacks the
+required ticket-correlated events. For a holder-side stall, include the last
+paired begin/return markers for encoder, model forward, graph update/replay,
+and compile dispatch. Return sanitized text only. No source, test, package,
+environment, or documentation change is authorized.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
