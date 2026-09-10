@@ -550,6 +550,72 @@ RTFx, utilization, queue/guard timing, and cleanup. Explicitly calculate the
 KV-sizing contribution (K0 versus old A1), sparse bucket-70 contribution (M1c
 versus K0), and full-coverage contribution (F13 or F8 versus K0 and M1c).
 
+### `910C-057`: attention compile continuity and execution-guard scope
+
+This task is prepared in advance but must start only after `910C-056B` returns.
+Use the successful `910C-056B` compile-bucket profile. If no full-coverage arm
+passes, use the qualified M1c profile `[1,2,70]`; do not invent another bucket
+set. Keep `max_total_tokens=32768`, `mem_fraction_static=0.80`, the exact10
+manifest and all other service/benchmark settings fixed.
+
+Candidate revisions are:
+
+- SGLang branch `qwen3-asr-perf-next`, based on `edc504ff6`, with
+  `caa1d2916` (explicit-state attention) and `b03400e5a` (integrator graph
+  dispatch context);
+- sglang-omni branch `qwen3-asr-guard-scope` at the handoff commit containing
+  this task (code through `f24d6220`), based on `c50996e7`.
+
+The new paths are opt-in. Their absence must preserve the already qualified
+behavior. Execute the following arms serially on one clean NPU. Every arm uses
+a fresh service, graceful shutdown, port release, and verified HBM recovery.
+Do not run arms in parallel and do not edit source, tests, packages, or the
+bucket list on the isolated server.
+
+1. **AC -- attention compile continuity.** Use the candidate SGLang and the
+   baseline Omni behavior. Set
+   `SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=explicit-state-attention` and leave
+   `SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE` unset (resolved scope must be
+   `forward`). The NPU custom-op ABI explicitly carries output cache location,
+   sequence lengths, block tables, and key/value cache storage; unsupported
+   MLA/SWA variants must fail rather than silently take this path. Run the
+   focused SGLang attention/decode-runner tests, then the 140-request exact10
+   correctness gate. Continue to one 700-request C70 measurement only when WER
+   is in the established range, garbled/failed/timeout/missing/duplicate/
+   unexpected counts are zero, and all graph/fallback gates pass. Compare
+   graph-break and recompile counts with the selected `910C-056B` baseline.
+2. **GS -- guard scope.** Unset the attention diagnostic so the established
+   stateful-attention graph break is the control. Set
+   `SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=graph`; model-info must report
+   `device_execution_guard.scope=graph`. First run the historical cold-input
+   70-sample concurrency-8 no-warmup deadlock gate. Then run the 140-request
+   exact10 correctness gate and one 700-request C70 measurement. Require zero
+   encoder capture failure/fallback, zero prefill/decode standard-eager or
+   unexpected fallback, balanced guard tickets, and a final outstanding count
+   of zero. Returned guard stats must separately contain `encoder_batch`,
+   `generation_prefill_graph`, and `generation_decode_graph`; use their wait
+   and hold totals to quantify time removed from the old full-forward critical
+   section.
+3. **AG -- combined candidate.** Run only if AC and GS independently pass all
+   correctness, fallback, deadlock, and cleanup gates. Enable both environment
+   values, repeat the cold concurrency-8 gate and 140-request correctness, then
+   run one C70 measurement. This arm determines whether the two improvements
+   compose; it is not a substitute for either independent arm.
+
+Stop the current arm immediately on a focused-test failure, startup/capture
+error, WER regression, garbled output, request-accounting error, eager/fallback
+increment, 90 seconds without a completion, OOM, unbalanced guard state, or
+failed HBM cleanup. A failed AC must not block independent GS. A failed GS may
+still return AC performance, but AG must not run. No soak, realtime, second
+bucket search, or source patch is authorized by this task.
+
+Return one table containing the selected `910C-056B` baseline and AC/GS/AG:
+exact revisions and environment, compile buckets, validity and WER, all error
+counts, graph replays/eager/fallbacks, graph-breaks/recompiles, guard labeled
+wait/hold statistics, encoder queue timing, NPU utilization/HBM/power, p50/p95/
+p99/max, throughput, RTFx, and cleanup. Preserve full logs and raw records only
+on the server.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
