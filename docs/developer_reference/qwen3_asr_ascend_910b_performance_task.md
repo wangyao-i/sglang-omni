@@ -635,6 +635,37 @@ wait/hold statistics, encoder queue timing, NPU utilization/HBM/power, p50/p95/
 p99/max, throughput, RTFx, and cleanup. Preserve full logs and raw records only
 on the server.
 
+### `910C-057R`: classify the retained GS failure without another run
+
+`910C-057` did not produce a promotable candidate. AC completed its
+140-request correctness gate but produced WER about 1.44 with 140/140 garbled
+outputs; the explicit-state custom-op ABI is rejected and must remain opt-in.
+GS reported a runtime abnormality, but the returned summary omitted the first
+exception and execution boundary, so its mechanism is not yet classified. AG
+correctly did not run.
+
+Do not start a service or rerun a benchmark for this task. Read only the
+retained GS server log, event JSONL, model-info snapshots, and cleanup record.
+Return:
+
+- the exact Omni/SGLang HEADs, complete effective environment switches, and
+  whether the attention diagnostic was absent;
+- the first exception type, message, and sanitized traceback from the first
+  project-owned frame through the failing call;
+- whether failure occurred during startup, graph capture, batch one, cold
+  concurrency 8, 140 correctness, C70, drain, or cleanup;
+- the last `device_execution_guard` model-info object, including scope,
+  tickets, outstanding count, and every labeled wait/hold aggregate;
+- the last encoder/prefill/decode graph replay, standard-eager, and fallback
+  counters, plus pending/running request counts;
+- final process, port, NPU health, and HBM state.
+
+If there is no Python exception, return the last 40 sanitized project-owned log
+events before progress stopped, the no-completion duration, thread/phase
+markers, and the same counters. Do not infer `runtime abnormality` as a guard
+deadlock without this evidence. No source, test, package, configuration, or
+documentation edit is authorized.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
