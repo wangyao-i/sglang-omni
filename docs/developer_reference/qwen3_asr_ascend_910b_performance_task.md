@@ -923,6 +923,129 @@ remains the configuration that produced the M1c result. No server source, test,
 dependency, benchmark, configuration policy, or documentation edit is
 authorized.
 
+`910C-061` ran and closed the liveness question only. Ordered update under the
+retained `forward` guard was live at C70: 700/700 completed with 4,709 complete
+ordered update/replay pairs, zero `update_thread_*` markers, a final guard state
+of `next=serving=5334, outstanding=0`, 140/140 correctness with zero garbled
+output, and cleanup to a 5% HBM baseline. Its reported 140-request WER was
+`0.0778`, the same value that rejected graph scope in `910C-059`, and its C70 WER
+could not be computed because the run used a bespoke aiohttp client that
+persisted no hypotheses.
+
+Its C70 comparison against M1c is not admissible: the run differed from the
+qualified protocol in four ways at once - a bespoke client instead of the
+packaged exact10 harness, no warm-up pool, the 140-request gate at concurrency 1
+instead of the recorded sequence, and a single measurement instead of the
+reproducibility set. `910C-062` replaces that comparison with a single-variable
+A/B.
+
+### `910C-062`: ordered versus threaded graph input update under one protocol
+
+`910C-061` showed ordered update is live, but neither its accuracy nor its
+performance is attributable yet. The 140-request WER `0.0778` both rejects graph
+scope in `910C-059` and appears in `910C-061`, so it cannot be treated as corpus
+noise in one place and as a failure in another until a single-variable
+comparison says which variable produces it.
+
+The recorded references this task adjudicates:
+
+- M1c 140-request correctness gate: WER `0.0161`, zero garbled output;
+- M1c 700-request C70: WER `0.0164`, p95 1.442 seconds, 59.88 requests/s,
+  RTFx 598.8.
+
+The 140-request gate is accuracy-bearing: it is the gate `910C-059` used to
+reject graph scope, so a run that fails it cannot be promoted on C70 evidence
+alone.
+
+#### Read-only prechecks
+
+Do not start a service for these. Report as sanitized text:
+
+1. From the retained `910C-056A`/`056B` artifacts, the exact invocation of the
+   M1c 140-request correctness gate and of its 700-request C70 run:
+   concurrency, client or script used, whether the cold concurrency-8 gate ran
+   first, and whether a warm-up preceded the measurement. This establishes
+   whether the `910C-061` "concurrency-1 cold path" explanation has any basis.
+2. From the retained `910C-061` artifacts, whether any raw per-sample output was
+   written, and if so why its hypotheses were unavailable for scoring.
+3. Code identity: for SGLang-Omni, `git diff --name-only 21e755be HEAD` must
+   list only paths under `docs/`; for SGLang report `community/main..HEAD`.
+
+#### Arms
+
+Exactly two arms, differing in one variable only:
+
+| Arm | `SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE` | Guard scope |
+|---|---|---|
+| A | `threaded` (default) | `forward` |
+| B | `ordered` | `forward` |
+
+Both arms set `SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=forward` or leave it unset;
+the resolved scope must be `forward`. Do not combine `threaded` with a narrowed
+scope: the join-based liveness failure appeared only under narrowed scopes, and
+`forward` is the configuration M1c qualified.
+
+Run arm A first, then arm B. Both arms use:
+
+- `max_total_tokens=32768`, `mem_fraction_static=0.80`, compile buckets
+  `[1,2,70]`, and every acceleration path enabled;
+- the pinned exact10 corpus, with its manifest SHA-256 reported so the arms are
+  provably scored on the same sample set;
+- the packaged `benchmarks/eval/benchmark_asr_exact10s.py` harness. A bespoke
+  request script is not admissible evidence;
+- one fresh service process per repeat, graceful shutdown, and confirmed idle
+  HBM before the next process starts.
+
+Each arm runs, in order: batch one, the cold concurrency-8 gate, the
+140-request correctness workload, then the 700-request exact10 C70 workload.
+Both the 140 and the C70 phase must persist raw per-sample JSONL carrying the
+hypothesis, the reference, and per-sample error counts; a run whose raw output
+is missing cannot be scored and must be repeated.
+
+After the first C70 of each arm, repeat that arm's C70 in two further fresh
+processes with identical settings, so each arm has a three-measurement
+reproducibility set. Do not use an in-process repeat loop.
+
+#### Instrumentation
+
+Always-on counters are required for every C70 measurement in both arms:
+per-label guard wait/acquire/release counts with wait and hold maxima and the
+final ticket/outstanding state, encoder batch and queue-wait timing,
+prefill/decode timing, raw and padded decode-bucket histograms, and
+compiled-versus-eager forward counts. Enable Dynamo graph-break and recompile
+logging for the first C70 of each arm only, never for the remaining repeats and
+never for the 140-request gate. Also record AI Core utilization, power, HBM
+peak, wall clock, and the latency distribution.
+
+#### Stop conditions
+
+Stop on the first unit failure, `ordered_update_begin` without
+`ordered_update_return`, `ordered_replay_begin` without `ordered_replay_return`,
+an `update_thread_*` marker inside arm B, 90 seconds without a completion,
+missing or unscorable raw output, accuracy or fallback failure, device error, or
+cleanup failure. Do not retry with another guard scope, ordering, token cap,
+bucket set, or memory fraction.
+
+#### Adjudication
+
+The 140-request WER comparison has three mutually exclusive outcomes:
+
+| Arm A (threaded) | Arm B (ordered) | Conclusion |
+|---|---|---|
+| `0.0778` | `0.0778` | Not an ordered-mode effect. The discrepancy is a protocol, client, or sample-subset effect and M1c's `0.0161` must be explained on the same basis; `910C-059`'s rejection of graph scope then rests on performance alone and its record must be corrected. |
+| `0.0161` | `0.0778` | Ordered mode changes decode numerics. Ordered execution must not be proposed upstream until the cause is found. |
+| `0.0161` | `0.0161` | The `910C-061` WER came from the bespoke client, which is discarded. |
+
+Performance is adjudicated only against each arm's own three-measurement band,
+never against a single historical number. Ordered mode may be proposed upstream
+only if its C70 accuracy stays inside the qualified band and its p95 and
+throughput bands overlap arm A's. If the arms differ beyond their measured
+spreads, report the direction plus the instrumentation evidence that explains
+it instead of a verdict.
+
+No server source, test, dependency, benchmark, configuration policy, or
+documentation edit is authorized.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
