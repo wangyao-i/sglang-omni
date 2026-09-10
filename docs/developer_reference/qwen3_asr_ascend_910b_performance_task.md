@@ -666,6 +666,40 @@ markers, and the same counters. Do not infer `runtime abnormality` as a guard
 deadlock without this evidence. No source, test, package, configuration, or
 documentation edit is authorized.
 
+### `910C-058`: replace graph-only guard scope with the complete model boundary
+
+`910C-057R` proved that graph-only scope passes cold concurrency 8 and the
+140-request correctness gate, then makes no progress with 70/70 requests
+pending at C70 for at least 90 seconds.  This is a liveness regression, but it
+does not prove that the FIFO primitive itself is defective.  The graph-only
+scope leaves graph eligibility, device-input preparation, and eager/compiled
+fallback outside the shared encoder/generation guard.
+
+Check out the exact commits named by the corresponding handoff row.  Set
+`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=model`; do not enable the rejected
+explicit-state-attention diagnostic.  The new scope holds the existing FIFO
+guard around SGLang `_forward_raw`, covering the complete model device region
+while excluding Omni scheduling, sampling, event emission, and graph-counter
+bookkeeping.
+
+Run serially from fresh processes:
+
+1. the focused Omni guard/pipeline tests, focused SGLang external-context
+   tests, and the full Qwen3-ASR unit suite;
+2. cold concurrency 8 and the 140-request correctness gate;
+3. only if both pass, the fixed M1c exact10 C70 workload with
+   `max_total_tokens=32768`, `mem_fraction_static=0.80`, and
+   `torch_compile_bs=[1,2,70]`.
+
+Require WER within the qualified band, zero garbled output, zero forbidden
+fallback/capture/device errors, positive encoder/prefill/decode replay, and a
+drained service.  Model info must report `scope=model`; labeled
+`generation_prefill_model`, `generation_decode_model`, and `encoder_batch`
+acquires/releases must balance with final guard `outstanding=0`.  Stop on the
+first failure and return its complete sanitized boundary.  Do not run the AC
+or AG candidates and do not edit server source, tests, packages, configuration,
+or documentation.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
