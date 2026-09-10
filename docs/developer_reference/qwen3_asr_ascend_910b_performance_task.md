@@ -796,7 +796,8 @@ then completed correctness 140/140 and C70 700/700 with 4,706 complete ordered
 pairs, zero update-thread markers, and final
 `next=serving=5325, outstanding=0`. This demonstrates that ordered input update
 removes the previously observed helper-thread/join liveness failure and makes
-graph scope live at C70. Do not rerun model scope.
+graph scope live at C70. It does not establish correctness or performance
+benefit.
 
 The text return omitted metrics required to judge correctness and performance.
 Without starting a service, read the retained Arm O/G result JSON, raw JSONL,
@@ -809,10 +810,40 @@ event JSONL, model-info snapshots, poller, and logs and return for each arm:
 - per-label guard wait/acquire/release counts and wait/hold maxima;
 - graceful shutdown, port, device health, HBM baseline, and residual-holder state.
 
-This is `910C-059R`, a read-only evidence completion. Do not edit source,
-tests, packages, configuration, benchmark data, or documentation, and do not
-start another service. Only after these fields are returned may graph scope be
-described as a performance improvement or regression.
+The retained result rejects graph scope: its 140-request WER was 0.0778 versus
+the qualified approximately 0.016 band, while C70 p95 was 1.81 seconds and
+throughput 51.66/s versus M1c 1.442 seconds and 59.88/s. Encoder hold max also
+remained 12.641 seconds, and shutdown left HBM at 22%. Ordered update fixes the
+join-based liveness mechanism, but graph scope is inaccurate, slower, and not
+cleanly torn down.
+
+### `910C-060`: ordered update with complete model-device scope
+
+The graph-only guard excludes eager/compiled model device work and failed
+accuracy. The broad forward guard is correct but includes more Omni work than
+the device boundary. The remaining coherent candidate is the SGLang
+`_forward_raw` model scope. Its earlier stall occurred in the update-thread
+join now removed by ordered mode.
+
+First require a clean idle NPU baseline and no holder; do not start while the
+22% residual state remains. Use exact SGLang `e4d18390a`, set
+`SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=ordered` and
+`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=model`, and keep every M1c setting fixed.
+Use one fresh service process:
+
+1. run the 140-request correctness workload;
+2. stop immediately unless all requests complete, garbled/failure/fallback
+   counts are zero, and WER is in the qualified band;
+3. only after correctness passes, run the 700-request exact10 C70 workload;
+4. gracefully stop and require idle HBM, a free port, and no holder.
+
+Return complete WER/request validity, latency p95/p99/max, throughput, RTFx,
+encoder/prefill/decode capture/replay/fallback counters, ordered marker pairs,
+and per-label guard wait/acquire/release plus wait/hold maxima. Compare with
+M1c and both `910C-059` arms. Accept model scope only if it remains correct and
+live, cleans up fully, and materially improves M1c end-to-end performance.
+Otherwise retain broad forward scope and close guard narrowing. Do not edit
+the server or test another guard scope.
 
 ## Public regression run
 
