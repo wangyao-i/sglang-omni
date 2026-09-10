@@ -1043,6 +1043,83 @@ throughput bands overlap arm A's. If the arms differ beyond their measured
 spreads, report the direction plus the instrumentation evidence that explains
 it instead of a verdict.
 
+### `910C-063`: is the execution guard load-bearing?
+
+The pull-request review asked whether the execution guard adds serialization
+without benefit, and whether it should be conditioned on the encoder graph
+being enabled. A separate precedent bears directly on the same question:
+`vllm-ascend` PR `#4233` records that under ACL graphs the CPU's record event for
+one step can complete before the previous step's graph execution has finished,
+so "if cpu is fast enough, device will hang on `event_wait` in iteration i+1".
+PR `#6432` then narrowed that repair from a full device synchronize to
+`torch.npu.current_stream().synchronize()`, and noted the wider form was
+unnecessary and costly when background work runs concurrently.
+
+Two mechanisms remain undistinguished on this stack:
+
+- **ordering**: the encoder and generation merely interleave and need ordering,
+  in which case a stream event between them could replace the host lock; or
+- **runtime**: the NPU graph runtime does not accept concurrent submission from
+  two host threads, in which case no amount of ordering helps and the host lock
+  is load-bearing.
+
+`910C-063` adds a diagnostic `off` guard scope to discriminate them. `off` is
+not one of the rejected narrowed scopes (`graph`, `model`); those were rejected
+for accuracy, while `off` removes the guard entirely, which is the boundary the
+review question and the `vllm-ascend` precedent both point at.
+
+This arm is complementary to `910C-062`, which varies the graph input-update
+mode under the qualified `forward` guard. `910C-063` removes the guard under the
+ordered mode that `910C-062` arm B measures. Run `910C-063` only after
+`910C-062` has completed, so neither result is attributed to the other.
+
+Verify the code identity by requiring `off` in the accepted scope set:
+
+```
+rg -n "_NPU_GUARD_SCOPES" sglang_omni/models/qwen3_asr/engine_builder.py
+```
+
+and require `git diff --name-only <that commit> HEAD` to list only paths under
+`docs/`. Use exactly SGLang `e4d18390a`. Set
+`SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=ordered` and
+`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=off`, and keep every M1c setting fixed
+(`max_total_tokens=32768`, `mem_fraction_static=0.80`, compile buckets
+`[1,2,70]`) with the encoder graph, prefill graph, decode graph, and compile all
+enabled.
+
+Require the startup log to carry the guard-disabled warning and model-info to
+attest that no guard is installed. Then run, in order, in one fresh process:
+
+1. batch one and the cold concurrency-8 gate;
+2. the 140-request correctness workload, stopping immediately unless every
+   request completes with WER inside the qualified band, zero garbled output,
+   zero failed/timeout/missing/duplicate/unexpected results, and zero eager
+   fallbacks;
+3. only after correctness passes, one 700-request exact10 C70 measurement;
+4. graceful shutdown, then idle HBM, a free port, and no residual holder.
+
+Stop on the first unit failure, 90 seconds without a completion, accuracy or
+fallback failure, device error, or cleanup failure. If the service cannot be
+stopped gracefully, use bounded forced cleanup and report the residual HBM and
+any holder. Do not retry with another scope, ordering, token cap, bucket set, or
+memory fraction.
+
+Return the same fields as `910C-062`, plus the guard-disabled attestation and,
+if the run hangs, the last completed request counts, the poller state, and the
+per-label guard statistics, which must be empty while the guard is off.
+
+Predeclared interpretation:
+
+- If the run completes cold concurrency 8, 140 correctness, and C70 without a
+  hang and inside the qualified accuracy band, the guard is not load-bearing on
+  the fully accelerated path. A later task may then replace it with a stream
+  event between the encoder stream and the generation graph, and the review
+  request to drop or condition the guard can be answered in code.
+- If the run hangs or fails, concurrent NPU graph submission from two host
+  threads is unsafe regardless of ordering, the guard is load-bearing, and the
+  review request must be declined with this evidence. Retain the `forward`
+  scope and change nothing in the retained candidate.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 

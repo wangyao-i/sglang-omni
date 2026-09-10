@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 _NPU_GUARD_COMPLETION_FENCE_ENV = "SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE"
 _NPU_GUARD_SCOPE_ENV = "SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE"
-_NPU_GUARD_SCOPES = frozenset({"forward", "graph", "model"})
+_NPU_GUARD_SCOPES = frozenset({"off", "forward", "graph", "model"})
 
 
 def _env_enabled(name: str) -> bool:
@@ -296,6 +296,17 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
             if self._device_execution_guard is not None
             else "forward"
         )
+        if self._device_execution_guard_scope == "off":
+            # Diagnostic arm: drop cross-thread device serialization entirely so
+            # the encoder and generation submit device work concurrently, as
+            # they do under CUDA. This discriminates whether the guard is
+            # load-bearing or only orders two device producers that stream
+            # events could order instead.
+            logger.warning(
+                "Qwen3-ASR NPU execution guard disabled; encoder and generation "
+                "submit device work concurrently (diagnostic only)"
+            )
+            self._device_execution_guard = None
         if self._device_execution_guard_scope in {"graph", "model"}:
             logger.warning(
                 "Qwen3-ASR NPU execution guard narrowed to %s execution; "

@@ -221,6 +221,15 @@ def test_npu_guard_scope_rejects_unknown_value(
         qwen3_asr_builder._npu_guard_scope()
 
 
+def test_npu_guard_scope_accepts_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Diagnostic arm: "off" removes the guard rather than narrowing it, which is
+    # the boundary the execution-guard review question targets.
+    monkeypatch.setenv("SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE", "off")
+    assert qwen3_asr_builder._npu_guard_scope() == "off"
+
+
 @pytest.mark.parametrize(
     ("sm_version", "expected_backend"),
     [(89, None), (100, "triton_attn"), (120, "triton_attn")],
