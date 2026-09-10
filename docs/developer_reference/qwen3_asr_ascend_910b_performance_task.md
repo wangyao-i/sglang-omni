@@ -726,6 +726,66 @@ paired begin/return markers for encoder, model forward, graph update/replay,
 and compile dispatch. Return sanitized text only. No source, test, package,
 environment, or documentation change is authorized.
 
+### `910C-059`: order NPU graph input update and replay before guard narrowing
+
+`910C-058R` found a holder-side device stall, not a FIFO ticket-lock defect.
+The scheduler held a generation ticket while `replay_with_input_update` joined
+its Python update thread; `graph.replay()` had returned, but that helper thread
+had not returned from `graph.update()`. Request builders waiting for later
+encoder tickets were downstream victims. Releasing the guard around the join,
+using separate encoder/generation guards, or reordering FIFO tickets would
+reintroduce the encoder/update overlap that the qualified forward-scope guard
+exists to prevent and is not authorized.
+
+Check out Omni at the commit containing this section and SGLang at exact commit
+`e4d18390a`. Use a clean process and the qualified ALL M1c profile:
+`max_total_tokens=32768`, `mem_fraction_static=0.80`, and
+`torch_compile_bs=[1,2,70]`. Set:
+
+```bash
+export SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=ordered
+export SGLANG_LOG_DECODE_GRAPH_KEY=1
+export SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=forward
+```
+
+The SGLang change is NPU-backend-only. In `ordered` mode it performs
+`NPUGraph.update()` and `NPUGraph.replay()` on the model execution thread in
+that order; it creates no Python update thread and has no update-thread join.
+The historical `threaded` mode remains the default for this first hardware
+gate. CUDA graph backends and their control flow are unchanged.
+
+Run serially:
+
+1. focused SGLang NPU decode graph/backend tests, focused Omni guard/pipeline
+   tests, and the full Qwen3-ASR suite;
+2. one fresh-process Arm O with the qualified `forward` guard: batch-one,
+   cold concurrency 8, the 140-request correctness workload, then the exact10
+   700-request C70 workload;
+3. only if Arm O is correct, live, and drained, start a second fresh process
+   with the sole additional change
+   `SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=graph`; repeat the 140-request
+   correctness workload and exact10 C70 workload. Do not run `scope=model`.
+
+Before each service, require healthy chips, baseline HBM, a free port, no NPU
+holder, clean tracked worktrees, and exact import/commit identity. After each
+service, use graceful shutdown and require the same cleanup invariants. Stop
+on the first unit failure, `ordered_update_begin` without
+`ordered_update_return`, `ordered_replay_begin` without
+`ordered_replay_return`, 90 seconds without a completion, accuracy/fallback
+failure, device error, or cleanup failure. Do not retry with another ordering,
+guard scope, token cap, bucket set, or memory fraction.
+
+For each arm return sanitized text containing request validity and counts, WER,
+garbled count, wall time, p95/p99, throughput and RTFx; encoder/prefill/decode
+capture/replay/fallback counters; guard wait/acquire/release counts by label,
+maximum wait and hold time, final tickets/outstanding; and ordered update/replay
+begin/return counts. In ordered mode every update/replay pair must be complete
+and no `update_thread_*` or `update_thread_join_*` event may occur during
+replay. Arm O establishes the backend repair independently. The conditional
+graph-scope arm determines whether that repair also makes guard narrowing live
+and beneficial. No server source, test, dependency, benchmark, configuration
+policy, or documentation edit is authorized.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
