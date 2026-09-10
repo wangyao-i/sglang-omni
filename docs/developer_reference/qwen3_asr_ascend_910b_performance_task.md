@@ -574,6 +574,18 @@ a fresh service, graceful shutdown, port release, and verified HBM recovery.
 Do not run arms in parallel and do not edit source, tests, packages, or the
 bucket list on the isolated server.
 
+Before the first service, check out clean worktrees at Omni `ec2c2eeb` and
+SGLang `b03400e5a`. Run the candidate-focused suites before starting any arm:
+SGLang `test/registered/unit/layers/test_radix_attention.py`,
+`test/registered/unit/runner/test_decode_cuda_graph_runner.py`, and
+`test/registered/unit/model_executor/test_external_graph_execution_context.py`;
+Omni `tests/unit_test/utils/test_execution_guard.py`,
+`tests/unit_test/qwen3_asr/test_pipeline.py`, and
+`tests/unit_test/qwen3_asr/test_encoder_service.py`. Then run the existing full
+`tests/unit_test/qwen3_asr/` suite. Stop before service startup on the first
+collection or test failure. Record the actual pass/skip counts rather than
+assuming the historic totals.
+
 1. **AC -- attention compile continuity.** Use the candidate SGLang and the
    baseline Omni behavior. Set
    `SGLANG_NPU_TORCH_COMPILE_DIAGNOSTIC=explicit-state-attention` and leave
