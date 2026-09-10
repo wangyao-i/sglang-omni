@@ -169,6 +169,48 @@ def test_qwen3_asr_model_runner_can_narrow_guard_to_graph_dispatch(
     ]
 
 
+def test_qwen3_asr_model_runner_can_narrow_guard_to_model_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = _make_engine_builder()
+    events: list[str] = []
+
+    class RecordingGuard:
+        @contextmanager
+        def hold(self, *, label: str = "default"):
+            events.append(f"{label}:enter")
+            try:
+                yield 0, 0
+            finally:
+                events.append(f"{label}:exit")
+
+    guard = RecordingGuard()
+    builder._device_execution_guard = guard
+    builder._device_execution_guard_scope = "model"
+    sglang_runner = SimpleNamespace()
+    worker = SimpleNamespace(model_runner=sglang_runner)
+    received: dict[str, object] = {}
+
+    def make_runner(*args, **kwargs):
+        del args
+        received.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(model_runner_base, "ModelRunner", make_runner)
+    builder.make_model_runner(worker, object())
+
+    assert received["device_execution_guard"] is None
+    assert worker._device_execution_guard is guard
+    assert worker._device_execution_guard_scope == "model"
+    with sglang_runner._external_model_execution_context_factory("prefill"):
+        events.append("body")
+    assert events == [
+        "generation_prefill_model:enter",
+        "body",
+        "generation_prefill_model:exit",
+    ]
+
+
 def test_npu_guard_scope_rejects_unknown_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

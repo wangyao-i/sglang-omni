@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 _NPU_GUARD_COMPLETION_FENCE_ENV = "SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE"
 _NPU_GUARD_SCOPE_ENV = "SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE"
-_NPU_GUARD_SCOPES = frozenset({"forward", "graph"})
+_NPU_GUARD_SCOPES = frozenset({"forward", "graph", "model"})
 
 
 def _env_enabled(name: str) -> bool:
@@ -81,6 +81,15 @@ def _hold_graph_execution_guard(
     phase: str,
 ):
     with guard.hold(label=f"generation_{phase}_graph"):
+        yield
+
+
+@contextmanager
+def _hold_model_execution_guard(
+    guard: FairDeviceExecutionGuard,
+    phase: str,
+):
+    with guard.hold(label=f"generation_{phase}_model"):
         yield
 
 
@@ -287,11 +296,12 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
             if self._device_execution_guard is not None
             else "forward"
         )
-        if self._device_execution_guard_scope == "graph":
+        if self._device_execution_guard_scope in {"graph", "model"}:
             logger.warning(
-                "Qwen3-ASR NPU execution guard narrowed to graph dispatch; "
+                "Qwen3-ASR NPU execution guard narrowed to %s execution; "
                 "this opt-in candidate requires hardware correctness and "
-                "performance qualification"
+                "performance qualification",
+                self._device_execution_guard_scope,
             )
         self._log_memory_checkpoint("post_cuda_graph_capture")
         if self.enable_encoder_cuda_graph:
@@ -339,16 +349,21 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
         guard = getattr(self, "_device_execution_guard", None)
         scope = getattr(self, "_device_execution_guard_scope", "forward")
         runner_guard = guard
-        if guard is not None and scope == "graph":
+        if guard is not None and scope in {"graph", "model"}:
             sglang_runner = getattr(model_worker, "model_runner", None)
             if sglang_runner is None:
                 raise RuntimeError(
-                    "graph-scoped NPU execution guard requires the live SGLang "
+                    f"{scope}-scoped NPU execution guard requires the live SGLang "
                     "model runner"
                 )
-            sglang_runner._external_graph_execution_context_factory = (
-                lambda phase: _hold_graph_execution_guard(guard, phase)
-            )
+            if scope == "graph":
+                sglang_runner._external_graph_execution_context_factory = (
+                    lambda phase: _hold_graph_execution_guard(guard, phase)
+                )
+            else:
+                sglang_runner._external_model_execution_context_factory = (
+                    lambda phase: _hold_model_execution_guard(guard, phase)
+                )
             runner_guard = None
         if guard is not None:
             model_worker._device_execution_guard = guard
