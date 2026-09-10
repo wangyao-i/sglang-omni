@@ -350,8 +350,9 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
                 lambda phase: _hold_graph_execution_guard(guard, phase)
             )
             runner_guard = None
-        model_worker._device_execution_guard = guard
-        model_worker._device_execution_guard_scope = scope
+        if guard is not None:
+            model_worker._device_execution_guard = guard
+            model_worker._device_execution_guard_scope = scope
         return ModelRunner(
             model_worker,
             output_proc,
