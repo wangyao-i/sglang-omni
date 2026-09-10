@@ -871,7 +871,9 @@ The product target is a 0.500-second p95 at 140 requests/s. The currently
 qualified exact10 reference is `910C-056B` M1c: 140-request WER `0.0161`,
 700-request WER `0.0164`, p95 1.442 seconds, 59.88 requests/s, RTFx 598.8.
 
-Use exactly SGLang `e4d18390a` and SGLang-Omni `21e755be`, with
+Use exactly SGLang `e4d18390a` and SGLang-Omni `c4c05fa6`, which is this task
+document on top of unmodified code at `21e755be` (the difference is
+documentation only). Set
 `SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=ordered` and
 `SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=forward` (or that variable unset; the
 resolved scope must be `forward`). Keep every M1c setting fixed:
