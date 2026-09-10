@@ -39,27 +39,25 @@
 | 最佳配置 | `max_total_tokens=32768`、`mem_fraction_static=0.80`、`torch_compile_bs=[1,2,70]` |
 | 最佳性能 | p95 `1.442 s`、throughput `59.88/s`、WER `0.0164` |
 | 距离目标 | p95 还差 `2.88x`，throughput 还差 `2.34x` |
-| 当前图模式任务 | SGLang `e4d18390a`，等待 `910C-059` 验证 ordered update/replay |
+| 当前图模式任务 | `910C-059` 已证明 ordered update/replay 和 `graph` guard 可在 C70 排空；准确率与延迟指标待从现有产物补齐 |
 
 当前唯一有效性能基线是上述 M1c 配置。全 13 bucket compile 的首次结果
 没有优于 `[1,2,70]`，且后续 fresh-process warm-up 卡住，因此不作为基线。
 
 ## 当前识别到的问题
 
-### 1. NPU Graph update/replay 存在阻塞风险
+### 1. NPU Graph update/replay 修复待正式固化
 
-当前 NPU backend 使用 Python 后台线程执行 `NPUGraph.update()`，主线程执行
-`replay()` 后再等待该线程。已观察到 replay 返回，但 update 线程不返回，最终使
-持有 generation guard 的线程和等待 encoder guard 的请求全部停住。
-
-这不是 FIFO ticket lock 本身损坏。当前修复候选改为同线程顺序执行
-`NPUGraph.update()` 和 `replay()`，只影响 NPU backend，不修改 CUDA graph 逻辑。
+旧 NPU backend 的 Python update 线程可能阻塞。`910C-059` 改为同线程顺序执行
+`NPUGraph.update()` 和 `replay()` 后，`forward` 和 `graph` scope 均完成 C70，数千次
+update/replay 全部配对且没有 update-thread 标记。下一步是补齐现有结果的 WER、乱码、
+p95/p99 和吞吐量，再决定默认模式和上库形式；CUDA graph 逻辑未修改。
 
 ### 2. Guard 范围过大
 
-当前正确配置用 guard 包住整个 generation forward，能够避免 encoder 与 graph
-设备操作冲突，但也串行化了较大的设备执行区域。缩到 graph/model scope 的旧候选
-曾发生卡死，必须先解决 update/replay 所有权，再重新验证缩圈。
+当前正式性能基线仍用 guard 包住整个 generation forward。ordered update 下，缩到
+`graph` scope 已通过请求完成和锁配对检查，但缺少完整端到端指标，尚不能宣称性能受益。
+`model` scope 已拒绝，不再验证。
 
 ### 3. Attention 编译不连续
 
@@ -79,13 +77,11 @@ replay，但还需要保证签名在测量前稳定，并缩小 encoder 真正�
 
 ## 后续分为四部分
 
-### 第一部分：关闭图更新与并发问题
+### 第一部分：固化图更新与并发修复
 
-- 完成 `910C-059`：验证 ordered update/replay；
-- 先使用已认证的 `forward` guard 验证正确性和 C70；
-- 通过后再验证 `graph` guard；
-- 如果高层 `NPUGraph.update()` 顺序调用仍阻塞，直接改为显式 NPU update stream +
-  graph-task event，不再尝试新的 Python 线程组合。
+- 从 `910C-059` 现有产物补齐准确率和性能指标，不重跑硬件；
+- 若指标有效，保留 ordered update 和 `graph` guard 作为上库候选；
+- 再做跨 NPU graph runner 回归和 fresh-process 复现后固化默认行为。
 
 完成标准：全特性正确、C70 排空、update/replay 全配对、guard 无 outstanding。
 
@@ -131,10 +127,10 @@ p95 `<=0.80 s`、throughput `>=100/s`，最终达到客户目标。
 
 ## 当前下一步
 
-1. 服务器按 [performance task](qwen3_asr_ascend_910b_performance_task.md)
-   执行 `910C-059`；
-2. 本地同时从最新 upstream 准备第一批干净 PR；
-3. `910C-059` 通过后立即开始 guard 缩圈和 attention 编译连续性优化。
+1. 服务器只读取 `910C-059` 已有 JSON/JSONL/log，补回 WER、garbled、p95/p99、
+   throughput、RTFx 和分 label guard 指标；
+2. 本地从最新 upstream 准备第一批干净 PR；
+3. 指标确认后，开始 attention 编译连续性和 encoder 临界区优化。
 
 详细运行命令和历史证据继续保存在：
 

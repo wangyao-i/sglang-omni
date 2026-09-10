@@ -786,6 +786,34 @@ graph-scope arm determines whether that repair also makes guard narrowing live
 and beneficial. No server source, test, dependency, benchmark, configuration
 policy, or documentation edit is authorized.
 
+#### `910C-059` result and retained-artifact completion
+
+The ordered backend passed the liveness portion of both arms. Arm O completed
+cold conc8 70/70, correctness 140/140, and C70 700/700. Its ordered
+update/return and replay/return counts were all 5,083, update-thread markers
+were zero, and final guard state was `next=serving=5731, outstanding=0`. Arm G
+then completed correctness 140/140 and C70 700/700 with 4,706 complete ordered
+pairs, zero update-thread markers, and final
+`next=serving=5325, outstanding=0`. This demonstrates that ordered input update
+removes the previously observed helper-thread/join liveness failure and makes
+graph scope live at C70. Do not rerun model scope.
+
+The text return omitted metrics required to judge correctness and performance.
+Without starting a service, read the retained Arm O/G result JSON, raw JSONL,
+event JSONL, model-info snapshots, poller, and logs and return for each arm:
+
+- valid/total/evaluated plus failed, timeout, missing, duplicate, and unexpected;
+- WER and garbled count;
+- wall time, latency p95/p99/max, throughput, and RTFx;
+- encoder, prefill, and decode capture/replay/fallback counters;
+- per-label guard wait/acquire/release counts and wait/hold maxima;
+- graceful shutdown, port, device health, HBM baseline, and residual-holder state.
+
+This is `910C-059R`, a read-only evidence completion. Do not edit source,
+tests, packages, configuration, benchmark data, or documentation, and do not
+start another service. Only after these fields are returned may graph scope be
+described as a performance improvement or regression.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
