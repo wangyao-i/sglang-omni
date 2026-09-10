@@ -4,7 +4,10 @@ This page is the source of truth for the local-development and isolated-Ascend
 qualification effort. It is written for the local SGLang-Omni developer and
 the operator of the isolated 910B server. Update this page when a gate changes;
 the companion task pages contain executable procedures, not competing status
-or support claims.
+or support claims. The
+[project roadmap](qwen3_asr_ascend_910b_roadmap.md) is the shorter decision
+layer for upstream delivery and performance priorities; this handoff retains
+the detailed hardware evidence and executable state transitions.
 
 **Server-task synchronization rule:** every new request for isolated-server
 execution must be written into this handoff before the operator runs it. A

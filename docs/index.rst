@@ -146,6 +146,7 @@ Supported Models
    developer_reference/reference_encode_service.md
    developer_reference/profiler.md
    developer_reference/qwen3_asr_concurrency_profile.md
+   developer_reference/qwen3_asr_ascend_910b_roadmap.md
    developer_reference/qwen3_asr_ascend_910b_handoff.md
    developer_reference/qwen3_asr_ascend_910b_validation_task.md
    developer_reference/qwen3_asr_ascend_910b_performance_task.md
