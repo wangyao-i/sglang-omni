@@ -562,9 +562,9 @@ service/benchmark settings fixed. Do not invent another bucket set.
 
 Candidate revisions are:
 
-- SGLang branch `qwen3-asr-perf-next`, based on `edc504ff6`, with
-  `caa1d2916` (explicit-state attention) and `b03400e5a` (integrator graph
-  dispatch context);
+- SGLang branch `qwen3-asr-perf-next` at `27b246532`, based on `edc504ff6`,
+  with `caa1d2916` (explicit-state attention), `b03400e5a` (integrator graph
+  dispatch context), and the production graph sequence-length correction;
 - sglang-omni branch `qwen3-asr-guard-scope` at the handoff commit containing
   this reauthorization (code through `fb5110a9`), based on `c50996e7`. This
   includes the graph-scope implementation, labeled timing, and the legacy
@@ -578,11 +578,12 @@ Do not run arms in parallel and do not edit source, tests, packages, or the
 bucket list on the isolated server.
 
 Before the first service, check out clean worktrees at the Omni handoff commit
-containing this reauthorization and SGLang `b03400e5a`. Run the
+containing this reauthorization and SGLang `27b246532`. Run the
 candidate-focused suites before starting any arm:
 SGLang `test/registered/unit/layers/test_radix_attention.py`,
 `test/registered/unit/runner/test_decode_cuda_graph_runner.py`, and
-`test/registered/unit/model_executor/test_external_graph_execution_context.py`;
+`test/registered/unit/model_executor/test_external_graph_execution_context.py`,
+plus `test/registered/unit/npu/attention/test_npu_ascend_backend.py`;
 Omni `tests/unit_test/utils/test_execution_guard.py`,
 `tests/unit_test/qwen3_asr/test_pipeline.py`, and
 `tests/unit_test/qwen3_asr/test_encoder_service.py`. Then run the existing full
