@@ -552,11 +552,13 @@ versus K0), and full-coverage contribution (F13 or F8 versus K0 and M1c).
 
 ### `910C-057`: attention compile continuity and execution-guard scope
 
-This task is prepared in advance but must start only after `910C-056B` returns.
-Use the successful `910C-056B` compile-bucket profile. If no full-coverage arm
-passes, use the qualified M1c profile `[1,2,70]`; do not invent another bucket
-set. Keep `max_total_tokens=32768`, `mem_fraction_static=0.80`, the exact10
-manifest and all other service/benchmark settings fixed.
+`910C-056B` selected the qualified M1c profile `[1,2,70]` as the only
+reproducible baseline. K0 was valid but slower (p95 4.873 seconds).
+F13 first completed at p95 1.504 seconds, but its required second fresh-process
+repeat hung during warm-up; it is not a reproducible candidate. Keep
+`torch_compile_bs=[1,2,70]`, `max_total_tokens=32768`,
+`mem_fraction_static=0.80`, the exact10 manifest and all other
+service/benchmark settings fixed. Do not invent another bucket set.
 
 Candidate revisions are:
 
