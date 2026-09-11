@@ -279,34 +279,46 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
     ) -> None:
         audio_tower = getattr(model, "audio_tower", None)
         reference = next(audio_tower.parameters()) if audio_tower is not None else None
-        self._device_execution_guard = (
-            FairDeviceExecutionGuard(
-                completion_fence=_npu_guard_completion_fence(reference)
-            )
-            if (
-                reference is not None
-                and reference.device.type == "npu"
-                and generation_cuda_graph_enabled
-                and self.enable_pre_lm_encoder
-            )
-            else None
+        guard_required = (
+            reference is not None
+            and reference.device.type == "npu"
+            and generation_cuda_graph_enabled
+            and self.enable_pre_lm_encoder
         )
-        self._device_execution_guard_scope = (
-            _npu_guard_scope()
-            if self._device_execution_guard is not None
-            else "forward"
-        )
-        if self._device_execution_guard_scope == "off":
-            # Diagnostic arm: drop cross-thread device serialization entirely so
-            # the encoder and generation submit device work concurrently, as
-            # they do under CUDA. This discriminates whether the guard is
-            # load-bearing or only orders two device producers that stream
-            # events could order instead.
-            logger.warning(
-                "Qwen3-ASR NPU execution guard disabled; encoder and generation "
-                "submit device work concurrently (diagnostic only)"
-            )
-            self._device_execution_guard = None
+        self._device_execution_guard = None
+        if guard_required:
+            self._device_execution_guard_scope = _npu_guard_scope()
+            completion_fence = _npu_guard_completion_fence(reference)
+            if self._device_execution_guard_scope == "off":
+                if completion_fence is None:
+                    # Diagnostic arm: drop cross-thread device serialization
+                    # entirely so the encoder and generation submit device work
+                    # concurrently, as they do under CUDA. This discriminates
+                    # whether the guard is load-bearing or only orders two
+                    # device producers that stream events could order instead.
+                    logger.warning(
+                        "Qwen3-ASR NPU execution guard disabled; encoder and "
+                        "generation submit device work concurrently "
+                        "(diagnostic only)"
+                    )
+                else:
+                    # Barrier without mutual exclusion: the configuration that
+                    # tests whether a per-handoff synchronize can replace the
+                    # FIFO lock where the hazard actually occurs.
+                    logger.warning(
+                        "Qwen3-ASR NPU execution guard runs barrier-only; "
+                        "mutual exclusion is disabled and device work is "
+                        "synchronized before every handoff (diagnostic only)"
+                    )
+                    self._device_execution_guard = FairDeviceExecutionGuard(
+                        completion_fence=completion_fence, serialize=False
+                    )
+            else:
+                self._device_execution_guard = FairDeviceExecutionGuard(
+                    completion_fence=completion_fence
+                )
+        else:
+            self._device_execution_guard_scope = "forward"
         if self._device_execution_guard_scope in {"graph", "model"}:
             logger.warning(
                 "Qwen3-ASR NPU execution guard narrowed to %s execution; "

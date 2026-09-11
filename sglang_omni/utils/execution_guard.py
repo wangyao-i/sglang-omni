@@ -17,13 +17,27 @@ class FairDeviceExecutionGuard:
     A condition/ticket lock is used instead of ``threading.Lock`` so a fast
     generation loop cannot repeatedly reacquire the device while a background
     encoder batch is already waiting.
+
+    With ``serialize=False`` the ticket lock is bypassed and the guard becomes a
+    barrier-only, diagnostic object: callers never wait for each other, but the
+    completion fence still runs at every handoff. No timing statistics are
+    recorded in that mode, so an empty snapshot attests that mutual exclusion
+    was off. This exists to test whether a per-handoff device barrier can
+    replace serialization, mirroring the ``vllm-ascend`` narrow-synchronize
+    repair.
     """
 
-    def __init__(self, *, completion_fence: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        completion_fence: Callable[[], None] | None = None,
+        serialize: bool = True,
+    ) -> None:
         self._condition = threading.Condition()
         self._next_ticket = 0
         self._serving_ticket = 0
         self._completion_fence = completion_fence
+        self._serialize = serialize
         self._stats: dict[str, dict[str, int]] = defaultdict(
             lambda: {
                 "acquire_count": 0,
@@ -37,6 +51,16 @@ class FairDeviceExecutionGuard:
     @contextlib.contextmanager
     def hold(self, *, label: str = "default") -> Iterator[tuple[int, int]]:
         """Yield ``(ticket, wait_ns)`` after acquiring exclusive execution."""
+        if not self._serialize:
+            # Barrier-only mode: no ticket, no waiting, no statistics. Callers
+            # submit concurrently; only the completion fence orders them.
+            try:
+                yield 0, 0
+            finally:
+                if self._completion_fence is not None:
+                    self._completion_fence()
+            return
+
         wait_started_ns = time.monotonic_ns()
         with self._condition:
             ticket = self._next_ticket

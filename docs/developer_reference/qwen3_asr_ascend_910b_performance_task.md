@@ -1315,6 +1315,81 @@ Either way the `off` scope is not shipped: if the guard is retained it stays
 unconditional, and if it is dropped it is deleted rather than exposed as a
 switch.
 
+`910C-065` then hung at Gate 1, as predicted, and produced the same marker
+signature as `910C-020`:
+
+| marker | count |
+|---|---|
+| `update_thread_enter` | 37 |
+| `update_thread_join_begin` | 37 |
+| `update_thread_join_return` | 36 |
+| `graph_update_begin` | 37 |
+| `graph_update_return` | 36 |
+
+One iteration entered `update_thread_join_begin` and never returned, and its
+`graph.update()` never returned either; the last event was
+`update_thread_join_begin key_size=4`. The encoder thread was present under the
+`910C-013` profile. The mechanism is therefore confirmed: under the threaded
+path the forward thread waits on the join, the helper thread is stuck inside
+`graph.update()`, and the encoder thread is the third concurrent submitter.
+Ordered update removes the helper, and `910C-064` shows that with two submitters
+the same profile is live with no guard at all. The guard's original
+justification is superseded rather than wrong: it was the only correct repair
+available before ordered input update existed.
+
+### `910C-066`: does a narrow barrier replace the mutex?
+
+With the guard redundant under ordered mode, the remaining question is whether a
+cheap device barrier is worth keeping as insurance. That question can only be
+answered at the configuration where the hazard exists. A barrier arm run at the
+fully accelerated profile would pass trivially, because that profile has never
+hung; it would prove nothing. The test bench must be the hanging configuration:
+threaded update with no mutex. Gate 1 of `910C-065` hangs reliably enough to
+serve as that bench.
+
+This requires one local change before the hardware run: the current completion
+fence is a constructor argument of the guard, and `scope=off` nulls the guard,
+so "no mutex, but synchronize at each handoff" is not expressible today. Extend
+the `off` scope so that, when `SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE` is
+enabled, the encoder and generation submissions still perform a barrier while
+the ticket lock stays disabled. Use `torch.npu.current_stream().synchronize()`
+at each handoff, mirroring `vllm-ascend` PR `#6432`, not the full-device
+`device_module.synchronize()` that the existing fence uses; the two differ by an
+order of magnitude in cost.
+
+Then run the `910C-013` profile from `910C-064` with
+`SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=threaded`,
+`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=off`, and the barrier enabled: three
+fresh processes each executing the explicit cold concurrency-8 gate, then, only
+if all three complete, one fourth process through the 140-request correctness
+workload and one 700-request exact10 C70 measurement. Attest from startup logs
+and model-info that the mutex is disabled, the barrier is enabled, and the
+per-label guard statistics are empty.
+
+Bounded forced cleanup is authorized exactly as in `910C-065`, and the same
+cleanup record is required.
+
+Predeclared interpretation:
+
+- All three gates and the fourth process completing means the barrier
+  suppresses the known mechanism, so it is a valid substitute for the mutex
+  rather than unfalsifiable insurance. The choice between shipping ordered
+  alone and shipping ordered plus a barrier then reduces to its measured cost
+  against the `910C-064` guard-off reference.
+- Any gate or the fourth process hanging means the barrier does not address the
+  mechanism and cannot be justified as insurance. The mutex remains the only
+  proven serialization, and the decision becomes ordered alone (`910C-064`
+  evidence) versus ordered plus the mutex.
+
+Neither outcome authorizes shipping the `off` scope.
+
+One integration constraint follows from these results and must travel with both
+pull requests: removing the guard from the Ascend candidate makes the SGLang
+ordered-input-update commit a hard prerequisite. No guard together with the
+threaded update path is exactly the configuration that hangs in `910C-013` and
+`910C-065`. If the SGLang change has not landed, the guard must remain;
+otherwise the default combined state is the hanging one.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 
