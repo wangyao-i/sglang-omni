@@ -1799,8 +1799,12 @@ guard, and the deletion touches real paths: `model_runner/base.py`,
 `device_execution_guard` key is gone. Liveness, correctness and performance all
 have to be re-attested on the new commits before the retirement is qualified.
 
-Use the Omni commit containing this section and SGLang `qwen3-asr-perf-next` at
-`675551408` or later. Attest the deletion itself before starting: from the
+Run against the shipping candidate branches rather than the development tree:
+SGLang-Omni `qwen3-asr-ascend-full` at `53547ee0` and SGLang
+`qwen3-asr-ascend-full` at `3b83d8ddb`. The development tree expressed the same
+fix through diagnostic switches and is superseded for this task; `910C-070` arm
+A was still a switch, so only a run on these heads qualifies the retirement.
+Attest the deletion itself before starting: from the
 repository root, `rg -n "execution_guard" sglang_omni` and
 `rg -n "SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE|SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE" sglang_omni tests`
 must both return nothing, and `rg -n "SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE" python`
@@ -1840,14 +1844,13 @@ Predeclared interpretation:
   disturbed more than the guard, and the run must be diagnosed before any
   reference number is published.
 
-Once the three phases pass on those commits, repeat them on the candidate
-branches that will actually be published, `qwen3-asr-ascend-full` in both
-repositories, before either pull request is announced. That is not a formality:
-the candidate branches sit on a newer upstream base, so the code around these
-paths differs even though the guard deletion and the encoder stream change are
-the same. The SGLang candidate branch never carried ordered input update or the
-integrator guard hooks, and the omni candidate branch now matches the
-development tree on these paths, with the guard removed and the encoder's
+The three phases run directly on those candidate branches, so the result is
+measured on the code that ships rather than on a development tree. That is not a
+formality: the candidate branches sit on a newer upstream base, so the code
+around these paths differs even though the guard deletion and the encoder stream
+change are the same. The SGLang candidate branch never carried ordered input
+update or the integrator guard hooks, and the omni candidate branch now matches
+the development tree on these paths, with the guard removed and the encoder's
 private stream unconditional. Record both candidate heads in the result, along
 with the same three self-attestations: no `execution_guard` reference anywhere
 under `sglang_omni`, no guard scope or fence environment variable, and no
