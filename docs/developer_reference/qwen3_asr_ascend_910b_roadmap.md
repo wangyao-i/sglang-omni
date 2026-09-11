@@ -85,8 +85,14 @@ this roadmap will be refreshed with the final dependency and merge order.
 - optimize device kernels only after profiling identifies a specific hot
   operator.
 
-The currently measured gap to the challenge target is approximately 2.88x in
-p95 latency and 2.34x in throughput.
+The reproducible reference is the guarded `forward` scope measured over three
+fresh processes per arm: p95 1.539-1.765 s at 50.66-55.95 requests/s
+(`threaded`) and 1.559-1.739 s at 51.34-54.51 requests/s (`ordered`). The single
+1.442 s / 59.88 requests/s reading recorded earlier is not reproduced by any of
+those six runs and is no longer used as the anchor.
+
+The gap to the challenge target, measured against that reproducible reference,
+is approximately 3.3x in p95 latency and 2.6x in throughput.
 
 ### Realtime ASR
 

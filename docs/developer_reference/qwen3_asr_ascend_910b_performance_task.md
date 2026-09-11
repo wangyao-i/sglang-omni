@@ -845,17 +845,31 @@ live, cleans up fully, and materially improves M1c end-to-end performance.
 Otherwise retain broad forward scope and close guard narrowing. Do not edit
 the server or test another guard scope.
 
-`910C-060` ran and is rejected on its own predeclared gates. It was live:
-correctness completed 140/140 with zero garbled output, 4,707 ordered
-update/replay pairs, zero update-thread markers, and a final guard state of
-`next=serving=5324, outstanding=0`. It failed the gate that comes first: the
-140-request WER was `0.0778` against the qualified `0.0161` band, so the run
-should have stopped before C70. Its C70 result also does not materially beat
-M1c, at p95 1.75 seconds and 52.79 requests/s against 1.442 seconds and 59.88
-requests/s, and teardown HBM was not confirmed. `910C-059` Arm G returned the
-same `0.0778`, so both narrowed scopes share one accuracy signature rather than
-two independent regressions. Treat guard narrowing as closed and retain the
-broad `forward` scope.
+`910C-060` ran and was live: correctness completed 140/140 with zero garbled
+output, 4,707 ordered update/replay pairs, zero update-thread markers, and a
+final guard state of `next=serving=5324, outstanding=0`. Its teardown HBM was
+not confirmed, and its C70 result did not materially beat M1c, at p95 1.75
+seconds and 52.79 requests/s against 1.442 seconds and 59.88 requests/s.
+
+Its 140-request WER of `0.0778`, which `910C-059` also used to reject graph
+scope, is withdrawn as an accuracy basis. `910C-062` measured the same gate on
+the qualified harness with two arms and returned `0.0176` (threaded) and
+`0.0179` (ordered), retaining raw per-sample output, and `910C-063` returned
+`0.0179`. The `0.0778` readings share the era and protocol of `910C-061`, whose
+run used a bespoke client that persisted no raw output. Until those earlier runs
+are re-measured on the qualified harness, neither `910C-059`'s nor `910C-060`'s
+accuracy rejection stands, and their performance comparisons are equally
+inadmissible. Treat `graph` and `model` scope as not adjudicated on evidence and
+closed only for absence of benefit: `910C-059` arm G was slower than M1c, and
+`910C-063` shows the entire guard is worth only a few percent, so narrowing it
+cannot be the performance lever. Retain the broad `forward` scope.
+
+The 140-request gate value on this stack is `0.0176`-`0.0179` across three
+independent configurations (`910C-062` arms A and B, and `910C-063`), while
+`910C-056B` recorded `0.0161` for M1c. That difference is roughly four word
+errors and is a stack-level property rather than an effect of any update mode.
+Restate the band as approximately `0.018` for the current stack, or account for
+the difference, before `0.0161` is used as a gate value again.
 
 ### `910C-061`: ordered update with the qualified forward guard
 
@@ -1119,6 +1133,97 @@ Predeclared interpretation:
   threads is unsafe regardless of ordering, the guard is load-bearing, and the
   review request must be declined with this evidence. Retain the `forward`
   scope and change nothing in the retained candidate.
+
+No server source, test, dependency, benchmark, configuration policy, or
+documentation edit is authorized.
+
+`910C-063` then ran once and completed: 700/700 at C70 with WER `0.0161`,
+p95 1.478 seconds, throughput 57.14 requests/s, graceful shutdown, and idle
+HBM. No stop condition fired. Two corrections are required before that is read
+as a verdict on the guard.
+
+First, `910C-063` ran the fully accelerated profile with the encoder graph,
+prefill graph, decode graph, and compile all enabled. The configuration that
+originally hung is a different point in that space. `910C-013` hung with
+**encoder graph disabled**, prefill graph disabled, compile disabled, decode
+graph enabled through bucket 70, eight request-build workers, and concurrency 8;
+its server commit `9bae2619` predates the guard commit `ef6db56c`, so that hang
+occurred with no guard installed. `910C-024B` later passed the same
+encoder-eager/decode-graph family with the guard enabled. `910C-063` therefore
+does not cover the configuration where the guard was introduced, and it cannot
+support dropping the guard in general.
+
+Second, that failure mode is intermittent: `910C-014` arm B passed all eager,
+`910C-024B` passed with the guard, and `910C-013` hung without it. A passing run
+is weak evidence and a hang is strong evidence. `910C-063` is one run, and its
+cold concurrency-8 gate was recorded as implicitly passed rather than executed
+as its own step, which is the one gate a liveness arm must not elide. The
+`910C-062` arms also show the guard costs only a few percent: guarded ranges
+were p95 1.539-1.765 s at 50.66-55.95 requests/s (threaded) and 1.559-1.739 s at
+51.34-54.51 requests/s (ordered), against the single guard-off reading of
+1.478 s at 57.14 requests/s.
+
+### `910C-064`: guard-off liveness at the historical failure profile
+
+The review question is whether the execution guard is load-bearing or merely
+orders two device producers. `910C-063` removed the guard at the fully
+accelerated profile and passed once, but that profile has never produced the
+hang. The configuration that did produce it is the encoder-eager/decode-graph
+family from `910C-013`, reproduced below exactly as `910C-014` specified it.
+
+Use exactly SGLang `e4d18390a` and the SGLang-Omni commit containing this
+section, with `SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=ordered` and
+`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=off`. Attest the guard-disabled warning
+and, from model-info, that no guard is installed.
+
+Profile, fixed at the `910C-013` point:
+
+- compile disabled;
+- encoder graph disabled;
+- prefill graph disabled;
+- decode graph captured through bucket 70;
+- eight request-build workers;
+- the pinned 70-input selection;
+- concurrency 8 with no benchmark warm-up;
+- a bounded request timeout of 120 seconds.
+
+Run three fresh service processes. Each process must execute the cold
+concurrency-8 gate as its own explicit step, with the 70 distinct requests
+driven closed-loop, and must be stopped gracefully with idle HBM and a free port
+before the next process starts. Do not treat an implicit pass as a gate.
+
+Only if all three concurrency-8 gates complete, run a fourth fresh process at
+the same profile through the 140-request correctness workload and one
+700-request exact10 C70 measurement, to confirm the profile is still usable
+end-to-end without the guard.
+
+Stop on the first request that does not complete within its timeout, 90 seconds
+without a completion, an accuracy or output failure, an OOM, a device error, a
+state leak, an orphan, or a cleanup failure. Do not retry with the guard
+re-enabled inside the same task, and do not change the scope, ordering, token
+cap, bucket set, memory fraction, compile setting, or graph setting.
+
+Return, per process: the guard-disabled attestation, completion counts and
+timeouts, wall clock, request accounting, the poller state at the last
+snapshot, whether decode replay executed, encoder batch and queue-wait timing,
+and cleanup state. When the guard is disabled the per-label guard statistics
+must be empty; report that they are.
+
+Predeclared interpretation:
+
+- Any hang, timeout, or failure in any of the three concurrency-8 gates means
+  concurrent NPU graph submission from two host threads is unsafe regardless of
+  ordering. The guard is load-bearing, the review request to drop it or
+  condition it on the encoder graph must be declined with this evidence, and
+  the retained candidate keeps the `forward` scope and its current condition.
+- All three gates plus the fourth-process C70 completing means the trigger that
+  hung `910C-013` no longer reproduces on this stack. The guard's necessity then
+  has to be re-justified rather than assumed, and the next local task is a
+  narrow-barrier variant, mirroring `vllm-ascend` PR `#6432`, to decide whether
+  a per-handoff `current_stream().synchronize()` can replace the FIFO lock. The
+  `off` scope must not be shipped either way: if the guard is load-bearing it
+  stays unconditional, and if it is not it is deleted rather than exposed as a
+  switch.
 
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
