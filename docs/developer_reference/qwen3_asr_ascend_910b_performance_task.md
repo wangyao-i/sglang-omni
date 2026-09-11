@@ -1548,6 +1548,34 @@ Predeclared interpretation:
 - No reproduction in this arm means the logging changed the timing. Record that
   and do not raise the log level to retry inside this arm; the decision is local.
 
+`910C-068` then reproduced the hang and sampled the live process. `gdb` is not
+installed on the host, so the capture is `py-spy` plus `/proc`: the update
+thread sits in `graph_task_update_end`, and its kernel wait channel is
+`eventfd_read`, a wait for a device completion signal rather than a host lock.
+`npu-smi` reported AI Core and Aicore utilisation at 0 percent while the process
+was stalled, so no kernel was executing. plog's last visible entry is the
+encoder's `AllocTaskAndSendStars` for a `KERNEL_AICORE` task, so device work was
+still being submitted as the stall began. `msnpureport` is not installed, so no
+device-side log exists for this run.
+
+Three qualifications travel with that result:
+
+- The predeclared branch that fires is the one about a blocking call inside the
+  graph update path. We have the call and its wait channel, but a Python frame
+  plus `wchan` is not a native backtrace, because `py-spy` substituted for
+  `gdb`. A later arm must produce native frames before this is quoted as one.
+- The stall is a silent indefinite wait on a device completion signal with the
+  device idle. That shape fits a submitted task whose dependency is never
+  satisfied, the same shape as `vllm-ascend` PR `#4233`, more closely than it
+  fits a task the hardware rejected, which would normally raise or time out. The
+  reading that the hardware scheduler refused the task is not established here.
+- Under INFO the plog ring buffer rotates in roughly four minutes, so the file's
+  tail is not guaranteed to be the stall instant. A repeat should stream-copy
+  plog while the run proceeds rather than read it after the stall.
+
+The cleanup left a residual holder from an earlier experiment taking about
+9.6 GiB. Confirm the device is back at its idle baseline before the next arm.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 
