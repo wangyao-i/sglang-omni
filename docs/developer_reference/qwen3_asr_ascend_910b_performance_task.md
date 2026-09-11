@@ -1248,8 +1248,10 @@ concurrent host submitters; ordered mode removes the helper and leaves two. That
 is consistent with `910C-020`, where `graph_update_begin` never returned,
 `replay_begin`/`replay_return` were complete, and the main thread was parked at
 `update_thread_join`. The earlier attribution named encoder-versus-decode graph
-stream interaction; the sharper form is that the threaded path's own update
-helper was a third concurrent submitter.
+stream interaction; the sharper form is that the threaded path submits from two
+host threads by itself, `replay()` on the forward thread and `graph.update()` on
+a helper thread, and the encoder thread makes three. `910C-067` later isolated
+that: with the encoder silent, two submitters are live and the profile passes.
 
 So `910C-064` does not show the guard is unnecessary. It shows the guard is
 unnecessary *while ordered mode is in force*, which is a different claim and one
@@ -1396,6 +1398,16 @@ Predeclared interpretation:
 
 Neither outcome authorizes shipping the `off` scope.
 
+`910C-066` then hung at its single gate, before the ladder was extended. The
+barrier-only process reported `update_thread_join_begin` 29 with 28 returns and
+`graph_update_begin` 29 with 28 returns, attested both the guard-disabled and
+the barrier-only warnings, and completed no gate. The barrier route is therefore
+closed without an implementation of the narrow fence: the full-device fence is a
+strict superset of the narrow one and still does not address the mechanism,
+because a fence that runs at hold exit cannot order a pair issued inside the
+hold. Ordered update remains the only mechanism that removes the third
+concurrent submitter.
+
 One integration constraint follows from these results and must travel with both
 pull requests: removing the guard from the Ascend candidate makes the SGLang
 ordered-input-update commit a hard prerequisite. No guard together with the
@@ -1442,6 +1454,25 @@ Predeclared interpretation:
   necessary participant and the encoder-versus-decode-graph attribution is
   withdrawn: the threaded path's own update helper is sufficient on its own, and
   no encoder-side repair can address the hazard.
+
+`910C-067` then ran and passed. Three fresh processes at the `910C-013` profile
+with `threaded` update and no guard each warmed the cache with one
+concurrency-1 pass over the 70 pinned inputs and then completed the explicit
+cold concurrency-8 gate 70/70, at p95 0.52-0.53 seconds, with zero encoder
+batches started in every gate phase. `910C-065` hung at the same profile with
+the encoder active. The encoder's device submissions are therefore a necessary
+participant in the hang, and the attribution is a controlled result rather than
+an inference.
+
+`910C-067` sharpens the mechanism in one direction and softens it in another.
+With the encoder silent, the threaded path still submits from two host threads,
+the forward thread's `replay()` and the helper thread's `graph.update()`, and it
+is live; so two concurrent submitters are not sufficient to hang, and the
+encoder is the third. That also means the unsynchronized update/replay pair is
+not by itself the cause, which is a correction to the reading that followed
+`910C-065`. The load-bearing variable is the number of concurrent host
+submitters rather than encoder device volume: `910C-024B` ran an encoder that
+submitted, serialized against generation by the guard, and passed.
 
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
