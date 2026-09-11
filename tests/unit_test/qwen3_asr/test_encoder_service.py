@@ -735,30 +735,7 @@ def test_the_device_cache_is_really_reclaimed_after_an_oom() -> None:
         assert device_module.memory_reserved() < reserved_before
 
 
-def test_npu_stream_switches_read_only_their_own_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from sglang_omni.models.qwen3_asr import encoder_service as mod
-
-    monkeypatch.delenv(mod._NPU_ENCODER_PRIVATE_STREAM_ENV, raising=False)
-    monkeypatch.delenv(mod._NPU_ENCODER_BATCH_SYNC_ENV, raising=False)
-    assert mod._npu_private_encoder_stream_requested() is False
-    assert mod._encoder_batch_sync_requested() is False
-
-    monkeypatch.setenv(mod._NPU_ENCODER_PRIVATE_STREAM_ENV, "1")
-    assert mod._npu_private_encoder_stream_requested() is True
-    assert mod._encoder_batch_sync_requested() is False
-
-    monkeypatch.setenv(mod._NPU_ENCODER_BATCH_SYNC_ENV, "yes")
-    assert mod._npu_private_encoder_stream_requested() is True
-    assert mod._encoder_batch_sync_requested() is True
-
-    monkeypatch.setenv(mod._NPU_ENCODER_PRIVATE_STREAM_ENV, "0")
-    assert mod._npu_private_encoder_stream_requested() is False
-    assert mod._encoder_batch_sync_requested() is True
-
-
-def test_batch_fence_syncs_the_shared_stream_without_a_private_stream(
+def test_synchronize_batch_touches_only_the_encoder_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -766,40 +743,21 @@ def test_batch_fence_syncs_the_shared_stream_without_a_private_stream(
     class _FakeDeviceModule:
         @staticmethod
         def current_stream() -> SimpleNamespace:
-            return SimpleNamespace(synchronize=lambda: calls.append("shared"))
+            raise AssertionError("the shared stream must not be synchronized")
 
     monkeypatch.setattr(
         torch, "get_device_module", lambda device=None: _FakeDeviceModule
     )
     service = object.__new__(Qwen3ASRPreLMEncoderService)
-    service._stream = None
-    service._encoder_batch_sync = True
     service._device = torch.device("cpu")
 
+    service._stream = SimpleNamespace(synchronize=lambda: calls.append("encoder"))
     service.synchronize_batch()
+    assert calls == ["encoder"]
 
-    assert calls == ["shared"]
-
-
-def test_batch_fence_yields_to_the_private_stream(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[str] = []
-
-    class _FakeDeviceModule:
-        @staticmethod
-        def current_stream() -> SimpleNamespace:
-            return SimpleNamespace(synchronize=lambda: calls.append("shared"))
-
-    monkeypatch.setattr(
-        torch, "get_device_module", lambda device=None: _FakeDeviceModule
-    )
-    service = object.__new__(Qwen3ASRPreLMEncoderService)
-    service._stream = SimpleNamespace(
-        synchronize=lambda: calls.append("private")
-    )
-    service._encoder_batch_sync = True
-
+    # Without a private stream the batch hand-off must stay a no-op: reaching for
+    # the shared stream here would re-introduce the host-side fence that left the
+    # `910C-069` hang in place.
+    service._stream = None
     service.synchronize_batch()
-
-    assert calls == ["private"]
+    assert calls == ["encoder"]

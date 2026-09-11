@@ -17,7 +17,6 @@ import contextlib
 import hashlib
 import json
 import logging
-import os
 import queue
 import threading
 import time
@@ -41,27 +40,13 @@ _CACHE_MAX_ENTRIES = 4096
 _CACHE_MAX_BYTES = 2 * 1024**3
 _SHUTDOWN = object()
 
-# Diagnostic switches for the Ascend stream-layout question: the encoder owns a
-# private stream on CUDA and runs on the default stream on NPU, so encoder work
-# shares one submission queue with decode graph replay and update. Neither
-# switch ships; both exist only to separate stream sharing from host-side
-# throttling in the Ascend hang investigation.
-_NPU_ENCODER_PRIVATE_STREAM_ENV = "SGLANG_OMNI_NPU_ENCODER_PRIVATE_STREAM"
-_NPU_ENCODER_BATCH_SYNC_ENV = "SGLANG_OMNI_NPU_ENCODER_BATCH_SYNC"
-
-
-def _env_enabled(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _npu_private_encoder_stream_requested() -> bool:
-    """Mirror the CUDA private-stream layout on NPU when asked."""
-    return _env_enabled(_NPU_ENCODER_PRIVATE_STREAM_ENV)
-
-
-def _encoder_batch_sync_requested() -> bool:
-    """Throttle the encoder worker on the stream it already uses."""
-    return _env_enabled(_NPU_ENCODER_BATCH_SYNC_ENV)
+# note (wangyao-i): the encoder must not submit on the generation's stream on
+# Ascend. When it does, three host threads -- the encoder, the decode graph's
+# `replay()` and its graph-update helper -- share one submission lane, and the
+# device never completes the graph update task, which wedges the service
+# (`910C-065`, `910C-066`, `910C-069` on the task page). CUDA has always given
+# the encoder its own stream, so this restores that layout on NPU rather than
+# adding a cross-thread lock.
 
 
 # note (luojiaxuan): WhisperFeatureExtractor identity fields; a change to any
@@ -150,32 +135,10 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
         self._dtype = reference.dtype
         self._hidden_size = _text_hidden_size(model)
         self._stream = (
-            torch.cuda.Stream(device=self._device)
-            if self._device.type == "cuda"
-            else (
-                torch.get_device_module(self._device).Stream(device=self._device)
-                if self._device.type == "npu"
-                and _npu_private_encoder_stream_requested()
-                else None
-            )
+            torch.get_device_module(self._device).Stream(device=self._device)
+            if self._device.type in {"cuda", "npu"}
+            else None
         )
-        self._encoder_batch_sync = _encoder_batch_sync_requested()
-        if self._stream is not None and self._device.type == "npu":
-            logger.warning(
-                "Qwen3-ASR NPU encoder runs on a private stream; the encoder "
-                "no longer shares the default submission queue "
-                "(diagnostic only)"
-            )
-        if self._encoder_batch_sync and self._stream is not None:
-            logger.warning(
-                "Qwen3-ASR encoder batch fence is ignored because the encoder "
-                "already owns a private stream"
-            )
-        elif self._encoder_batch_sync:
-            logger.warning(
-                "Qwen3-ASR encoder batch fence enabled; the worker blocks on "
-                "the stream it uses after every batch (diagnostic only)"
-            )
         self._device_execution_guard = device_execution_guard
         self._cache = StageOutputCache(
             max_size=cache_max_entries,
@@ -551,11 +514,6 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
     def synchronize_batch(self) -> None:
         if self._stream is not None:
             self._stream.synchronize()
-        elif self._encoder_batch_sync:
-            # Diagnostic host throttle: keep the encoder from running ahead of
-            # the device on the stream it already shares, without separating
-            # that stream.
-            torch.get_device_module(self._device).current_stream().synchronize()
 
     def cache_embedding(
         self,
