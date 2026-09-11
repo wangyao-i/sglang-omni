@@ -275,33 +275,6 @@ def test_execute_falls_back_to_standard_forward_after_before_hook(
     assert not hasattr(ModelRunner, "prepare_prefill")
 
 
-def test_standard_forward_holds_configured_device_execution_guard(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install_fake_forward_batch_module(monkeypatch)
-    calls: list[str] = []
-
-    class RecordingGuard:
-        @contextmanager
-        def hold(self, *, label: str = "default"):
-            calls.append(f"guard_enter:{label}")
-            try:
-                yield 0, 0
-            finally:
-                calls.append(f"guard_exit:{label}")
-
-    runner = _runner(calls, custom_result=None)
-    runner._device_execution_guard = RecordingGuard()
-    runner.execute(_scheduler_output(is_prefill=True))
-
-    assert calls.index("guard_enter:generation_prefill_forward") < calls.index(
-        "standard_forward"
-    )
-    assert calls.index("standard_forward") < calls.index(
-        "guard_exit:generation_prefill_forward"
-    )
-
-
 @pytest.mark.parametrize(
     ("is_prefill", "phase"),
     [(True, "prefill"), (False, "decode")],

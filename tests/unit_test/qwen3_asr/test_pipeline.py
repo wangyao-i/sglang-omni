@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import logging
-from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -106,128 +105,6 @@ def test_qwen3_asr_engine_builder_binds_encode_wait_policy() -> None:
     )
 
     assert builder.should_wait_for_encode() is True
-
-
-def test_qwen3_asr_model_runner_allows_legacy_builder_without_guard(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    builder = _make_engine_builder()
-    del builder._device_execution_guard
-    received: dict[str, object] = {}
-
-    def make_runner(*args, **kwargs):
-        del args
-        received.update(kwargs)
-        return object()
-
-    monkeypatch.setattr(model_runner_base, "ModelRunner", make_runner)
-
-    builder.make_model_runner(object(), object())
-
-    assert received["device_execution_guard"] is None
-
-
-def test_qwen3_asr_model_runner_can_narrow_guard_to_graph_dispatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    builder = _make_engine_builder()
-    events: list[str] = []
-
-    class RecordingGuard:
-        @contextmanager
-        def hold(self, *, label: str = "default"):
-            events.append(f"{label}:enter")
-            try:
-                yield 0, 0
-            finally:
-                events.append(f"{label}:exit")
-
-    guard = RecordingGuard()
-    builder._device_execution_guard = guard
-    builder._device_execution_guard_scope = "graph"
-    sglang_runner = SimpleNamespace()
-    worker = SimpleNamespace(model_runner=sglang_runner)
-    received: dict[str, object] = {}
-
-    def make_runner(*args, **kwargs):
-        del args
-        received.update(kwargs)
-        return object()
-
-    monkeypatch.setattr(model_runner_base, "ModelRunner", make_runner)
-    builder.make_model_runner(worker, object())
-
-    assert received["device_execution_guard"] is None
-    assert worker._device_execution_guard is guard
-    assert worker._device_execution_guard_scope == "graph"
-    with sglang_runner._external_graph_execution_context_factory("decode"):
-        events.append("body")
-    assert events == [
-        "generation_decode_graph:enter",
-        "body",
-        "generation_decode_graph:exit",
-    ]
-
-
-def test_qwen3_asr_model_runner_can_narrow_guard_to_model_execution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    builder = _make_engine_builder()
-    events: list[str] = []
-
-    class RecordingGuard:
-        @contextmanager
-        def hold(self, *, label: str = "default"):
-            events.append(f"{label}:enter")
-            try:
-                yield 0, 0
-            finally:
-                events.append(f"{label}:exit")
-
-    guard = RecordingGuard()
-    builder._device_execution_guard = guard
-    builder._device_execution_guard_scope = "model"
-    sglang_runner = SimpleNamespace()
-    worker = SimpleNamespace(model_runner=sglang_runner)
-    received: dict[str, object] = {}
-
-    def make_runner(*args, **kwargs):
-        del args
-        received.update(kwargs)
-        return object()
-
-    monkeypatch.setattr(model_runner_base, "ModelRunner", make_runner)
-    builder.make_model_runner(worker, object())
-
-    assert received["device_execution_guard"] is None
-    assert worker._device_execution_guard is guard
-    assert worker._device_execution_guard_scope == "model"
-    with sglang_runner._external_model_execution_context_factory("prefill"):
-        events.append("body")
-    assert events == [
-        "generation_prefill_model:enter",
-        "body",
-        "generation_prefill_model:exit",
-    ]
-
-
-def test_npu_guard_scope_rejects_unknown_value(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(
-        "SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE", "update-only"
-    )
-    with pytest.raises(ValueError, match="expected one of"):
-        qwen3_asr_builder._npu_guard_scope()
-
-
-def test_npu_guard_scope_accepts_off(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Diagnostic arm: "off" removes the guard rather than narrowing it, which is
-    # the boundary the execution-guard review question targets.
-    monkeypatch.setenv("SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE", "off")
-    assert qwen3_asr_builder._npu_guard_scope() == "off"
 
 
 @pytest.mark.parametrize(

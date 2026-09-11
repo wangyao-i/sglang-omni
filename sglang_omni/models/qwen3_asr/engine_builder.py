@@ -4,11 +4,7 @@
 from __future__ import annotations
 
 import logging
-import os
-from contextlib import contextmanager
 from typing import Any, Callable
-
-import torch
 
 from sglang.srt.managers.mm_utils import init_mm_embedding_cache
 from sglang.srt.utils import get_hip_version, is_gfx95_supported
@@ -31,67 +27,10 @@ from sglang_omni.scheduling.generation_batch_policy import (
     clamp_prefill_cuda_graph_max_bs,
     get_decode_cuda_graph_bs,
 )
-from sglang_omni.utils.execution_guard import FairDeviceExecutionGuard
 from sglang_omni.utils.gpu_compat import get_visible_gpu_sm_version
 from sglang_omni.utils.gpu_memory import format_bytes_gib, get_process_gpu_memory_bytes
 
 logger = logging.getLogger(__name__)
-
-_NPU_GUARD_COMPLETION_FENCE_ENV = "SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE"
-_NPU_GUARD_SCOPE_ENV = "SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE"
-_NPU_GUARD_SCOPES = frozenset({"off", "forward", "graph", "model"})
-
-
-def _env_enabled(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _npu_guard_completion_fence(reference: torch.Tensor) -> Callable[[], None] | None:
-    """Build the diagnostic NPU completion fence when explicitly requested."""
-    if reference.device.type != "npu" or not _env_enabled(
-        _NPU_GUARD_COMPLETION_FENCE_ENV
-    ):
-        return None
-    device_module = torch.get_device_module(reference.device)
-
-    def synchronize() -> None:
-        with device_module.device(reference.device):
-            device_module.synchronize()
-
-    logger.warning(
-        "Qwen3-ASR NPU guard completion fence enabled; device work is "
-        "synchronized before every guard handoff (diagnostic only)"
-    )
-    return synchronize
-
-
-def _npu_guard_scope() -> str:
-    scope = os.getenv(_NPU_GUARD_SCOPE_ENV, "forward").strip().lower()
-    if scope not in _NPU_GUARD_SCOPES:
-        raise ValueError(
-            f"Unsupported {_NPU_GUARD_SCOPE_ENV}={scope!r}; expected one of "
-            f"{sorted(_NPU_GUARD_SCOPES)}"
-        )
-    return scope
-
-
-@contextmanager
-def _hold_graph_execution_guard(
-    guard: FairDeviceExecutionGuard,
-    phase: str,
-):
-    with guard.hold(label=f"generation_{phase}_graph"):
-        yield
-
-
-@contextmanager
-def _hold_model_execution_guard(
-    guard: FairDeviceExecutionGuard,
-    phase: str,
-):
-    with guard.hold(label=f"generation_{phase}_model"):
-        yield
-
 
 class Qwen3ASREngineBuilder(AsrEngineBuilder):
     model_name = "Qwen3-ASR"
@@ -170,8 +109,6 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
         self.model_path: str | None = None
         self.audio_encoder_service: Any = None
         self._should_wait_for_encode: Callable[[], bool] | None = None
-        self._device_execution_guard: FairDeviceExecutionGuard | None = None
-        self._device_execution_guard_scope = "forward"
 
     def pre_infra_setup(self, checkpoint_dir: str) -> None:
         self.model_path = checkpoint_dir
@@ -277,55 +214,6 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
         *,
         generation_cuda_graph_enabled: bool,
     ) -> None:
-        audio_tower = getattr(model, "audio_tower", None)
-        reference = next(audio_tower.parameters()) if audio_tower is not None else None
-        guard_required = (
-            reference is not None
-            and reference.device.type == "npu"
-            and generation_cuda_graph_enabled
-            and self.enable_pre_lm_encoder
-        )
-        self._device_execution_guard = None
-        if guard_required:
-            self._device_execution_guard_scope = _npu_guard_scope()
-            completion_fence = _npu_guard_completion_fence(reference)
-            if self._device_execution_guard_scope == "off":
-                if completion_fence is None:
-                    # Diagnostic arm: drop cross-thread device serialization
-                    # entirely so the encoder and generation submit device work
-                    # concurrently, as they do under CUDA. This discriminates
-                    # whether the guard is load-bearing or only orders two
-                    # device producers that stream events could order instead.
-                    logger.warning(
-                        "Qwen3-ASR NPU execution guard disabled; encoder and "
-                        "generation submit device work concurrently "
-                        "(diagnostic only)"
-                    )
-                else:
-                    # Barrier without mutual exclusion: the configuration that
-                    # tests whether a per-handoff synchronize can replace the
-                    # FIFO lock where the hazard actually occurs.
-                    logger.warning(
-                        "Qwen3-ASR NPU execution guard runs barrier-only; "
-                        "mutual exclusion is disabled and device work is "
-                        "synchronized before every handoff (diagnostic only)"
-                    )
-                    self._device_execution_guard = FairDeviceExecutionGuard(
-                        completion_fence=completion_fence, serialize=False
-                    )
-            else:
-                self._device_execution_guard = FairDeviceExecutionGuard(
-                    completion_fence=completion_fence
-                )
-        else:
-            self._device_execution_guard_scope = "forward"
-        if self._device_execution_guard_scope in {"graph", "model"}:
-            logger.warning(
-                "Qwen3-ASR NPU execution guard narrowed to %s execution; "
-                "this opt-in candidate requires hardware correctness and "
-                "performance qualification",
-                self._device_execution_guard_scope,
-            )
         self._log_memory_checkpoint("post_cuda_graph_capture")
         if self.enable_encoder_cuda_graph:
             from sglang_omni.models.qwen3_asr.audio_lengths import (
@@ -363,39 +251,12 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
                 cache_max_bytes=self.pre_lm_cache_size_bytes,
                 max_batch_size=self.pre_lm_max_batch_size,
                 max_batch_wait_ms=self.pre_lm_max_batch_wait_ms,
-                device_execution_guard=self._device_execution_guard,
             )
 
     def make_model_runner(self, model_worker: Any, output_proc: Any) -> Any:
         from sglang_omni.model_runner.base import ModelRunner
 
-        guard = getattr(self, "_device_execution_guard", None)
-        scope = getattr(self, "_device_execution_guard_scope", "forward")
-        runner_guard = guard
-        if guard is not None and scope in {"graph", "model"}:
-            sglang_runner = getattr(model_worker, "model_runner", None)
-            if sglang_runner is None:
-                raise RuntimeError(
-                    f"{scope}-scoped NPU execution guard requires the live SGLang "
-                    "model runner"
-                )
-            if scope == "graph":
-                sglang_runner._external_graph_execution_context_factory = (
-                    lambda phase: _hold_graph_execution_guard(guard, phase)
-                )
-            else:
-                sglang_runner._external_model_execution_context_factory = (
-                    lambda phase: _hold_model_execution_guard(guard, phase)
-                )
-            runner_guard = None
-        if guard is not None:
-            model_worker._device_execution_guard = guard
-            model_worker._device_execution_guard_scope = scope
-        return ModelRunner(
-            model_worker,
-            output_proc,
-            device_execution_guard=runner_guard,
-        )
+        return ModelRunner(model_worker, output_proc)
 
     def should_wait_for_encode(self) -> bool:
         return (
