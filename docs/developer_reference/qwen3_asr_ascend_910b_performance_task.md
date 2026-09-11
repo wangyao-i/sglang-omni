@@ -1676,6 +1676,71 @@ liveness has been measured. The run also left HBM at 63 percent, so the device
 was not returned to its idle baseline and that must be resolved before the next
 arm.
 
+### `910C-070`: can the private stream replace the guard?
+
+`910C-069` established that the hazard is the encoder sharing the generation's
+submission lane, and that moving the encoder to its own stream removes the hang
+while keeping all three host submitters running. That makes the private stream a
+candidate replacement for the guard rather than a CUDA-parity tidy-up, and the
+question this arm answers is whether it survives the shipping profile.
+`910C-069` measured liveness only, at the `910C-013` profile, with compile and
+the encoder graph disabled. Neither correctness nor performance at the
+accelerated profile has been measured with the private stream.
+
+Two arms, both at the M1c profile (`max_total_tokens=32768`,
+`mem_fraction_static=0.80`, compile buckets `[1,2,70]`, encoder, prefill and
+decode graphs enabled) and both with `SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=threaded`,
+which is the SGLang default and the configuration the guard exists for:
+
+- Arm A, the candidate: `SGLANG_OMNI_NPU_ENCODER_PRIVATE_STREAM=1` and
+  `SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=off`. Leave
+  `SGLANG_OMNI_NPU_ENCODER_BATCH_SYNC` unset.
+- Arm B, the retained reference: guard at its default `forward` scope with the
+  private-stream switch unset.
+
+Each arm runs one fresh process through the 140-request correctness workload,
+then three fresh processes each running one `exact10` C70 measurement with the
+packaged harness and its warm-up. Stop an arm at its first hang, timeout,
+accuracy failure, OOM, device error, or cleanup failure. Bounded forced cleanup
+is authorized as in `910C-065`. Compare only A against B on this session; do not
+compare against historical M1c numbers, which come from a different day and
+process lifecycle.
+
+Attest per arm: the private-stream warning line and `device_execution_guard: null`
+from model-info in arm A; a non-null `device_execution_guard` and the absence of
+that warning in arm B; code identity with
+`rg -n "SGLANG_OMNI_NPU_ENCODER_PRIVATE_STREAM" sglang_omni/models/qwen3_asr/encoder_service.py`;
+per-request WER and garbled counts for the correctness gate; p95, throughput and
+RetFx for each C70 repeat; and the graceful-shutdown and idle-baseline record.
+
+Predeclared interpretation:
+
+- Arm A passes the correctness gate in band with zero garbled output, and its
+  three C70 repeats are not materially worse than arm B's, means the private
+  stream is a viable replacement for the guard. The guard's justification then
+  becomes historical in the same sense ordered update made it historical: it was
+  the only repair available while the encoder shared the generation lane. The
+  follow-up is a real change rather than a switch, making the NPU stream
+  unconditional, resolving the allocator registration question below, and
+  restating both pull requests.
+- Arm A failing the correctness gate, in particular producing garbled output,
+  means the private stream is not sufficient at the accelerated profile and the
+  guard stays. It would also point at the encoder handoff rather than at device
+  scheduling, because the embedding is produced on one stream and consumed on
+  another.
+- Arm A passing correctness but measuring materially worse than arm B means the
+  private stream costs more than the guard buys and the guard stays.
+- A hang in either arm means the result contradicts `910C-069`; stop and report
+  rather than reading it either way.
+
+Two code-hygiene items must be closed before the private stream is proposed for
+shipping, independently of how this arm reads. The embedding consumer
+registration in `attach_embedding` is guarded by `hasattr` and would skip
+silently if `torch_npu` does not expose `record_stream` on tensors, which would
+leave the allocator side of a cross-stream handoff unverified. And the switch is
+an environment diagnostic, so shipping it means making the behaviour
+unconditional and removing the env gate rather than keeping a second switch.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 
