@@ -1474,6 +1474,80 @@ not by itself the cause, which is a correction to the reading that followed
 submitters rather than encoder device volume: `910C-024B` ran an encoder that
 submitted, serialized against generation by the guard, and passed.
 
+### `910C-068`: sample the hang while it is live
+
+The mechanism is established at the host-marker level: the forward thread waits
+at `update_thread_join` while the helper never returns from `graph.update()`.
+What is not established is what the helper is blocked *in*. Every hang arm so
+far force-cleaned the process, so no runtime or device log was ever captured at
+the moment of the stall. This arm reproduces `910C-065` and samples the live
+process before any cleanup.
+
+This is the only remaining path to a root cause below our own code, and it is
+what would make an upstream report to CANN or `torch_npu` credible rather than
+circumstantial. It is also the arm most at risk of not reproducing: host logging
+changes timing, and this profile is intermittent.
+
+Profile: identical to `910C-065`, that is the `910C-013` profile with
+`SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=threaded`,
+`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=off`, a cold encoder cache, and the
+encoder active. Do not carry the cache warm-up from `910C-067` into this arm.
+
+Step 0, before any new run: check whether plog from the `910C-065` or `910C-066`
+hangs is still on disk (`find "$HOME/ascend/log" -name "plog-*"`). If it is,
+record the paths and copy the tail; those runs then need no new hardware time.
+
+Before starting the service, prepare CANN host logging:
+
+- `ASCEND_GLOBAL_LOG_TO_FILE=1`, `ASCEND_GLOBAL_LOG_TO_STDOUT=0`,
+  `ASCEND_GLOBAL_LOG_LEVEL=1` (INFO). These are the three variables verified in
+  this environment. Do not set level 0 in this arm: the volume perturbs timing
+  and the hang is intermittent.
+- Logs land under `$HOME/ascend/log`. Locate the plog for the server pid by name
+  rather than assuming a fixed subdirectory, and record the path found.
+
+When the request gate stops making progress, treat that as the measurement
+rather than the end of the run. Then, in this order and inside a bounded
+ten-minute window:
+
+1. Do not kill the server. Record when progress stopped and the wall clock then.
+2. Capture the native backtrace of the hung process with
+   `gdb -p <server pid> -batch -ex "thread apply all bt"`. This is the primary
+   artifact: the Python frames identify `graph.update`, and the native frames
+   below them identify the call that is actually blocking. If `gdb` is not
+   installed, use `py-spy dump --pid <pid>` and record explicitly that native
+   frames are missing.
+3. Locate the plog for that pid, record its path, size, and last timestamp, and
+   copy the final 200 lines. A plog that stops at an API entry with no matching
+   return is itself the finding.
+4. Record `cat /proc/<pid>/task/*/wchan`, one `npu-smi info`, and one
+   `npu-smi info -t usages` snapshot.
+5. If `msnpureport` is present, run `msnpureport -h` first and use only the
+   syntax that version documents, recording the exact command. Do not guess
+   flags.
+6. Only after all of the above, perform the bounded forced cleanup authorized
+   in `910C-065` and return the same cleanup record.
+
+If an artifact cannot be collected inside the window, record that and continue
+with the rest instead of extending the window.
+
+Return, text only and redacted: the plog path and tail excerpt, the native
+backtrace excerpt around the blocking frames, the `/proc` wait channels, the
+device snapshots, whether the hang reproduced, and the cleanup record. Keep raw
+logs, core files, audio, and transcripts on the isolated server.
+
+Predeclared interpretation:
+
+- Native frames naming a blocking ACL or runtime call inside the graph update
+  path, with plog stopping at the matching entry, localize the stall to graph
+  input update and make the evidence upstream-fileable.
+- A wait channel or plog entry tied to another stream's outstanding work means
+  the multi-stream interaction is the mechanism rather than host-side locking.
+- Native frames that stop in process-local state with no device wait mean the
+  mechanism is a host-side interlock inside the graph backend.
+- No reproduction in this arm means the logging changed the timing. Record that
+  and do not raise the log level to retry inside this arm; the decision is local.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 
