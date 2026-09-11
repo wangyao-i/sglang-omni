@@ -1800,19 +1800,32 @@ guard, and the deletion touches real paths: `model_runner/base.py`,
 have to be re-attested on the new commits before the retirement is qualified.
 
 Run against the shipping candidate branches rather than the development tree:
-SGLang-Omni `qwen3-asr-ascend-full` at `fde7b34d` and SGLang
+SGLang-Omni `qwen3-asr-ascend-full` at `d58afeda` and SGLang
 `qwen3-asr-ascend-full` at `dfaf5e50c`. The development tree expressed the same
 fix through diagnostic switches and is superseded for this task; `910C-070` arm
 A was still a switch, so only a run on these heads qualifies the retirement.
+The SGLang-Omni candidate was subsequently squashed to one commit on top of
+`origin/main` and now touches one file, `encoder_service.py` (+14/-4). Its Ascend
+encoder layer-stack graph was removed rather than shipped unreachable:
+`init_encoder_graphs()` asks the platform for a device graph backend, and
+`sglang_omni/platforms` implements one for CUDA and XPU only, so that captured
+path never executed here. The encoder layer stack is therefore eager on this
+candidate, and no `captured encoder layer-stack graph` line may appear in
+`server.log`.
 The sparse compile-bucket selection (`torch_compile_bs`) was reverted out of
 both candidates and deferred to performance work, so the profile below expresses
 compile coverage the upstream way, through `torch_compile_max_bs`.
 Attest the deletion itself before starting: from the
 repository root, `rg -n "execution_guard" sglang_omni` and
 `rg -n "SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE|SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE" sglang_omni tests`
-must both return nothing, and `rg -n "SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE" python`
-must return nothing in the SGLang checkout. The guard switches no longer exist,
-so nothing about them is set.
+must both return nothing, `rg -n
+"SGLANG_OMNI_NPU_ENCODER_PRIVATE_STREAM|SGLANG_OMNI_NPU_ENCODER_BATCH_SYNC" sglang_omni tests`
+must return nothing because the private stream is unconditional rather than
+switched, and `rg -n "SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE" python` must return
+nothing in the SGLang checkout. The guard switches no longer exist, so nothing
+about them is set. Attest the candidate's shape as well: `git diff origin/main
+--stat` reports one file and `git log --oneline origin/main..HEAD` reports one
+commit.
 
 Three phases, in this order:
 
@@ -1852,9 +1865,12 @@ Predeclared interpretation:
 - Correctness failure, especially garbled output, points at the cross-stream
   embedding handoff rather than at device scheduling, and also blocks the
   retirement.
-- A material performance regression against the `910C-054` A1 baseline means the
-  deletion disturbed more than the guard, and the run must be diagnosed before
-  any reference number is published.
+- A material performance regression against the `910C-054` A1 baseline must be
+  read with the encoder graph in mind: `910C-054` A1 ran with an encoder graph
+  this candidate cannot build, so some regression against that baseline is
+  expected and is not by itself evidence that the deletion disturbed more than
+  the guard. Phase 3 is the new reference measurement for this candidate;
+  diagnose an unexpected magnitude before publishing any number.
 
 The three phases run directly on those candidate branches, so the result is
 measured on the code that ships rather than on a development tree. That is not a
@@ -1876,10 +1892,11 @@ performance decision rather than a correctness fix; `910C-070` arm A and the
 `910C-056` M1c measurement both relied on it, so their performance numbers are
 not reproducible on these heads and are not the comparison target here.
 That removes the readback this project used to prove "the encoder graph replayed
-and nothing fell back to eager", so phase 1 and 3 must attest it from the
-encoder's own capture log line plus the upstream `Decode graph replay:` record
-under `SGLANG_LOG_DECODE_GRAPH_KEY`, and say plainly that the counter channel no
-longer exists.
+and nothing fell back to eager", and on this candidate there is no encoder graph
+to attest to. Phase 1 and 3 must instead confirm that no `captured encoder
+layer-stack graph` line appears, that the decode graph still reports through the
+upstream `Decode graph replay:` record under `SGLANG_LOG_DECODE_GRAPH_KEY`, and
+state plainly that the counter channel no longer exists.
 
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
