@@ -1840,6 +1840,19 @@ Predeclared interpretation:
   disturbed more than the guard, and the run must be diagnosed before any
   reference number is published.
 
+Once the three phases pass on those commits, repeat them on the candidate
+branches that will actually be published, `qwen3-asr-ascend-full` in both
+repositories, before either pull request is announced. That is not a formality:
+the candidate branches sit on a newer upstream base, so the code around these
+paths differs even though the guard deletion and the encoder stream change are
+the same. The SGLang candidate branch never carried ordered input update or the
+integrator guard hooks, and the omni candidate branch now matches the
+development tree on these paths, with the guard removed and the encoder's
+private stream unconditional. Record both candidate heads in the result, along
+with the same three self-attestations: no `execution_guard` reference anywhere
+under `sglang_omni`, no guard scope or fence environment variable, and no
+`SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE` in the SGLang checkout.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 
