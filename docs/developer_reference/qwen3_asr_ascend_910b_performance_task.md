@@ -1576,6 +1576,63 @@ Three qualifications travel with that result:
 The cleanup left a residual holder from an earlier experiment taking about
 9.6 GiB. Confirm the device is back at its idle baseline before the next arm.
 
+### `910C-069`: is the shared submission stream the mechanism?
+
+On CUDA the encoder owns a private stream; on NPU it does not, because
+`encoder_service.py` creates that stream only when `device.type == "cuda"`. The
+consequence is that encoder kernels, `graph.replay()` and `graph.update()` all
+submit to the same default stream, and the GPU layout never does. Nothing in the
+NPU graph runner or backend switches streams, so every submission in the failing
+profile is queued on one lane.
+
+Sharing a lane cannot produce a data race; a shared lane is FIFO ordered, which
+is the safer arrangement. What sharing does is let the host run far ahead of the
+device: at the `910C-013` profile the shared lane carries roughly thirteen
+seconds of encoder work per gate, against 0.53 seconds with the encoder silent
+in `910C-067`. If the graph update's event ordering assumes the host does not
+outrun the device, that is the precondition it violates.
+
+Two diagnostic switches exist locally for this arm and neither ships:
+
+- `SGLANG_OMNI_NPU_ENCODER_PRIVATE_STREAM=1` gives the NPU encoder the private
+  stream CUDA already has. This is more than one change: `synchronize_batch()`
+  stops being a no-op and the embedding handoff registers its consumer, which is
+  the CUDA handoff contract.
+- `SGLANG_OMNI_NPU_ENCODER_BATCH_SYNC=1` leaves the encoder on the shared
+  default stream and blocks the worker until that stream drains after every
+  batch. This is the host-throttle control, and it is what makes the private
+  stream arm interpretable: it holds the "host does not run ahead" property
+  constant while the stream layout changes.
+
+Setting both selects the private-stream arm and logs that the fence was ignored.
+
+Run both arms at the `910C-013` profile with
+`SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=threaded`,
+`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=off`, and a cold encoder cache, so the
+encoder is active. Run the explicit cold concurrency-8 gate in fresh processes,
+stop an arm at its first hang, and treat three completed gates as live. Bounded
+forced cleanup is authorized exactly as in `910C-065`.
+
+Attest, per arm, the matching warning line from the startup log, plus code
+identity with
+`rg -n "SGLANG_OMNI_NPU_ENCODER_PRIVATE_STREAM|SGLANG_OMNI_NPU_ENCODER_BATCH_SYNC" sglang_omni/models/qwen3_asr/encoder_service.py`.
+
+Predeclared interpretation, a two-by-two over the arms:
+
+| shared stream + batch fence | private stream | reading |
+|---|---|---|
+| live | live | Stream sharing is not the mechanism and keeping the host from running ahead is sufficient, which matches the guard result in `910C-024B`. Close the stream question without a code change. |
+| hang | hang | Neither throttling nor stream separation addresses it, so the hazard sits below the host submission layer, consistent with the never-signalled completion in `910C-068`. Close the stream question as well. |
+| hang | live | Stream sharing is the mechanism and the CUDA-parity layout removes it. That is a real defect with a real fix, and it still needs its own validation before it is proposed for shipping. |
+| live | hang | Not expected; report it and stop. The arm is not interpretable and must not be read as either outcome above. |
+
+No outcome here authorises shipping either switch, and no outcome changes the
+retained decision: the guard stays unconditional and ordered input update
+remains the only mechanism that removes the third concurrent submitter. A "live"
+result for the private-stream arm would additionally need the allocator
+registration and the per-batch synchronize to be examined on their own, because
+that arm changes three things at once.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 
