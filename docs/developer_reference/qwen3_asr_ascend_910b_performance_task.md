@@ -1741,6 +1741,27 @@ leave the allocator side of a cross-stream handoff unverified. And the switch is
 an environment diagnostic, so shipping it means making the behaviour
 unconditional and removing the env gate rather than keeping a second switch.
 
+`910C-070` then ran and arm A won on both axes. Both arms passed the correctness
+gate at WER 0.0179 with zero garbled output. Arm A's three C70 repeats measured
+p95 1.350-1.474 seconds at 59.65-62.88 requests per second against arm B's
+1.543-1.705 seconds at 52.52-55.54, so the private stream is not a liveness
+repair that costs throughput: it is faster than the guard it replaces, which is
+what removing a shared-lane serialization should look like. Arm A attested the
+private-stream warning and a null `device_execution_guard`; arm B attested a
+non-null guard and no such warning. Both hygiene items closed on the box:
+`torch_npu` does expose `record_stream`, so the cross-stream handoff registers
+its consumer rather than skipping, and what remains is deleting the switch
+rather than promoting it.
+
+The retained decision therefore changes. The guard is no longer the shipping
+repair for this hazard; the NPU private stream is, and it is strictly better on
+the measurement. The guard's justification becomes historical in the same sense
+ordered input update made it historical: it was the only repair available while
+the encoder shared the generation lane. What follows is a real change rather
+than a switch: make the NPU stream unconditional, delete the environment gate,
+and restate both pull requests so the omni change reads as a stream fix rather
+than a mutex.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 
