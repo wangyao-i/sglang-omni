@@ -1800,7 +1800,7 @@ guard, and the deletion touches real paths: `model_runner/base.py`,
 have to be re-attested on the new commits before the retirement is qualified.
 
 Run against the shipping candidate branches rather than the development tree:
-SGLang-Omni `qwen3-asr-ascend-full` at `53547ee0` and SGLang
+SGLang-Omni `qwen3-asr-ascend-full` at `a57813fb` and SGLang
 `qwen3-asr-ascend-full` at `3b83d8ddb`. The development tree expressed the same
 fix through diagnostic switches and is superseded for this task; `910C-070` arm
 A was still a switch, so only a run on these heads qualifies the retirement.
