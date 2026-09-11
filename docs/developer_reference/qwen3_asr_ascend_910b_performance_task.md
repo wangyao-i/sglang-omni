@@ -1633,6 +1633,49 @@ result for the private-stream arm would additionally need the allocator
 registration and the per-batch synchronize to be examined on their own, because
 that arm changes three things at once.
 
+`910C-069` then ran and landed on the third row of that table: arm P hung at
+Gate 1, and arm Q completed three gates. Both arms attested their warning line.
+The prediction recorded here before the run was that arm P would be live, on the
+reading that a per-batch drain is a strong serialization comparable to the
+guard; that prediction was wrong, and the reason is worth keeping.
+`current_stream().synchronize()` blocks the encoder worker only *after* a batch,
+so the encoder still submits concurrently with the generator's replay and update
+inside every batch. P therefore never removes the concurrency that the guard
+removes; it adds a drain to a hazard that has already been entered. Arm Q, by
+contrast, keeps the same concurrency and changes only which queue the encoder's
+work occupies, and it is live.
+
+That makes the mechanism statement sharper, and it also corrects the earlier
+wording. Two concurrent host submitters on one stream are safe: `910C-067`
+removed the encoder and the threaded `replay()` plus `graph.update()` pair stayed
+live. Three submitters on one stream hang: `910C-065`, `910C-066` and arm P, each
+with the encoder active and sharing that stream. Moving the encoder off the
+shared stream while keeping all three submitters running removes the hang: arm
+Q. So the encoder is the third submitter, and the shared submission lane is what
+makes the third one fatal. The plausible reason is the one already recorded
+above, that `torch_npu`'s graph update orders itself against the caller's stream
+through its own update stream and events, and a third producer on that stream
+can invert that ordering; this run did not capture a device-side log, so that
+stays an explanation rather than a proof.
+
+Two consequences follow, and neither is yet a shipping decision.
+
+- The whole handoff-barrier family is now closed with evidence from two
+  directions: a full-device fence at hold exit (`910C-066`) and a per-batch
+  stream drain (arm P) both leave the hang in place.
+- The private stream is no longer only a CUDA-parity tidy-up. It is a candidate
+  replacement for the guard itself, because it removes the hazard while keeping
+  the encoder and generation overlapping. Validating that is the next arm, and
+  it must cover correctness at the accelerated profile, not just liveness at
+  the `910C-013` profile.
+
+The `SGLANG_OMNI_NPU_ENCODER_PRIVATE_STREAM` switch as it stands is still not
+shippable: it changes three things at once (the stream, an active
+`synchronize_batch()`, and the embedding consumer registration), and only
+liveness has been measured. The run also left HBM at 63 percent, so the device
+was not returned to its idle baseline and that must be resolved before the next
+arm.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 
