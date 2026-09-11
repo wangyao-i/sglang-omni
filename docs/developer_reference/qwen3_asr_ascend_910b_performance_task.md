@@ -1347,39 +1347,52 @@ hung; it would prove nothing. The test bench must be the hanging configuration:
 threaded update with no mutex. Gate 1 of `910C-065` hangs reliably enough to
 serve as that bench.
 
-This requires one local change before the hardware run: the current completion
-fence is a constructor argument of the guard, and `scope=off` nulls the guard,
-so "no mutex, but synchronize at each handoff" is not expressible today. Extend
-the `off` scope so that, when `SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE` is
-enabled, the encoder and generation submissions still perform a barrier while
-the ticket lock stays disabled. Use `torch.npu.current_stream().synchronize()`
-at each handoff, mirroring `vllm-ascend` PR `#6432`, not the full-device
-`device_module.synchronize()` that the existing fence uses; the two differ by an
-order of magnitude in cost.
+The barrier-only mode this arm needs already exists: `scope=off` together with
+`SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE` builds a `FairDeviceExecutionGuard`
+with `serialize=False`, so callers never wait for each other while the
+completion fence still runs at every handoff and the per-label statistics stay
+empty by construction. That fence is the existing full-device
+`device_module.synchronize()`.
 
-Then run the `910C-013` profile from `910C-064` with
+Run the strong barrier first, as a falsification step rather than the full
+ladder. A handoff fence cannot order the two calls that actually race: the fence
+runs when `hold()` exits, while `graph.update()` and `graph.replay()` are issued
+concurrently *inside* one generation hold, because the `forward` scope's
+`hold()` wraps `forward_batch_generation`, which starts and joins the update
+helper. A full-device synchronize at the handoff is a strict superset of the
+narrow `torch.npu.current_stream().synchronize()` in `vllm-ascend` PR `#6432`,
+so if the strong barrier leaves the hang in place then the narrow one cannot
+repair it either, and no narrow-fence implementation is warranted.
+
+So run one fresh process at the `910C-013` profile with
 `SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=threaded`,
-`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=off`, and the barrier enabled: three
-fresh processes each executing the explicit cold concurrency-8 gate, then, only
-if all three complete, one fourth process through the 140-request correctness
-workload and one 700-request exact10 C70 measurement. Attest from startup logs
-and model-info that the mutex is disabled, the barrier is enabled, and the
-per-label guard statistics are empty.
+`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=off`, and the fence enabled, executing
+the explicit cold concurrency-8 gate once. Attest from the startup logs and
+model-info that the mutex is disabled, the barrier is enabled, and the
+per-label guard statistics are empty. Bounded forced cleanup is authorized
+exactly as in `910C-065`, with the same cleanup record required.
+
+Only if that single gate completes, extend to the full ladder: three fresh
+processes each executing the gate as their own explicit step, then one fourth
+process through the 140-request correctness workload and one 700-request
+exact10 C70 measurement.
 
 Bounded forced cleanup is authorized exactly as in `910C-065`, and the same
 cleanup record is required.
 
 Predeclared interpretation:
 
-- All three gates and the fourth process completing means the barrier
-  suppresses the known mechanism, so it is a valid substitute for the mutex
-  rather than unfalsifiable insurance. The choice between shipping ordered
-  alone and shipping ordered plus a barrier then reduces to its measured cost
-  against the `910C-064` guard-off reference.
-- Any gate or the fourth process hanging means the barrier does not address the
-  mechanism and cannot be justified as insurance. The mutex remains the only
-  proven serialization, and the decision becomes ordered alone (`910C-064`
-  evidence) versus ordered plus the mutex.
+- The single strong-barrier gate hanging means the barrier does not address the
+  mechanism and cannot be justified as insurance, and the narrow-fence variant
+  is closed without an implementation. The mutex remains the only proven
+  serialization, and the decision becomes ordered alone (`910C-064` evidence)
+  versus ordered plus the mutex.
+- The single gate completing, and then all three gates plus the fourth process
+  completing, means the barrier suppresses the known mechanism even though it
+  cannot order the racing pair, which points at device-wide serialization
+  rather than at handoff ordering. That reading authorizes implementing the
+  narrow fence and measuring its cost against the `910C-064` guard-off
+  reference; it does not authorize shipping the full-device fence.
 
 Neither outcome authorizes shipping the `off` scope.
 
@@ -1389,6 +1402,46 @@ ordered-input-update commit a hard prerequisite. No guard together with the
 threaded update path is exactly the configuration that hangs in `910C-013` and
 `910C-065`. If the SGLang change has not landed, the guard must remain;
 otherwise the default combined state is the hanging one.
+
+No server source, test, dependency, benchmark, configuration policy, or
+documentation edit is authorized.
+
+### `910C-067`: is the encoder a necessary participant in the hang?
+
+`910C-065` hung with the encoder submitting, and the confirmed mechanism names
+the encoder as the third concurrent host submitter, but no arm has ever run the
+hanging configuration with the encoder silent. That attribution is therefore an
+inference, not a controlled result. This arm removes the encoder's device
+submissions without changing the code path that produces them.
+
+Keep the `910C-013` profile exactly as `910C-064` ran it, with
+`SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=threaded` and
+`SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=off`. In each fresh process, first drive
+the 70 pinned inputs once at concurrency 1 so the encoder stage cache is
+populated, then run the explicit cold concurrency-8 gate over the same 70
+inputs. Cache keys are `namespace:audio_fingerprint`, so the second pass
+attaches cached embeddings and `submit_item` never queues encoder work.
+
+Run three fresh processes, each performing its own warm pass followed by its own
+gate, with graceful shutdown and an idle baseline between them. Bounded forced
+cleanup is authorized exactly as in `910C-065`.
+
+Each process must attest from the encoder diagnostics that zero encoder batches
+were started during its gate phase; a process whose gate phase shows any encoder
+batch is invalid and does not count toward the three. Report the warm pass
+separately from the gate; if the warm pass itself hangs, that is that process's
+result and the profile is not established.
+
+Predeclared interpretation:
+
+- All three gates completing means the encoder's device submissions are
+  necessary for the hang. The mechanism statement then stands as written, and
+  the mitigation must keep excluding the encoder from concurrent submission for
+  as long as the threaded update helper exists.
+- Any gate hanging with zero encoder batches means the encoder is not a
+  necessary participant and the encoder-versus-decode-graph attribution is
+  withdrawn: the threaded path's own update helper is sufficient on its own, and
+  no encoder-side repair can address the hazard.
 
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
