@@ -1228,6 +1228,96 @@ Predeclared interpretation:
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 
+`910C-064` then ran and passed. Three independent cold concurrency-8 gates at
+the `910C-013` profile, each in its own fresh process with no guard installed,
+completed 70/70 with zero failures and zero timeouts at p95 13.26-14.87 seconds
+and 3.6-3.9 requests/s. The fourth fresh process completed the 140-request
+correctness workload at WER `0.0179`, then 700/700 at C70 with WER `0.0162`,
+p95 1.716 seconds, and 50.5 requests/s. Every process emitted the guard-disabled
+warning, model-info attested that no guard was installed, the per-label guard
+statistics were empty, and shutdown left the port free with HBM at baseline.
+
+Together with `910C-063` that is four fresh processes across two profiles with
+no hang: the trigger that hung `910C-013` does not reproduce on this stack.
+
+One variable nevertheless separates `910C-064` from `910C-013`. `910C-013`
+predates ordered input update, so it ran the threaded path, in which the decode
+graph itself submits from two host threads: `replay()` on the forward thread and
+`graph.update()` on a helper thread. Adding the encoder thread makes three
+concurrent host submitters; ordered mode removes the helper and leaves two. That
+is consistent with `910C-020`, where `graph_update_begin` never returned,
+`replay_begin`/`replay_return` were complete, and the main thread was parked at
+`update_thread_join`. The earlier attribution named encoder-versus-decode graph
+stream interaction; the sharper form is that the threaded path's own update
+helper was a third concurrent submitter.
+
+So `910C-064` does not show the guard is unnecessary. It shows the guard is
+unnecessary *while ordered mode is in force*, which is a different claim and one
+that would let the pull request ship ordered mode without the guard.
+
+### `910C-065`: guard-off liveness under the threaded update path
+
+This is the counterfactual that explains the original hang. It changes exactly
+one variable from `910C-064`: the graph input-update mode.
+
+Use exactly SGLang `e4d18390a` and the SGLang-Omni commit containing this
+section, with `SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE=threaded` (or unset, which is
+equivalent) and `SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE=off`. Attest the
+guard-disabled warning and, from model-info, that no guard is installed.
+
+Keep the `910C-013` profile fixed exactly as `910C-064` ran it: compile
+disabled, encoder graph disabled, prefill graph disabled, decode graph captured
+through bucket 70, eight request-build workers, the pinned 70-input selection,
+concurrency 8 with no warm-up, and a 120-second request timeout.
+
+Run three fresh service processes, each executing the cold concurrency-8 gate as
+its own explicit step over the 70 distinct requests, closed-loop. Only if all
+three gates complete, run a fourth fresh process through the 140-request
+correctness workload and one 700-request exact10 C70 measurement.
+
+The predeclared hypothesis is that this arm hangs. A hang is the result here,
+not a fault. Because a hung service may not stop gracefully, this task
+explicitly authorizes bounded forced cleanup: after the request timeout plus a
+bounded grace period, stop the service, and if it does not exit, terminate it,
+then report residual HBM occupancy per chip, whether any holder remains and
+whether it is a user-space process, the port state, and the exact cleanup
+sequence used. Do not leave a retained driver context unreported, and do not
+start the next process until the device is back at its idle baseline or the
+residual state is explicitly recorded.
+
+Stop on the first request that does not complete within its timeout, 90 seconds
+without a completion, accuracy or output failure, OOM, device error, state leak,
+orphan, or cleanup failure. Do not retry with the guard re-enabled, with ordered
+mode, or with any other scope, token cap, bucket set, memory fraction, compile
+setting, or graph setting.
+
+Return, per process: the graph input-update mode attestation, the guard-disabled
+attestation, completion and timeout counts, wall clock, the poller state at the
+last snapshot, whether any `update_thread_*` or `ordered_*` marker appeared,
+encoder batch and queue-wait timing, and the cleanup record described above.
+
+Predeclared interpretation:
+
+- A hang in any gate, or in the fourth process, confirms the mechanism: under
+  the threaded path the decode graph's own update helper is a third concurrent
+  host submitter, and adding the encoder thread is what hung `910C-013`. Ordered
+  mode removes that helper, so the guard becomes redundant once ordered update
+  is adopted and the accelerated candidate can ship ordered update without the
+  guard. Record that the guard's original justification is superseded rather
+  than wrong.
+- Three clean gates plus a clean C70 mean the hazard is not the threaded
+  helper. Liveness then requires neither the guard nor ordered mode, the guard's
+  necessity is purely historical, and the decision reduces to whether to keep a
+  cheap barrier as insurance. In that case the next task is the narrow-barrier
+  variant mirroring `vllm-ascend` PR `#6432`, not the `off` switch.
+
+Either way the `off` scope is not shipped: if the guard is retained it stays
+unconditional, and if it is dropped it is deleted rather than exposed as a
+switch.
+
+No server source, test, dependency, benchmark, configuration policy, or
+documentation edit is authorized.
+
 ## Public regression run
 
 Prepare the pinned SeedTTS dataset and run the existing benchmark separately.
