@@ -1800,8 +1800,8 @@ guard, and the deletion touches real paths: `model_runner/base.py`,
 have to be re-attested on the new commits before the retirement is qualified.
 
 Run against the shipping candidate branches rather than the development tree:
-SGLang-Omni `qwen3-asr-ascend-full` at `a57813fb` and SGLang
-`qwen3-asr-ascend-full` at `3b83d8ddb`. The development tree expressed the same
+SGLang-Omni `qwen3-asr-ascend-full` at `d190f77e` and SGLang
+`qwen3-asr-ascend-full` at `f5e03d441`. The development tree expressed the same
 fix through diagnostic switches and is superseded for this task; `910C-070` arm
 A was still a switch, so only a run on these heads qualifies the retirement.
 Attest the deletion itself before starting: from the
@@ -1855,6 +1855,15 @@ private stream unconditional. Record both candidate heads in the result, along
 with the same three self-attestations: no `execution_guard` reference anywhere
 under `sglang_omni`, no guard scope or fence environment variable, and no
 `SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE` in the SGLang checkout.
+
+Both candidate branches were then cut back to the behaviour changes: the
+decode-graph stage logging, the process-scoped compile diagnostics, the prefill
+capture-only gate and the encoder graph counters/`model_info` payload are gone.
+That removes the readback this project used to prove "the encoder graph replayed
+and nothing fell back to eager", so phase 1 and 3 must attest it from the
+encoder's own capture log line plus the upstream `Decode graph replay:` record
+under `SGLANG_LOG_DECODE_GRAPH_KEY`, and say plainly that the counter channel no
+longer exists.
 
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
