@@ -47,11 +47,14 @@ Torch Compile, and NPU encoder stream isolation together.
 | RTFx | 597-629 |
 | WER | 0.0179 at the 140-request correctness gate |
 | Garbled outputs | 0 |
-| Runtime configuration | `max_total_tokens=32768`, `mem_fraction_static=0.80`, `torch_compile_bs=[1,2,70]` |
+| Runtime configuration | `max_total_tokens=32768`, `mem_fraction_static=0.80`, compile coverage selected with `torch_compile_max_bs` |
 
 These values are the `910C-070` arm A measurements, taken over three fresh
-processes. See the reference note under remaining engineering work for their
-provenance and for the re-measurement that follows the guard removal.
+processes. Their compile coverage came from a development-only sparse bucket
+selector that is not part of the shipped branches; the shipped configuration
+selects coverage with `torch_compile_max_bs`. See the reference note under
+remaining engineering work for their provenance and for the re-measurement that
+follows the guard removal.
 
 This is a development reference rather than a portable performance promise.
 Results can vary with the model revision, CANN and torch-npu versions, hardware,
@@ -83,6 +86,9 @@ this roadmap will be refreshed with the final dependency and merge order.
 
 ### Performance optimization
 
+- choose which decode buckets to compile rather than compiling a prefix of the
+  captured set, so a memory-constrained card can cover the hot bucket without
+  paying for every smaller one;
 - reduce graph breaks and recompilations around the attention path;
 - reduce encoder queueing and long device critical sections;
 - improve prefill/decode admission and batch formation; and
@@ -92,10 +98,11 @@ this roadmap will be refreshed with the final dependency and merge order.
 The reference for the shipping configuration is the `910C-070` arm A band: p95
 1.350-1.474 s at 59.65-62.88 requests/s over three fresh processes, measured with
 the encoder on its own stream and no guard installed. It was taken on a
-development build that expressed the stream fix through a diagnostic switch, so
-this section will be refreshed by `910C-071` once the guard-free commits are
-qualified on hardware. The earlier 1.442 s / 59.88 requests/s reading, and the
-guarded band that replaced it as the anchor, are both superseded.
+development build that expressed both the stream fix and the compile coverage
+through switches, so this section will be refreshed by `910C-071`, which
+re-measures the shipped heads using the upstream compile-coverage knob. The
+earlier 1.442 s / 59.88 requests/s reading, and the guarded band that replaced it
+as the anchor, are both superseded.
 
 The gap to the challenge target, measured against the arm A band, is
 approximately 2.7-2.9x in p95 latency and 2.2-2.3x in throughput.

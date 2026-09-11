@@ -1800,10 +1800,13 @@ guard, and the deletion touches real paths: `model_runner/base.py`,
 have to be re-attested on the new commits before the retirement is qualified.
 
 Run against the shipping candidate branches rather than the development tree:
-SGLang-Omni `qwen3-asr-ascend-full` at `d190f77e` and SGLang
-`qwen3-asr-ascend-full` at `f5e03d441`. The development tree expressed the same
+SGLang-Omni `qwen3-asr-ascend-full` at `fde7b34d` and SGLang
+`qwen3-asr-ascend-full` at `dfaf5e50c`. The development tree expressed the same
 fix through diagnostic switches and is superseded for this task; `910C-070` arm
 A was still a switch, so only a run on these heads qualifies the retirement.
+The sparse compile-bucket selection (`torch_compile_bs`) was reverted out of
+both candidates and deferred to performance work, so the profile below expresses
+compile coverage the upstream way, through `torch_compile_max_bs`.
 Attest the deletion itself before starting: from the
 repository root, `rg -n "execution_guard" sglang_omni` and
 `rg -n "SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE|SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE" sglang_omni tests`
@@ -1819,9 +1822,16 @@ Three phases, in this order:
    load-bearing and where the private stream was first shown to hold.
 2. Correctness at the shipping profile: one fresh M1c process through the
    140-request workload, with `max_total_tokens=32768`,
-   `mem_fraction_static=0.80` and `torch_compile_bs=[1,2,70]`.
+   `mem_fraction_static=0.80` and `torch_compile_max_bs=2`, that is the upstream
+   prefix policy compiling `[1, 2]`. This reproduces the `910C-054` A1 profile,
+   which is the known-correct combined graph+compile configuration.
 3. Performance at the shipping profile: three fresh M1c processes, each running
    one `exact10` C70 measurement with the packaged harness and its warm-up.
+4. Exploratory, only after 1-3 pass and only if time remains: one fresh process
+   at the same profile with `torch_compile_max_bs=70`, which is the full prefix
+   and therefore every captured decode bucket. This is the coverage the removed
+   flag bought selectively; it is a data point for the follow-up, not a gate,
+   and an OOM or warm-up hang here does not fail phases 1-3.
 
 Stop at the first hang, timeout, accuracy failure, OOM, device error or cleanup
 failure, with bounded forced cleanup as in `910C-065`. That authorization
@@ -1830,19 +1840,21 @@ applies to phase 1 in particular, because it is the profile that used to hang.
 Predeclared interpretation:
 
 - Three live gates, correctness in band with zero garbled output, and three C70
-  repeats at or better than the `910C-070` arm A band (p95 within about
-  1.35-1.50 s and throughput at or above about 59 requests/s) qualify the
-  retirement. The roadmap's reference table can then be refreshed from this run,
-  because it is measured on the code that ships rather than through a diagnostic
-  switch.
+  repeats no worse than the `910C-054` A1 baseline (p95 about 5.98 s and about
+  35 requests/s at compile coverage `[1, 2]`) qualify the retirement. The
+  `910C-070` arm A band is not the target any more: arm A expressed its compile
+  coverage through the selector this task no longer ships, so its number is a
+  follow-up performance data point rather than a gate. The roadmap's reference
+  table can be refreshed from this run once it passes, because it is measured on
+  the code that ships rather than through a diagnostic switch.
 - Any hang means the retirement is not qualified. Restore the guard from
   history; do not reintroduce it as a switch and do not keep both mechanisms.
 - Correctness failure, especially garbled output, points at the cross-stream
   embedding handoff rather than at device scheduling, and also blocks the
   retirement.
-- A material performance regression against the arm A band means the deletion
-  disturbed more than the guard, and the run must be diagnosed before any
-  reference number is published.
+- A material performance regression against the `910C-054` A1 baseline means the
+  deletion disturbed more than the guard, and the run must be diagnosed before
+  any reference number is published.
 
 The three phases run directly on those candidate branches, so the result is
 measured on the code that ships rather than on a development tree. That is not a
@@ -1859,6 +1871,10 @@ under `sglang_omni`, no guard scope or fence environment variable, and no
 Both candidate branches were then cut back to the behaviour changes: the
 decode-graph stage logging, the process-scoped compile diagnostics, the prefill
 capture-only gate and the encoder graph counters/`model_info` payload are gone.
+The explicit compile-bucket list is gone as well, because selecting buckets is a
+performance decision rather than a correctness fix; `910C-070` arm A and the
+`910C-056` M1c measurement both relied on it, so their performance numbers are
+not reproducible on these heads and are not the comparison target here.
 That removes the readback this project used to prove "the encoder graph replayed
 and nothing fell back to eager", so phase 1 and 3 must attest it from the
 encoder's own capture log line plus the upstream `Decode graph replay:` record
