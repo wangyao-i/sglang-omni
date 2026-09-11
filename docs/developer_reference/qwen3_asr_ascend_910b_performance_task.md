@@ -1762,6 +1762,84 @@ than a switch: make the NPU stream unconditional, delete the environment gate,
 and restate both pull requests so the omni change reads as a stream fix rather
 than a mutex.
 
+### Retirement of the execution guard and of ordered input update
+
+`910C-069` localized the hazard to the submission lane the encoder shared with
+generation, and `910C-070` showed that giving the encoder its own stream removes
+the hang while measuring better than the guard: p95 1.350-1.474 s at 59.65-62.88
+requests/s against 1.543-1.705 s at 52.52-55.54. The guard is therefore retired
+rather than narrowed, and it is not replaced by any switch. It was the only
+repair available while the encoder shared the generation lane, and the lane fix
+supersedes it; the same reasoning retires ordered input update, which existed to
+remove the update helper as a third concurrent submitter and had never landed in
+the SGLang candidate either.
+
+Implemented on the development branches:
+
+- SGLang-Omni deletes `sglang_omni/utils/execution_guard.py`, the guard
+  construction and its scope and fence environment variables in
+  `models/qwen3_asr/engine_builder.py`, the holds in
+  `models/qwen3_asr/encoder_service.py` and `model_runner/base.py`, the
+  model-info reporting in `model_runner/model_worker.py`, and the guard tests.
+  The encoder's private stream becomes unconditional for CUDA and NPU.
+- SGLang reverts `e4d18390a` for ordered graph input updates and the two
+  integrator guard hooks `4db662590` and `b03400e5a`, which lose their only
+  consumer. `SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE` no longer exists.
+
+The pull requests change shape accordingly: the omni change is a stream-layout
+fix rather than a mutex, and the SGLang change no longer needs graph input
+update ordering.
+
+### `910C-071`: re-validate the guard-free implementation
+
+The guard-free configuration has never run on hardware. `910C-070` arm A
+expressed it through a diagnostic switch on top of a tree that still carried the
+guard, and the deletion touches real paths: `model_runner/base.py`,
+`engine_builder.py`, `encoder_service.py`, and the model-info payload, whose
+`device_execution_guard` key is gone. Liveness, correctness and performance all
+have to be re-attested on the new commits before the retirement is qualified.
+
+Use the Omni commit containing this section and SGLang `qwen3-asr-perf-next` at
+`675551408` or later. Attest the deletion itself before starting: from the
+repository root, `rg -n "execution_guard" sglang_omni` and
+`rg -n "SGLANG_OMNI_NPU_EXECUTION_GUARD_SCOPE|SGLANG_OMNI_NPU_GUARD_COMPLETION_FENCE" sglang_omni tests`
+must both return nothing, and `rg -n "SGLANG_NPU_GRAPH_INPUT_UPDATE_MODE" python`
+must return nothing in the SGLang checkout. The guard switches no longer exist,
+so nothing about them is set.
+
+Three phases, in this order:
+
+1. Liveness at the historical failure profile: the `910C-013` profile with the
+   encoder active and a cold cache, run as three fresh processes each executing
+   the explicit cold concurrency-8 gate. This is where the guard used to be
+   load-bearing and where the private stream was first shown to hold.
+2. Correctness at the shipping profile: one fresh M1c process through the
+   140-request workload, with `max_total_tokens=32768`,
+   `mem_fraction_static=0.80` and `torch_compile_bs=[1,2,70]`.
+3. Performance at the shipping profile: three fresh M1c processes, each running
+   one `exact10` C70 measurement with the packaged harness and its warm-up.
+
+Stop at the first hang, timeout, accuracy failure, OOM, device error or cleanup
+failure, with bounded forced cleanup as in `910C-065`. That authorization
+applies to phase 1 in particular, because it is the profile that used to hang.
+
+Predeclared interpretation:
+
+- Three live gates, correctness in band with zero garbled output, and three C70
+  repeats at or better than the `910C-070` arm A band (p95 within about
+  1.35-1.50 s and throughput at or above about 59 requests/s) qualify the
+  retirement. The roadmap's reference table can then be refreshed from this run,
+  because it is measured on the code that ships rather than through a diagnostic
+  switch.
+- Any hang means the retirement is not qualified. Restore the guard from
+  history; do not reintroduce it as a switch and do not keep both mechanisms.
+- Correctness failure, especially garbled output, points at the cross-stream
+  embedding handoff rather than at device scheduling, and also blocks the
+  retirement.
+- A material performance regression against the arm A band means the deletion
+  disturbed more than the guard, and the run must be diagnosed before any
+  reference number is published.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 

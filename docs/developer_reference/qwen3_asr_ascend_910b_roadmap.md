@@ -6,7 +6,7 @@ This project brings Qwen3-ASR inference to Ascend with the complete acceleration
 stack enabled together. It has three goals:
 
 1. support offline ASR with Encoder Graph, Prefill Graph, Decode Graph,
-   Torch Compile, and the NPU execution guard enabled together;
+   Torch Compile, and NPU encoder stream isolation enabled together;
 2. make the implementation reviewable and available through the SGLang and
    SGLang-Omni communities; and
 3. challenge an exact-10-second, concurrency-70 performance target of latency
@@ -27,27 +27,31 @@ support remains pending until the corresponding pull requests are merged.
 | Prefill Graph | Supported | Can run together with encoder and decode graphs. |
 | Decode Graph | Supported | Captured batch sizes through concurrency 70 have been exercised. |
 | Torch Compile | Supported | Can run with all graph paths while preserving ASR output quality. |
-| NPU execution guard | Supported | Prevents conflicting encoder and generation device work; the narrowest efficient scope is still being optimized. |
-| Fully accelerated offline stack | Supported in development | Encoder, prefill, decode graph, compile, and guard have passed combined correctness testing. |
+| NPU encoder stream isolation | Supported | The audio encoder submits on its own device stream, so it never shares the generation submission lane. Replaces the earlier cross-thread execution guard. |
+| Fully accelerated offline stack | Supported in development | Encoder, prefill and decode graph, compile, and stream isolation have passed combined correctness testing. |
 | Realtime/streaming ASR | Not implemented | A realtime protocol, incremental transcript contract, and streaming benchmark are still required. |
 
 ## Current fully accelerated reference result
 
 The current reference enables Encoder Graph, Prefill Graph, Decode Graph,
-Torch Compile, and the execution guard together.
+Torch Compile, and NPU encoder stream isolation together.
 
 | Item | Value |
 |---|---|
 | Hardware target | One Ascend 910B/910C-class card |
 | Model | Qwen3-ASR-1.7B, BF16 |
 | Workload | 700 distinct exact-10-second samples at concurrency 70 |
-| Successful requests | 700/700 |
-| Latency p95 | 1.442 s |
-| Throughput | 59.88 requests/s |
-| RTFx | 598.8 |
-| WER | 0.0164 |
+| Successful requests | 700/700 in every repeat |
+| Latency p95 | 1.35-1.47 s |
+| Throughput | 59.7-62.9 requests/s |
+| RTFx | 597-629 |
+| WER | 0.0179 at the 140-request correctness gate |
 | Garbled outputs | 0 |
 | Runtime configuration | `max_total_tokens=32768`, `mem_fraction_static=0.80`, `torch_compile_bs=[1,2,70]` |
+
+These values are the `910C-070` arm A measurements, taken over three fresh
+processes. See the reference note under remaining engineering work for their
+provenance and for the re-measurement that follows the guard removal.
 
 This is a development reference rather than a portable performance promise.
 Results can vary with the model revision, CANN and torch-npu versions, hardware,
@@ -61,8 +65,8 @@ after the branches are published.
 
 | Repository | Full-feature validation PR | Scope |
 |---|---|---|
-| SGLang | **TBD** | NPU graph execution, Torch Compile compatibility, sparse compile batches, and graph input update ordering. |
-| SGLang-Omni | **TBD** | Qwen3-ASR Encoder Graph, execution guard integration, configuration, runtime counters, and validation tooling. |
+| SGLang | **TBD** | NPU graph execution, Torch Compile compatibility, and sparse compile batches. |
+| SGLang-Omni | **TBD** | Qwen3-ASR Encoder Graph, NPU encoder stream isolation, configuration, runtime counters, and validation tooling. |
 
 These integration PRs are intended to make end-to-end validation available
 early. After the implementation is split into smaller community-ready PRs,
@@ -72,10 +76,10 @@ this roadmap will be refreshed with the final dependency and merge order.
 
 ### Runtime and graph integration
 
-- finalize NPU graph input update/replay ownership;
-- minimize the execution-guard critical section without reintroducing device
-  concurrency hangs; and
-- verify the final behavior across supported NPU graph runners.
+- verify the encoder's private-stream hand-off across supported NPU graph
+  runners and on the guard-free commits; and
+- keep the encoder and generation submission lanes separate as new device
+  producers are added.
 
 ### Performance optimization
 
@@ -85,14 +89,16 @@ this roadmap will be refreshed with the final dependency and merge order.
 - optimize device kernels only after profiling identifies a specific hot
   operator.
 
-The reproducible reference is the guarded `forward` scope measured over three
-fresh processes per arm: p95 1.539-1.765 s at 50.66-55.95 requests/s
-(`threaded`) and 1.559-1.739 s at 51.34-54.51 requests/s (`ordered`). The single
-1.442 s / 59.88 requests/s reading recorded earlier is not reproduced by any of
-those six runs and is no longer used as the anchor.
+The reference for the shipping configuration is the `910C-070` arm A band: p95
+1.350-1.474 s at 59.65-62.88 requests/s over three fresh processes, measured with
+the encoder on its own stream and no guard installed. It was taken on a
+development build that expressed the stream fix through a diagnostic switch, so
+this section will be refreshed by `910C-071` once the guard-free commits are
+qualified on hardware. The earlier 1.442 s / 59.88 requests/s reading, and the
+guarded band that replaced it as the anchor, are both superseded.
 
-The gap to the challenge target, measured against that reproducible reference,
-is approximately 3.3x in p95 latency and 2.6x in throughput.
+The gap to the challenge target, measured against the arm A band, is
+approximately 2.7-2.9x in p95 latency and 2.2-2.3x in throughput.
 
 ### Realtime ASR
 
