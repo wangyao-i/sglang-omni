@@ -62,6 +62,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
         pre_lm_max_batch_size: int = 8,
         pre_lm_max_batch_wait_ms: int = 0,
         enable_encoder_cuda_graph: bool = True,
+        npu_encoder_graph_signature_capacity: int | None = None,
         max_audio_clip_s: float | None = None,
     ) -> None:
         if pre_lm_max_batch_size < 1:
@@ -70,6 +71,14 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
             )
         if max_audio_clip_s is not None and max_audio_clip_s <= 0:
             raise ValueError(f"max_audio_clip_s must be > 0, got {max_audio_clip_s}")
+        if (
+            npu_encoder_graph_signature_capacity is not None
+            and npu_encoder_graph_signature_capacity < 1
+        ):
+            raise ValueError(
+                "npu_encoder_graph_signature_capacity must be >= 1, got "
+                f"{npu_encoder_graph_signature_capacity}"
+            )
         if pre_lm_max_batch_wait_ms < 0:
             raise ValueError(
                 f"pre_lm_max_batch_wait_ms must be >= 0, got {pre_lm_max_batch_wait_ms}"
@@ -101,6 +110,9 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
         self.pre_lm_max_batch_size = pre_lm_max_batch_size
         self.pre_lm_max_batch_wait_ms = pre_lm_max_batch_wait_ms
         self.enable_encoder_cuda_graph = enable_encoder_cuda_graph
+        self.npu_encoder_graph_signature_capacity = (
+            npu_encoder_graph_signature_capacity
+        )
         self.max_audio_clip_s = max_audio_clip_s
         self.tokenizer: Any = None
         self.feature_extractor: Any = None
@@ -349,6 +361,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
             model.init_encoder_graphs(
                 max_batch_size=self.pre_lm_max_batch_size,
                 max_tokens_per_clip=max_tokens_per_clip,
+                signature_capacity=self.npu_encoder_graph_signature_capacity,
             )
             self._log_memory_checkpoint("post_encoder_graph_capture")
         init_mm_embedding_cache(self.mm_embedding_cache_size_bytes)

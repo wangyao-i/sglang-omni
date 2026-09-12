@@ -134,15 +134,16 @@ def test_npu_capture_materializes_sequence_boundaries_on_host():
     assert cu_seqlens.tolist() == [0, 4, 7, 8]
 
 
-def test_npu_replay_uses_exact_signature_and_bounds_each_bucket():
+def test_npu_replay_reserves_signature_capacity_for_unseen_buckets():
     captured = []
     replayed = []
     runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
     runner._is_npu = True
     runner._max_seqlen = 8
+    runner._buckets = (8, 16)
     runner._failed = set()
     runner._graphs = {}
-    runner._npu_signature_capacity_per_bucket = 2
+    runner._npu_signature_capacity = 3
     runner._npu_signature_count_by_bucket = Counter()
     runner._fallback_counts = Counter()
     runner._reported_replays = set()
@@ -178,7 +179,7 @@ def test_npu_replay_uses_exact_signature_and_bounds_each_bucket():
     assert captured == [(8, (4, 4)), (8, (2, 2, 4))]
     assert len(replayed) == 3
 
-    # The bucket-local budget is exhausted, but another bucket still captures.
+    # A hot bucket cannot spend the slot reserved for the unseen bucket.
     assert runner.run(hidden_states, [1, 3]) is None
     assert captured == [(8, (4, 4)), (8, (2, 2, 4))]
     assert runner._failed == set()

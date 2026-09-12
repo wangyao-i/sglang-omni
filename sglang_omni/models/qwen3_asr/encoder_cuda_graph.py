@@ -81,6 +81,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         *,
         buckets: tuple[int, ...],
         max_batch_size: int,
+        signature_capacity: int | None = None,
         graph_backend: DeviceGraphBackend,
     ) -> None:
         self._tower = audio_tower
@@ -102,11 +103,20 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._graphs: dict[Hashable, _CapturedGraph] = {}
         self._failed: set[Hashable] = set()
         # Ascend attention consumes the window boundaries as host-side operator
-        # parameters. A graph therefore belongs to one exact window layout, not
-        # only to its token bucket. Give every bucket the configured encoder
-        # batch-size budget so one hot bucket cannot starve the rest. There is
-        # no eviction; an unseen layout stays eager after its bucket is full.
-        self._npu_signature_capacity_per_bucket = max_batch_size
+        # parameters, so a graph belongs to one exact window layout. Keep a
+        # bounded global registry, but reserve capacity for every unseen token
+        # bucket so a hot bucket cannot starve the rest. There is no eviction;
+        # signatures that cannot be admitted stay eager.
+        self._npu_signature_capacity = (
+            max_batch_size if signature_capacity is None else int(signature_capacity)
+        )
+        if self._npu_signature_capacity < 1:
+            raise ValueError("signature_capacity must be >= 1")
+        if self._is_npu and self._npu_signature_capacity < len(self._buckets):
+            raise ValueError(
+                "NPU encoder graph signature capacity must cover every bucket: "
+                f"{self._npu_signature_capacity} < {len(self._buckets)}"
+            )
         self._npu_signature_count_by_bucket: Counter[int] = Counter()
         self._fallback_counts: Counter[str] = Counter()
         self._reported_replays: set[Hashable] = set()
@@ -267,11 +277,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
 
         entry = self._graphs.get(graph_key)
         if entry is None:
-            if (
-                self._is_npu
-                and self._npu_signature_count_by_bucket[bucket_size]
-                >= self._npu_signature_capacity_per_bucket
-            ):
+            if self._is_npu and not self._npu_can_admit(bucket_size):
                 return self._fallback("npu_signature_capacity")
             try:
                 entry = self._capture(
@@ -316,6 +322,21 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         if out.dim() == 3:  # attention backends emit [1, tokens, dim]
             out = out.squeeze(0)
         return out[:total].clone()
+
+    def _npu_can_admit(self, bucket_size: int) -> bool:
+        """Reserve one graph slot for every bucket before admitting extras."""
+        next_total = len(self._graphs) + 1
+        if next_total > self._npu_signature_capacity:
+            return False
+        unseen = sum(
+            1
+            for bucket in self._buckets
+            if self._npu_signature_count_by_bucket[bucket] == 0
+        )
+        next_unseen = unseen - (
+            1 if self._npu_signature_count_by_bucket[bucket_size] == 0 else 0
+        )
+        return next_total + next_unseen <= self._npu_signature_capacity
 
     def _plan(self, total: int, real_windows: int) -> tuple[int, list[int]] | None:
         """Pick a bucket and the dummy-window sizes that absorb its padding."""
