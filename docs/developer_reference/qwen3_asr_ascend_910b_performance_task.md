@@ -1906,6 +1906,17 @@ layer-stack graph` line appears, that the decode graph still reports through the
 upstream `Decode graph replay:` record under `SGLANG_LOG_DECODE_GRAPH_KEY`, and
 state plainly that the counter channel no longer exists.
 
+**Result.** The server report passed all three phases on the task-pinned heads:
+3/3 cold concurrency-8 gates with zero failures and timeouts; a 140-request
+correctness gate at WER `0.0181` with zero garbled outputs; and 3/3 fresh-process
+C70 repeats at p95 `1.460-1.623` s and `58.47-59.16` requests/s. The result clears
+the predeclared `910C-054` A1 floor (`p95` about `5.98` s and about `35`
+requests/s) and therefore qualifies the guard retirement. The report did not
+restate the repository hashes, so the task-pinned identities remain
+`891a70626` / `d58afeda`. Later Omni review-helper commits `f89d565f` and
+`872e5502` are outside this result and require separate exact-head
+re-attestation if they become the shipping revision.
+
 No server source, test, dependency, benchmark, configuration policy, or
 documentation edit is authorized.
 

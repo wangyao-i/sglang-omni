@@ -42,19 +42,21 @@ Torch Compile, and NPU encoder stream isolation together.
 | Model | Qwen3-ASR-1.7B, BF16 |
 | Workload | 700 distinct exact-10-second samples at concurrency 70 |
 | Successful requests | 700/700 in every repeat |
-| Latency p95 | 1.35-1.47 s |
-| Throughput | 59.7-62.9 requests/s |
-| RTFx | 597-629 |
-| WER | 0.0179 at the 140-request correctness gate |
+| Latency p95 | 1.460-1.623 s |
+| Throughput | 58.47-59.16 requests/s |
+| RTFx | 585-592, derived from throughput |
+| WER | 0.0181 at the 140-request correctness gate |
 | Garbled outputs | 0 |
-| Runtime configuration | `max_total_tokens=32768`, `mem_fraction_static=0.80`, compile coverage selected with `torch_compile_max_bs` |
+| Runtime configuration | `max_total_tokens=32768`, `mem_fraction_static=0.80`, `torch_compile_max_bs=2` |
 
-These values are the `910C-070` arm A measurements, taken over three fresh
-processes. Their compile coverage came from a development-only sparse bucket
-selector that is not part of the shipped branches; the shipped configuration
-selects coverage with `torch_compile_max_bs`. See the reference note under
-remaining engineering work for their provenance and for the re-measurement that
-follows the guard removal.
+These values are the `910C-071` measurements on SGLang `891a70626` and Omni
+`d58afeda`, taken over three fresh processes. The run passed 3/3 cold
+concurrency-8 gates, the 140-request correctness gate at WER `0.0181` with zero
+garbled outputs, and 3/3 fresh-process C70 repeats. The earlier `910C-070` arm A
+band came from a development-only sparse bucket selector and is superseded as
+the reference. The Omni branch later advanced to `872e5502` for review-driven
+stream-helper changes; those commits are outside this exact-head performance
+record.
 
 This is a development reference rather than a portable performance promise.
 Results can vary with the model revision, CANN and torch-npu versions, hardware,
@@ -95,17 +97,17 @@ this roadmap will be refreshed with the final dependency and merge order.
 - optimize device kernels only after profiling identifies a specific hot
   operator.
 
-The reference for the shipping configuration is the `910C-070` arm A band: p95
-1.350-1.474 s at 59.65-62.88 requests/s over three fresh processes, measured with
-the encoder on its own stream and no guard installed. It was taken on a
-development build that expressed both the stream fix and the compile coverage
-through switches, so this section will be refreshed by `910C-071`, which
-re-measures SGLang `891a70626` and Omni `d58afeda` using the upstream
-compile-coverage knob. The earlier 1.442 s / 59.88 requests/s reading, and the
-guarded band that replaced it as the anchor, are both superseded.
+The reference for the shipping configuration is `910C-071`: p95 1.460-1.623 s at
+58.47-59.16 requests/s over three fresh processes, measured on SGLang
+`891a70626` and Omni `d58afeda` with `torch_compile_max_bs=2`. The earlier
+`910C-070` arm A band, the 1.442 s / 59.88 requests/s reading, and the guarded
+band that replaced it are all superseded. The Omni branch later advanced to
+`872e5502` for review-driven stream-helper changes; a separate exact-head
+re-attestation is required before treating that revision as the measured
+shipping head.
 
-The gap to the challenge target, measured against the arm A band, is
-approximately 2.7-2.9x in p95 latency and 2.2-2.3x in throughput.
+The gap to the challenge target, measured against the `910C-071` band, is
+approximately 2.9-3.2x in p95 latency and 2.37-2.39x in throughput.
 
 ### Realtime ASR
 
