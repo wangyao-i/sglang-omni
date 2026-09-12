@@ -108,7 +108,9 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         # bucket so a hot bucket cannot starve the rest. There is no eviction;
         # signatures that cannot be admitted stay eager.
         self._npu_signature_capacity = (
-            max_batch_size if signature_capacity is None else int(signature_capacity)
+            max(max_batch_size, len(self._buckets))
+            if signature_capacity is None
+            else int(signature_capacity)
         )
         if self._npu_signature_capacity < 1:
             raise ValueError("signature_capacity must be >= 1")
