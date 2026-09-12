@@ -103,9 +103,12 @@ Require the resolved configuration to show:
 - `disable_cuda_graph: false`;
 - encoder graph enabled.
 
-## Gate 1: Cold Concurrency-8 Liveness
+## Gate 1: Cold Concurrency-8 Liveness Repeats
 
-Start one fresh service:
+Run three independent repetitions. Each repetition must use a fresh service
+process and a separate log/result pair. Do not reuse a process after a failure.
+
+For repetition 1, start:
 
 ```bash
 cd "${OMNI_REPO}"
@@ -148,6 +151,10 @@ Require:
 - all three target graph paths positive;
 - zero encoder graph fallback markers.
 
+Repeat the same fresh-process sequence for repetitions 2 and 3, writing
+`server-2.log`, `liveness-conc8-2.json`, `server-3.log`, and
+`liveness-conc8-3.json`. All three repetitions must satisfy the same criteria.
+
 Stop at the first failure. Do not start Gate 2 from a polluted process.
 
 ## Gate 2: 140-Request Functional Correctness
@@ -179,7 +186,58 @@ Require:
 The corpus WER is recorded for investigation but is not the pass threshold for
 this functional gate.
 
-## Gate 3: Shutdown And Cleanup
+## Gate 3: Steady-State Graph Registry Soak
+
+This gate verifies that the NPU graph registry converges for the retained
+workload instead of continuously capturing new layouts. It is a functional and
+memory-stability gate, not a performance measurement.
+
+Stop the Gate 2 service and start one fresh service with the same exact command.
+First run one 140-request warm-up:
+
+```bash
+python -m benchmarks.eval.benchmark_asr_seedtts \
+  --host 127.0.0.1 --port "${PORT}" \
+  --model-path Qwen/Qwen3-ASR-1.7B \
+  --lang en --max-samples 140 \
+  --concurrencies 8 --repeats 1 \
+  --disable-resource-monitor \
+  --output "${EVIDENCE}/soak-warmup.json" \
+  --save-raw-dir "${EVIDENCE}/raw-soak-warmup"
+```
+
+After the warm-up, record the current count of encoder capture markers. Then
+run three consecutive 140-request soak passes:
+
+```bash
+python -m benchmarks.eval.benchmark_asr_seedtts \
+  --host 127.0.0.1 --port "${PORT}" \
+  --model-path Qwen/Qwen3-ASR-1.7B \
+  --lang en --max-samples 140 \
+  --concurrencies 8 --repeats 1 \
+  --disable-resource-monitor \
+  --output "${EVIDENCE}/soak-1.json" \
+  --save-raw-dir "${EVIDENCE}/raw-soak-1"
+```
+
+Repeat for `soak-2.json` and `soak-3.json`.
+
+Require after each soak pass:
+
+- `140/140` completed, zero failures, zero timeouts, zero empty hypotheses;
+- no new `[qwen3-asr] captured encoder layer-stack graph` line after the
+  warm-up;
+- zero `encoder graph eager fallback reason=` lines;
+- positive encoder, prefill, and decode replay evidence;
+- no ACL, ATB, allocator, stream, device, capture, or replay error;
+- service remains responsive between passes.
+
+HBM must not show monotonic growth across the three passes. Temporary
+capture-time growth is allowed, but the final pass must return to a stable band
+consistent with the post-warm-up baseline, within the platform's normal
+measurement noise.
+
+## Gate 4: Shutdown And Cleanup
 
 Stop the service normally and verify:
 
@@ -197,6 +255,7 @@ Stop at the first occurrence of:
 - `PagedAttentionOperation`, ATB, ACL, allocator, stream, device, or OOM error;
 - timeout, hang, missing or duplicate request result, or empty transcript;
 - any `encoder graph eager fallback reason=` line;
+- a new encoder capture after the Gate 3 warm-up;
 - garbled-output or request-accounting failure;
 - a Torch Compile marker;
 - cleanup failure.
@@ -228,10 +287,15 @@ Gate 1 wall clock:
 Gate 1 encoder capture/replay/fallback markers:
 Gate 1 prefill capture/replay/eager markers:
 Gate 1 decode capture/replay/eager markers:
+Gate 1 repetitions 1 / 2 / 3:
 Gate 2 evaluated / total / skipped:
 Gate 2 empty hypotheses / samples with WER > 0.5:
 Gate 2 corpus WER:
 Gate 2 graph markers and forbidden errors:
+Gate 3 warm-up and soak evaluated / total / skipped:
+Gate 3 new encoder captures after warm-up per pass:
+Gate 3 graph replay/fallback markers per pass:
+Gate 3 HBM baseline / pass 1 / pass 2 / pass 3:
 Shutdown and cleanup state:
 First complete failure and owning repository:
 Server-local artifacts retained:

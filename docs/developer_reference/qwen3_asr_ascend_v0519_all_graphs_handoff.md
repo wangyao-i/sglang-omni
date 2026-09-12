@@ -1,7 +1,7 @@
 # Qwen3-ASR Ascend v0.5.19 all-graph handoff
 
-Status: local implementation rebased onto merged #2084; isolated hardware
-Gate 0 pending.
+Status: local implementation rebased onto merged #2084; long-run isolated
+hardware task ready; Gate 0 pending.
 
 ## Objective
 
@@ -101,7 +101,10 @@ Required positive evidence:
 
 Use
 [`qwen3_asr_ascend_v0519_all_graphs_task.md`](qwen3_asr_ascend_v0519_all_graphs_task.md).
-Do not add another profile or run a performance measurement in this task.
+The task is a bounded unattended sequence: three fresh-process cold liveness
+repetitions, one 140-request correctness pass, one warm-up plus three
+steady-state soak passes, and shutdown cleanup. Do not add another profile or
+run a performance measurement.
 
 ## Required Return
 
