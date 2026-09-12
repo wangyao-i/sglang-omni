@@ -28,7 +28,7 @@ validation task.
 | SGLang | `0bcd822377da7b5718e674eaf9c870d349424dd1` (`v0.5.19`) | Clean; no fused-op patch |
 | SGLang-Omni baseline | `886ced95b9c0b76429798bb60dbd34d3f71dad95` | Merge commit for #2084; must be an ancestor of the observed HEAD |
 | SGLang-Omni | `codex/qwen3-asr-npu-encoder-prefill-graph-v0519` | Clean observed HEAD must contain this handoff and differ from the runtime-code commit only under `docs/` |
-| SGLang-Omni runtime code | `acd0aff1b1452a873a451e170bca64dd1ee75e1f` | Exact encoder/prefill/decode graph implementation and tests |
+| SGLang-Omni runtime code | `4e72cf2ef107fea5454ffa22f228e1a24eb79662` | Exact encoder/prefill/decode graph implementation and tests |
 
 The Omni checkout must not contain zero-diff assumptions for the SGLang side:
 verify the imported SGLang module points at the exact clean `v0.5.19` checkout.
@@ -43,10 +43,12 @@ encoder graph runner for NPU:
 - The first real request captures by exact `(bucket_size, window_lens)`.
 - Cumulative window boundaries remain host-resident on NPU.
 - Different real window layouts for one token bucket receive separate graphs.
-- Each token bucket has its own signature budget equal to `max_batch_size`, so
-  one hot bucket cannot starve the others. The total cache is bounded by
-  `len(buckets) * max_batch_size`; exhaustion does not evict, and unseen
-  layouts for that bucket stay eager with one explicit log per fallback reason.
+- Admission is fair within one explicit global signature budget: one slot per
+  unseen token bucket is reserved before any bucket may take an additional
+  signature. The default budget is `max_batch_size` and can be raised with
+  `asr.factory.npu_encoder_graph_signature_capacity`; this task pins `64`.
+  Exhaustion does not evict, and unseen layouts stay eager with explicit
+  bounded logging.
 - First replay of each signature is logged for positive target-path evidence.
 
 The existing Qwen3-ASR generation defaults already select
@@ -73,6 +75,7 @@ Required resolved settings:
 - `enable_torch_compile: false`;
 - `cuda_graph_backend_prefill: breakable`;
 - `cuda_graph_backend_decode: full`;
+- `npu_encoder_graph_signature_capacity: 64`;
 - encoder graph enabled;
 - decode graph not disabled;
 - no `npugraph_ex`, inductor, TorchAir compile, or compile-safe fused-op path.

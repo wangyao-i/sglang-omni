@@ -10,7 +10,7 @@ export SGLANG_REPO=/server/local/sglang
 export OMNI_REPO=/server/local/sglang-omni
 export EXPECTED_SGLANG_HEAD=0bcd822377da7b5718e674eaf9c870d349424dd1
 export EXPECTED_OMNI_BASE_HEAD=886ced95b9c0b76429798bb60dbd34d3f71dad95
-export EXPECTED_OMNI_CODE_HEAD=acd0aff1b1452a873a451e170bca64dd1ee75e1f
+export EXPECTED_OMNI_CODE_HEAD=4e72cf2ef107fea5454ffa22f228e1a24eb79662
 export MODEL_PATH=/server/local/Qwen3-ASR-1.7B
 export PORT=8000
 export EVIDENCE=/server/local/evidence/qwen3-asr-v0519-all-graphs
@@ -92,6 +92,7 @@ sgl-omni config resolve \
   --asr.engine.max_running_requests 64 \
   --asr.engine.cuda_graph_max_bs 64 \
   --asr.factory.enable_encoder_cuda_graph true \
+  --asr.factory.npu_encoder_graph_signature_capacity 64 \
   >"${EVIDENCE}/resolved-config.yaml"
 ```
 
@@ -101,6 +102,7 @@ Require the resolved configuration to show:
 - prefill backend `breakable`;
 - decode backend `full`;
 - `disable_cuda_graph: false`;
+- `npu_encoder_graph_signature_capacity: 64`;
 - encoder graph enabled.
 
 ## Gate 1: Cold Concurrency-8 Liveness
@@ -120,6 +122,7 @@ sgl-omni serve \
   --asr.engine.cuda_graph_max_bs 64 \
   --asr.engine.decode_log_interval 1 \
   --asr.factory.enable_encoder_cuda_graph true \
+  --asr.factory.npu_encoder_graph_signature_capacity 64 \
   >"${EVIDENCE}/server.log" 2>&1 &
 SERVER_PID=$!
 ```
