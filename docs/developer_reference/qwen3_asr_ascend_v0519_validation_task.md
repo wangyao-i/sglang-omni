@@ -5,7 +5,8 @@ SGLang main to the `v0.5.19` release line. It replaces the historical
 main-based classification and retry tasks.
 
 This compile+decode-graph validation produced the first complete startup
-failure. The current next action is the single graph-only run in
+failure. The graph-only follow-up passed the functional gate. The current next
+action is to classify the residual HBM holder in
 [`qwen3_asr_ascend_v0519_graph_only_task.md`](qwen3_asr_ascend_v0519_graph_only_task.md).
 
 ## Inputs

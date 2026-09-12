@@ -32,17 +32,18 @@ Legend: **Done** means implemented and verified at the stated scope;
 **Implemented** means code exists but current-head qualification is pending;
 **Planned** means agreed work that has not started; **Historical** means useful
 evidence that does not apply to the current heads; **Failed** means an
-exact-head run stopped at a first complete failure; **Deferred** means
-explicitly outside the current phase.
+exact-head run stopped at a first complete failure; **Partial** means the
+functional gate passed but a cleanup or qualification gate remains open;
+**Deferred** means explicitly outside the current phase.
 
 | Workstream | Status | Current state | Exit condition |
 |---|---|---|---|
 | Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream-v0519` uses code commit `5190678c`; focused stream tests passed previously and remain applicable | Complete a request on the release-line runtime |
-| External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-v0519-fused-op` at `e0011e30` ports the same three-file boundary onto `v0.5.19` | Pass exact-head focused tests and default startup |
-| SGLang v0.5.19 validation | Failed | Compile+decode-graph startup failed at `PagedAttentionOperation` setup. `torch.compile` is a CUDA performance option, while the Qwen3-ASR stage default is disabled and NPU has a graph-only attention branch | Run [`qwen3_asr_ascend_v0519_graph_only_task.md`](qwen3_asr_ascend_v0519_graph_only_task.md) with compile disabled and decode graph enabled |
+| External fused-kernel compile boundary | Deferred | `e0011e30` contains the three-file boundary, but the passing NPU graph-only path does not require compile or this patch | Remove or park the patch unless a future compile performance task proves it necessary |
+| SGLang v0.5.19 validation | Partial | Graph-only passed readiness, decode capture, non-empty smoke, and shutdown on `e0011e30` + `5190678c`. HBM remained at 86% with an unidentified holder | Classify the HBM holder, then make graph-only the explicit NPU profile and test the candidate after removing the unnecessary SGLang compile patch |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
-| Combined NPU liveness and correctness | Planned | No current v0.5.19 result exists | Pass default smoke first, then cold concurrency-8 liveness and correctness on exact pinned heads |
+| Combined NPU liveness and correctness | Planned | Graph-only startup and one smoke request pass; cleanup attribution and the explicit NPU profile remain open | Close cleanup, pin the graph-only profile, then run cold concurrency-8 liveness and correctness on exact heads |
 | SGLang main interface experiment | Historical | Main exposed `scheduler_stage_metrics` drift and older capture failures; the baseline is abandoned | Do not use for current acceptance |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
 | Performance target | Deferred | No performance work is part of the current acceptance path | Reopen only after functionality and correctness close |
@@ -147,15 +148,16 @@ and forced alignment remain outside this gate.
 |---|---|---|
 | SGLang main interface drift | Historical, resolved by baseline change | Main added `scheduler_stage_metrics`; the Omni composition layer lacked it. This cannot occur on `v0.5.19` |
 | Main-baseline PagedAttention and heap-corruption failure | Historical, needs release-line recheck | It was observed on main and is not current evidence for the `v0.5.19` candidate |
-| Fused-op tensor-layout mismatch | Unsupported by current evidence | The Python stack points at asynchronous `o_proj` and explicitly warns it may be inaccurate; no single-variable comparison connects `fused_ops.py` to the ATB setup failure |
-| Release-line capture failure at `PagedAttentionOperation` | Active first failure, strongest lead is NPU decode attention | Native frames confirm `atb::OperationSetup` failure for PagedAttention; an existing repository note maps the same signature to decode attention between QKV and `o_proj`, but exact-run proof is still missing |
+| Fused-op tensor-layout mismatch | Rejected for the graph-only path | Graph-only passes with the same fused-op code, and the compile-enabled failure does not prove a tensor-layout mismatch |
+| Compile-enabled capture failure at `PagedAttentionOperation` | Scope resolved | The failure reproduces only with `torch.compile` enabled; graph-only with compile disabled passes exact-head startup and smoke |
+| HBM residual after graph-only shutdown | Open cleanup issue, owner unknown | HBM remained at 86% with a reported holder; identify the holding process before assigning it to the graph-only run |
 | Generic Ascend Qwen3 evidence covers this run | Scope difference, not root cause | Ascend Qwen3 e2e uses eager decode without torch.compile; Qwen3-ASR enables both compile and decode graph, and the NPU attention implementation selects a different branch when compile is enabled |
 | `torch.compile` is required for Qwen3-ASR | Rejected as a functional requirement | It was introduced as a CUDA low/mid-concurrency performance optimization; the stage default is `enable_torch_compile=False` |
 
-The next task must preserve this first failure and extract the complete ordered
-traceback, lower-layer error, capture call site, and first owning repository
-frame. A base-versus-candidate comparison is conditional and requires a new
-local decision. No code change is selected yet.
+The graph-only functional question is closed. The next work is cleanup
+attribution, followed by an explicit NPU graph-only profile and a candidate
+that removes the SGLang compile-boundary patch unless a future performance task
+proves compile is required. No compile-supported NPU claim is active.
 
 ## Roadmap Maintenance
 

@@ -133,10 +133,46 @@ Do not add another arm or change another variable in this task.
 - Graph-only fails somewhere else: return the first complete failure and its
   first owning repository frame. Do not change code in this task.
 
+## Result
+
+Functional gate: passed. Cleanup gate: unresolved.
+
+- SGLang `e0011e30` and Omni `5190678c` were confirmed.
+- Resolved configuration confirmed `enable_torch_compile: false`.
+- The service reached readiness and decode graph capture completed without
+  `PagedAttentionOperation`.
+- One smoke request returned HTTP 200 with a non-empty transcript and
+  `latency=0.283s`.
+- Normal shutdown completed.
+- HBM remained at 86% with a reported holder. The holder was not identified,
+  so this is a cleanup issue, not yet a leak attribution.
+
+Functional conclusion:
+
+- The compile-enabled capture path is the source of the
+  `PagedAttentionOperation` setup failure.
+- Decode graph itself is functional with `torch.compile` disabled.
+- The SGLang fused-op patch is not needed for this NPU functional path and
+  should be removed or deferred unless a later performance task proves that
+  compile is required.
+
+Before the next functional workload, classify the HBM holder without rerunning
+the model:
+
+1. identify the holding process from the NPU process list;
+2. state whether it is the completed server, a previous failed server, or an
+   unrelated process;
+3. confirm the server process is gone and the port is free;
+4. if the holder is an unrelated process, record it and keep the graph-only
+   functional result;
+5. if the holder is the graph-only server or an identifiable stale server
+   process, treat cleanup as failed and preserve its PID details for owner
+   analysis.
+
 ## Return
 
 ```text
-Task status: passed / failed / blocked
+Task status: functional passed / cleanup unresolved
 SGLang HEAD / clean / imported module:
 Omni HEAD / clean / imported module:
 Resolved compile and graph settings:
