@@ -178,7 +178,12 @@ def test_npu_replay_uses_exact_signature_and_bounds_graph_count():
 def asr_server_args():
     from sglang.srt.runtime_context import get_context
 
-    mm_attention_backend = "aiter_attn" if current_platform.is_rocm() else "triton_attn"
+    if current_platform.is_rocm():
+        mm_attention_backend = "aiter_attn"
+    elif current_platform.is_npu():
+        mm_attention_backend = "ascend_attn"
+    else:
+        mm_attention_backend = "triton_attn"
     with get_context().override_server_args(
         model_path="Qwen/Qwen3-ASR-1.7B", mm_attention_backend=mm_attention_backend
     ):
