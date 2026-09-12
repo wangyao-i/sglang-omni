@@ -78,7 +78,9 @@ corrupted size vs. prev_size
 Do not classify this as a PagedAttention tensor-layout mismatch without a
 single-variable comparison. `corrupted size vs. prev_size` is a native heap
 allocator signal and may originate in CANN, torch_npu, ATB, graph capture, or
-another runtime path.
+another runtime path. Public Ascend reports also show that required allocator
+or dynamic-library settings can be absent from non-interactive launches. The
+classification task records those values before changing any of them.
 
 ## Server Facts To Confirm
 
