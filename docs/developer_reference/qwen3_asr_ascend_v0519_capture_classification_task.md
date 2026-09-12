@@ -4,6 +4,10 @@ This is the next bounded diagnostic after the exact-head candidate run passed
 the focused tests and then stopped at decode graph capture. It is log-first:
 analyze the existing first failure before running another arm.
 
+The current next action is the single graph-only run in
+[`qwen3_asr_ascend_v0519_graph_only_task.md`](qwen3_asr_ascend_v0519_graph_only_task.md).
+The conditional base-versus-candidate comparison below remains deferred.
+
 The task has two stages:
 
 - Stage 1 is mandatory: recover the existing failure evidence and identify the
