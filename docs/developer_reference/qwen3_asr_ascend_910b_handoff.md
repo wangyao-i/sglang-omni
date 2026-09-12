@@ -193,11 +193,15 @@ The later compile-disabled main run also exposed a separate main-only
 ## First Task
 
 The pure `v0.5.19` graph-only run passed readiness, decode capture, one smoke
-request, and normal shutdown. The next bounded change is the task in
+request, and normal shutdown. The 70-request cold concurrency-8 gate also
+passed 70/70. A first 140-request correctness attempt used the known
+non-equivalent exact10 concurrency-1 protocol and reported WER `0.0784`; it is
+diagnostic only and does not close the correctness gate. The next bounded
+change is to confirm cleanup and rerun the concurrency-8 correctness command in
 [`qwen3_asr_ascend_v0519_liveness_correctness_task.md`](qwen3_asr_ascend_v0519_liveness_correctness_task.md):
-cold concurrency-8 liveness followed by the 140-request correctness workload
-on the exact pure-base heads. Do not restore the SGLang fused-op patch or run
-the historical main-based task.
+the exact pure-base heads remain required. Do not restore the SGLang fused-op
+patch, run the historical main-based task, or lower the `WER <= 0.02`
+threshold.
 
 ## Return Contract
 

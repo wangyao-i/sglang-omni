@@ -126,7 +126,7 @@ Require:
 Stop at the first failure. Do not continue to Gate 2 from a failed or polluted
 process.
 
-## Gate 2: 140-Request Correctness
+## Gate 2: 140-Request Correctness (Concurrency 8)
 
 Stop the Gate 1 process normally, wait for the port to become free, and start a
 new process with the same launch command and a new log file:
@@ -143,7 +143,7 @@ SERVER_PID=$!
 ```
 
 Wait for readiness. Run the first 140 deterministic SeedTTS English samples at
-concurrency 1:
+concurrency 8:
 
 ```bash
 cd "${OMNI_REPO}"
@@ -151,14 +151,19 @@ python -m benchmarks.eval.benchmark_asr_seedtts \
   --host 127.0.0.1 --port "${PORT}" \
   --model-path Qwen/Qwen3-ASR-1.7B \
   --lang en --max-samples 140 \
-  --concurrencies 1 --repeats 1 \
+  --concurrencies 8 --repeats 1 \
   --disable-resource-monitor \
   --output "${EVIDENCE}/correctness-140.json" \
   --save-raw-dir "${EVIDENCE}/raw-correctness"
 ```
 
 This restart gate uses the historical NPU qualification band as its reference,
-not the CUDA CI threshold. Require:
+not the CUDA CI threshold. Do not use concurrency 1 for acceptance: prior
+exact10 evaluation at concurrency 1 produced a non-equivalent WER around
+`0.0778`, while the qualified harness produced `0.0176`-`0.0179`. A
+concurrency-1 run may be retained only as diagnostic evidence.
+
+Require:
 
 - `evaluated=140`, `total=140`, and `skipped=0`;
 - corpus WER `<= 0.02`;
@@ -173,7 +178,7 @@ python - <<'PY'
 import json
 import os
 
-path = os.environ["EVIDENCE"] + "/raw-correctness/conc1_rep1.jsonl"
+path = os.environ["EVIDENCE"] + "/raw-correctness/conc8_rep1.jsonl"
 empty = 0
 catastrophic = 0
 with open(path, encoding="utf-8") as handle:
@@ -195,6 +200,19 @@ PY
 
 Stop on the first correctness failure. Do not tune sampling, corpus, parser,
 prompt, model revision, concurrency, or graph settings in this task.
+
+## Run History
+
+### 2026-09-12: protocol mismatch, not accepted
+
+The server passed Gate 0 and the 70-request cold concurrency-8 liveness gate.
+Its correctness attempt reported 140/140 completion, zero garbled outputs, and
+WER `0.0784`, but it used an exact10 concatenated corpus at concurrency 1
+rather than the Gate 2 command above. That value is consistent with the
+historical non-equivalent `0.0778` protocol and cannot close the correctness
+gate. Gate 2 must be rerun with the current repository benchmark and
+concurrency 8. The shutdown check also returned without confirming HBM or port
+state, so cleanup must be verified before the rerun.
 
 ## Gate 3: Shutdown And Cleanup
 
