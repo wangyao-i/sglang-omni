@@ -32,11 +32,12 @@ outside the current phase.
 
 | Workstream | Status | Current state | Exit condition |
 |---|---|---|---|
-| Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream` at `5190678c` is rebased onto Omni main and includes focused stream/record tests; current-head NPU execution is pending | Pass the focused unit tests on the server |
-| External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-compile-safe-fused-op` at `85e8933d` contains the minimal wrapper on current SGLang main and uses `register_custom_op_from_extern` | Pass the NPU trace, registration, and compiled-value parity tests on the server |
+| Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream` at `5190678c` passed `30 passed, 1 skipped` focused tests on the server; end-to-end execution is blocked by startup classification | Complete a request on the classified runtime |
+| External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-compile-safe-fused-op` at `85e8933d` passed `5 passed` focused server tests; startup failure attribution is unresolved | Pass exact-head startup and classify whether the failure depends on compile |
+| Startup-failure classification | Active | Current default fails at PagedAttention-operation decode graph capture with a native heap-corruption signal; strongest current explanation is graph/runtime or lower CANN/ATB/torch_npu, not a proven fused-op tensor-layout mismatch | Run the compile-off/decode-on arm; only if it passes, run the compile-on/decode-off arm |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
-| Combined NPU liveness and correctness | Planned | No current-head combined result exists | Cold concurrency-8 liveness and the agreed correctness gate pass on exact pinned heads |
+| Combined NPU liveness and correctness | Blocked | Startup fails before the smoke request, so liveness and correctness are not reached | Resolve startup classification, then pass cold concurrency-8 liveness and correctness on exact pinned heads |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
 | Performance target | Deferred | No performance work is part of the current acceptance path | Reopen only after functionality and correctness close |
 | Realtime ASR | Deferred | It is not required for the current offline serving fix | Define a separate protocol and acceptance gate before implementation |
@@ -94,6 +95,10 @@ dispatch overrides, and global `prepare_model_for_torch_compile` changes.
 ### Phase 4: Exact-head validation
 
 - Run local static checks and focused tests first.
+- Treat the first startup failure as a classification input, not as evidence
+  for an implementation repair.
+- Run the single-variable failure classification before changing production
+  code.
 - On the isolated NPU server, run cold concurrency-8 liveness and the agreed
   correctness workload.
 - Record exact repository heads, dependency versions, and sanitized results.
@@ -121,6 +126,18 @@ The current phase is complete only when:
 
 Performance measurements, C70 throughput targets, realtime ASR, timestamps,
 and forced alignment remain outside this gate.
+
+## Current Root-Cause Board
+
+| Claim | Status | Evidence |
+|---|---|---|
+| Custom fused-op boundary changed PagedAttention tensor layout | Unproven | The observed heap-corruption message does not establish a tensor-layout mismatch |
+| NPU graph/runtime or lower CANN/ATB/torch_npu path causes corruption | Strongest current explanation | Failure occurs at native PagedAttention operation capture; older configurations failed at the same capture point |
+| `torch.compile` is required for the failure | Pending | Arm A disables compile while retaining the decode graph |
+| Decode graph is required for the failure | Pending | Arm B runs only if Arm A passes |
+
+The owner is not assigned until the bounded classification returns a first
+complete failure and the first repository frame that owns it.
 
 ## Roadmap Maintenance
 

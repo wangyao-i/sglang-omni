@@ -49,10 +49,10 @@ They remain provisional until the isolated-server validation completes.
 | Batch/concurrency | Official vLLM path supports batch inference | Batched stage with `max_running_requests`, pre-LM batching, and chunk concurrency | Config, engine builder, ASR CI | Same scheduler; device execution differs | Pending |
 | BF16/FP16 | BF16 checkpoints; FlashAttention requires BF16/FP16 | `auto` follows checkpoint dtype; FP16 can be forced | Cookbook dtype notes | Same dtype policy | Pending |
 | Encoder graph | Not a model contract | Optional platform-owned encoder layer-stack graph | CUDA graph tests | Platform returns no NPU backend; this path is effectively eager on NPU | Not claimed |
-| Prefill/decode graph | Not a model contract | Prefill uses the breakable backend; decode graph is enabled by default | Engine builder and graph tests | SGLang NPU graph path | Pending |
-| Torch compile | Not a model contract | Enabled by default with `torch_compile_max_bs=2` | Engine builder/default config | Needs the external fused-op boundary | Pending |
-| NPU encoder stream isolation | Not applicable | `encoder_service.py` uses a private device stream and records the default consuming stream | Focused unit tests | Implemented on `5190678c` | Pending server tests |
-| NPU fused-op compile boundary | Not applicable | Qwen3 imports the external kernel through an opaque custom op | Focused SGLang NPU tests | Implemented on `85e8933d` | Pending server tests |
+| Prefill/decode graph | Not a model contract | Prefill uses the breakable backend; decode graph is enabled by default | Engine builder and graph tests | SGLang NPU graph path | Startup capture fails before qualification; compile dependence under classification |
+| Torch compile | Not a model contract | Enabled by default with `torch_compile_max_bs=2` | Engine builder/default config | Needs the external fused-op boundary | Focused tests pass; startup failure dependence under classification |
+| NPU encoder stream isolation | Not applicable | `encoder_service.py` uses a private device stream and records the default consuming stream | Focused unit tests | Implemented on `5190678c` | Server focused tests pass; end-to-end execution blocked at startup |
+| NPU fused-op compile boundary | Not applicable | Qwen3 imports the external kernel through an opaque custom op | Focused SGLang NPU tests | Implemented on `85e8933d` | Server focused tests pass; runtime attribution unresolved |
 
 ## Current Gaps
 

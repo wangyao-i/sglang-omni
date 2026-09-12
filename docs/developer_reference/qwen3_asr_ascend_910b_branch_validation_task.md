@@ -1,5 +1,13 @@
 # Qwen3-ASR Ascend branch-validation task
 
+## Result
+
+Completed as `failed` on 2026-09-12 at the first model-smoke startup. Keep this
+task as the first-run record. The next action is the bounded startup-failure
+classification in
+[`qwen3_asr_ascend_910b_failure_classification_task.md`](qwen3_asr_ascend_910b_failure_classification_task.md);
+do not rerun this task unchanged.
+
 Run this task only after reading
 [`qwen3_asr_ascend_910b_handoff.md`](qwen3_asr_ascend_910b_handoff.md) and
 confirming the exact branch heads.
