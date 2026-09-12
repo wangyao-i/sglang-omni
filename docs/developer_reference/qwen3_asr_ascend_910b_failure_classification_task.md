@@ -59,7 +59,7 @@ Use a fresh process for each arm. Before the first arm:
 
   ```bash
   for name in LD_PRELOAD LD_LIBRARY_PATH PYTORCH_NPU_ALLOC_CONF \
-    STREAMS_PER_DEVICE HCCL_BUFFSIZE; do
+    STREAMS_PER_DEVICE HCCL_BUFFSIZE ASCEND_LAUNCH_BLOCKING; do
     printf '%s=%s\n' "${name}" "${!name-}"
   done
   ```
@@ -175,14 +175,16 @@ occurs:
 
 | Observation | Classification for the next bounded task |
 |---|---|
-| Arm A fails the same way | `torch.compile` and the custom fused-op boundary are cleared; next discriminate the SGLang NPU graph/runtime, lower CANN/ATB/torch_npu, and launch-environment propagation |
+| Arm A fails the same way | `torch.compile` and the custom fused-op boundary are cleared; next hold Arm A fixed and run one diagnostic with `ASCEND_LAUNCH_BLOCKING=1` to get a synchronous first failure, then discriminate the graph/runtime, lower stack, and launch environment |
 | Arm A passes; Arm B fails | The failure requires compile-enabled model execution but occurs even with decode graph disabled; classify it as a compile-path failure |
 | Both arms pass | The failure requires the combination of compile and decode graph capture; next isolate when the decode graph is captured, not the fused-op tensor layout |
 
 In all cases, record the first complete failure and the first repository frame
 before assigning an owner. If Arm A still reports heap corruption, include the
 interactive/non-interactive environment comparison and ask before changing any
-runtime variable.
+runtime variable. `PagedAttentionOperation` is an asynchronous operator report
+in common Ascend failures, so do not treat its name as the exact producer until
+a blocking diagnostic confirms it.
 
 ## Non-Goals
 
