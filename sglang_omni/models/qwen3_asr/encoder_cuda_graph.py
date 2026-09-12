@@ -332,10 +332,12 @@ class Qwen3ASREncoderLayerStackGraphRunner:
 
     def _fallback(self, reason: str) -> None:
         self._fallback_counts[reason] += 1
-        if self._fallback_counts[reason] == 1:
+        count = self._fallback_counts[reason]
+        if count == 1 or count & (count - 1) == 0:
             logger.warning(
-                "[qwen3-asr] encoder graph eager fallback reason=%s",
+                "[qwen3-asr] encoder graph eager fallback reason=%s count=%d",
                 reason,
+                count,
             )
 
 
