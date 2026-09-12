@@ -24,7 +24,7 @@ This work does not change or rebase PR #2084.
 |---|---|---|
 | SGLang | `0bcd822377da7b5718e674eaf9c870d349424dd1` (`v0.5.19`) | Clean; no fused-op patch |
 | SGLang-Omni | `codex/qwen3-asr-npu-encoder-prefill-graph-v0519` | Clean observed HEAD must contain this handoff and differ from the runtime-code commit only under `docs/` |
-| SGLang-Omni runtime code | `60c2c6730da21c94c42153059c4676f4961784bc` | Exact encoder/prefill/decode graph implementation and tests |
+| SGLang-Omni runtime code | `d4fbc10452491edfd347b8db04b577e4b0795a93` | Exact encoder/prefill/decode graph implementation and tests |
 
 The Omni checkout must not contain zero-diff assumptions for the SGLang side:
 verify the imported SGLang module points at the exact clean `v0.5.19` checkout.

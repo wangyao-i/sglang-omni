@@ -9,7 +9,7 @@ graph profile. It is a functional qualification, not a performance task.
 export SGLANG_REPO=/server/local/sglang
 export OMNI_REPO=/server/local/sglang-omni
 export EXPECTED_SGLANG_HEAD=0bcd822377da7b5718e674eaf9c870d349424dd1
-export EXPECTED_OMNI_CODE_HEAD=60c2c6730da21c94c42153059c4676f4961784bc
+export EXPECTED_OMNI_CODE_HEAD=d4fbc10452491edfd347b8db04b577e4b0795a93
 export MODEL_PATH=/server/local/Qwen3-ASR-1.7B
 export PORT=8000
 export EVIDENCE=/server/local/evidence/qwen3-asr-v0519-all-graphs
