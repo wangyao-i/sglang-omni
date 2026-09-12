@@ -193,10 +193,11 @@ The later compile-disabled main run also exposed a separate main-only
 ## First Task
 
 The pure `v0.5.19` graph-only run passed readiness, decode capture, one smoke
-request, and normal shutdown. The next bounded change is cold concurrency-8
-liveness, followed by the agreed correctness workload, on the exact pure-base
-heads. Do not restore the SGLang fused-op patch or run the historical
-main-based task.
+request, and normal shutdown. The next bounded change is the task in
+[`qwen3_asr_ascend_v0519_liveness_correctness_task.md`](qwen3_asr_ascend_v0519_liveness_correctness_task.md):
+cold concurrency-8 liveness followed by the 140-request correctness workload
+on the exact pure-base heads. Do not restore the SGLang fused-op patch or run
+the historical main-based task.
 
 ## Return Contract
 
