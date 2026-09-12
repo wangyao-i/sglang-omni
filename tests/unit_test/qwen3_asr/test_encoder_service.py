@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections.abc import Iterator
@@ -11,6 +12,7 @@ import pytest
 import torch
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 
+from sglang_omni.models.qwen3_asr import encoder_service as encoder_service_module
 from sglang_omni.models.qwen3_asr.encoder_service import (
     Qwen3ASRPreLMEncoderService,
     _expected_audio_tokens,
@@ -214,18 +216,110 @@ def test_batch_context_unwinds_inference_mode_when_stream_context_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = object.__new__(Qwen3ASRPreLMEncoderService)
-    service._stream = object()
+    service._stream = SimpleNamespace(device=torch.device("cuda", 0))
 
-    def fail_stream(_stream):  # noqa: ANN001, ANN202
-        raise RuntimeError("stream context failed")
+    class _FakeDeviceModule:
+        def __init__(self) -> None:
+            self.stream_calls: list[object] = []
 
-    monkeypatch.setattr(torch.cuda, "stream", fail_stream)
+        @contextlib.contextmanager
+        def stream(self, stream):  # noqa: ANN001, ANN202
+            self.stream_calls.append(stream)
+            raise RuntimeError("stream context failed")
+            yield
+
+    device_module = _FakeDeviceModule()
+    monkeypatch.setattr(torch, "get_device_module", lambda _device=None: device_module)
 
     assert not torch.is_inference_mode_enabled()
     with pytest.raises(RuntimeError, match="stream context failed"):
         with service._batch_context():
             pass
     assert not torch.is_inference_mode_enabled()
+    assert device_module.stream_calls == [service._stream]
+
+
+@pytest.mark.parametrize("device_type", ["cuda", "npu"])
+def test_service_creates_device_stream(
+    monkeypatch: pytest.MonkeyPatch,
+    device_type: str,
+) -> None:
+    device = torch.device(device_type, 0)
+    created: list[torch.device] = []
+    stream = object()
+
+    def create_stream(requested_device):  # noqa: ANN001, ANN202
+        created.append(requested_device)
+        return stream
+
+    monkeypatch.setattr(encoder_service_module, "create_device_stream", create_stream)
+    model = SimpleNamespace(
+        audio_tower=SimpleNamespace(
+            parameters=lambda: iter(
+                [SimpleNamespace(device=device, dtype=torch.float32)]
+            )
+        ),
+        config=SimpleNamespace(
+            thinker_config=SimpleNamespace(
+                text_config=SimpleNamespace(hidden_size=_HIDDEN_SIZE)
+            )
+        ),
+    )
+
+    service = Qwen3ASRPreLMEncoderService(model, cache_namespace=_NAMESPACE)
+    _SERVICES.append(service)
+
+    assert created == [device]
+    assert service._stream is stream
+
+
+@pytest.mark.parametrize("device_type", ["cuda", "npu"])
+def test_attach_embedding_records_default_stream(
+    monkeypatch: pytest.MonkeyPatch,
+    device_type: str,
+) -> None:
+    service = object.__new__(Qwen3ASRPreLMEncoderService)
+    service._device = torch.device(device_type, 0)
+    service._dtype = torch.float32
+    service._hidden_size = _HIDDEN_SIZE
+    service._stream = SimpleNamespace(device=service._device)
+
+    class _FakeEmbedding:
+        def __init__(self) -> None:
+            self.device = service._device
+            self.recorded_streams: list[object] = []
+
+        def to(self, device, non_blocking=False):  # noqa: ANN001, ANN202
+            assert device == service._device
+            assert non_blocking is True
+            return self
+
+        def record_stream(self, stream) -> None:  # noqa: ANN001
+            self.recorded_streams.append(stream)
+
+    class _FakeDeviceModule:
+        def __init__(self) -> None:
+            self.default = object()
+
+        def default_stream(self, device):  # noqa: ANN001, ANN202
+            assert device == service._device
+            return self.default
+
+    device_module = _FakeDeviceModule()
+    monkeypatch.setattr(torch, "get_device_module", lambda _device=None: device_module)
+    item = SimpleNamespace(
+        precomputed_embeddings=None,
+        feature=torch.zeros(1),
+        format=None,
+    )
+    embedding = _FakeEmbedding()
+
+    service.attach_embedding(item, embedding)
+
+    assert embedding.recorded_streams == [device_module.default]
+    assert item.precomputed_embeddings is embedding
+    assert item.feature is None
+    assert item.format.name == "PRECOMPUTED_EMBEDDING"
 
 
 def test_cache_hit_skips_reencode() -> None:
