@@ -9,6 +9,7 @@ main-based classification and retry tasks.
 ```bash
 export SGLANG_REPO=/server/local/sglang
 export OMNI_REPO=/server/local/sglang-omni
+export EXPECTED_SGLANG_HEAD=e0011e30fbdb9690f01fa2083d452c93b37bb214
 export MODEL_PATH=/server/local/Qwen3-ASR-1.7B
 export SMOKE_WAV=/server/local/approved-smoke.wav
 export PORT=8000
@@ -45,8 +46,7 @@ onto the release-line commit. It is not based on SGLang main.
 
 ```bash
 cd "${SGLANG_REPO}"
-test "$(git rev-parse HEAD)" = \
-  "e0011e30fbdb9690f01fa2083d452c93b37bb214"
+test "$(git rev-parse HEAD)" = "${EXPECTED_SGLANG_HEAD}"
 test -z "$(git status --porcelain)"
 
 python - <<'PY'
