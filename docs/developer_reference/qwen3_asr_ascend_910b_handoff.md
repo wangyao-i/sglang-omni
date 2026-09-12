@@ -145,8 +145,9 @@ The later compile-disabled main run also exposed a separate main-only
 
 ## First Task
 
-Run the exact-head release-line validation in
-[`qwen3_asr_ascend_v0519_validation_task.md`](qwen3_asr_ascend_v0519_validation_task.md).
+The exact-head release-line validation has completed through its first startup
+failure. Run the bounded capture classification in
+[`qwen3_asr_ascend_v0519_capture_classification_task.md`](qwen3_asr_ascend_v0519_capture_classification_task.md).
 Do not run the historical main-based task.
 
 ## Return Contract

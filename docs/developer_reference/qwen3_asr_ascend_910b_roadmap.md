@@ -39,7 +39,7 @@ explicitly outside the current phase.
 |---|---|---|---|
 | Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream-v0519` uses code commit `5190678c`; focused stream tests passed previously and remain applicable | Complete a request on the release-line runtime |
 | External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-v0519-fused-op` at `e0011e30` ports the same three-file boundary onto `v0.5.19` | Pass exact-head focused tests and default startup |
-| SGLang v0.5.19 validation | Failed | Identity is confirmed: the legacy-named worktree is clean at `e0011e30` and Python imports from that checkout. Focused tests passed; default startup then stopped at `PagedAttentionOperation setup failed` during decode graph capture | Classify the first failure without changing `fused_ops.py`; run one bounded discriminant experiment, then fix the owning layer |
+| SGLang v0.5.19 validation | Failed | Identity is confirmed: the legacy-named worktree is clean at `e0011e30` and Python imports from that checkout. Focused tests passed; default startup then stopped at `PagedAttentionOperation setup failed` during decode graph capture | Run [`qwen3_asr_ascend_v0519_capture_classification_task.md`](qwen3_asr_ascend_v0519_capture_classification_task.md), then fix the owning layer |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
 | Combined NPU liveness and correctness | Planned | No current v0.5.19 result exists | Pass default smoke first, then cold concurrency-8 liveness and correctness on exact pinned heads |
@@ -150,9 +150,9 @@ and forced alignment remain outside this gate.
 | Fused-op tensor-layout mismatch | Unproven | The exact-head startup failure is valid, but no single-variable comparison connects it to `fused_ops.py`; `PagedAttentionOperation` is an asynchronous report |
 | Release-line capture failure at `PagedAttentionOperation` | Active first failure, owner unknown | Exact candidate `e0011e30` reached decode graph capture, then reported operator setup failure and `Capture cuda graph failed` |
 
-The next task must preserve this first failure and identify the owning layer
-from the first repository frame, runtime state, and a bounded discriminant
-experiment. No code change is selected yet.
+The next task must preserve this first failure and compare the pure `v0.5.19`
+base against `e0011e30` while holding Omni and the environment fixed. No code
+change is selected yet.
 
 ## Roadmap Maintenance
 
