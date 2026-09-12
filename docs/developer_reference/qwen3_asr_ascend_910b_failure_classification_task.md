@@ -1,5 +1,9 @@
 # Qwen3-ASR Ascend startup-failure classification task
 
+> Historical: this task targeted the SGLang main baseline. That baseline was
+> abandoned after the main-only Scheduler interface drift. Do not run it.
+> Use [`qwen3_asr_ascend_v0519_validation_task.md`](qwen3_asr_ascend_v0519_validation_task.md).
+
 Run this task only after the baseline in
 [`qwen3_asr_ascend_910b_handoff.md`](qwen3_asr_ascend_910b_handoff.md) has
 been acknowledged and the exact heads have been checked out.

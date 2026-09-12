@@ -12,7 +12,7 @@ Last updated: 2026-09-12.
 | Item | Current decision |
 |---|---|
 | SGLang-Omni | `upstream/main`, currently `6ff46426`; rebase the Omni branch before the final hardware run |
-| SGLang | `main` is accepted as the development baseline; use the exact tested head in every result |
+| SGLang | `v0.5.19` release line is the only active runtime baseline; the candidate patch is `e0011e30` on tag commit `0bcd82237` |
 | SGLang dependency | `sglang==0.5.19` |
 | NPU runtime | CANN, PyTorch, torch_npu, triton-ascend, and sgl-kernel-npu must be selected from their compatibility matrices |
 | Performance | Deferred until the functional and correctness path is complete |
@@ -21,6 +21,10 @@ The NPU installer and its documentation have been aligned to the SGLang
 `0.5.19` release line. The installer test matrix now accepts `0.5.19`
 development, pre-release, final, post-release, and local-build spellings and
 rejects earlier and later release lines.
+
+SGLang main is no longer an active baseline. The main-only
+`scheduler_stage_metrics` interface drift and the main-baseline capture results
+are retained as historical evidence only.
 
 ## Status
 
@@ -32,12 +36,13 @@ outside the current phase.
 
 | Workstream | Status | Current state | Exit condition |
 |---|---|---|---|
-| Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream` at `5190678c` passed `30 passed, 1 skipped` focused tests on the server; end-to-end execution is blocked by startup classification | Complete a request on the classified runtime |
-| External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-compile-safe-fused-op` at `85e8933d` passed `5 passed` focused server tests; startup failure attribution is unresolved | Pass exact-head startup and classify whether the failure depends on compile |
-| Startup-failure classification | Active | Current default fails at PagedAttention-operation decode graph capture with a native heap-corruption signal; strongest current explanation is graph/runtime or lower CANN/ATB/torch_npu, not a proven fused-op tensor-layout mismatch | Run the compile-off/decode-on arm; only if it passes, run the compile-on/decode-off arm |
+| Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream-v0519` uses code commit `5190678c`; focused stream tests passed previously and remain applicable | Complete a request on the release-line runtime |
+| External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-v0519-fused-op` at `e0011e30` ports the same three-file boundary onto `v0.5.19` | Pass exact-head focused tests and default startup |
+| SGLang v0.5.19 validation | Active | New release-line candidate exists; no current v0.5.19 server result has been collected | Run focused tests and default compile+decode-graph smoke |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
-| Combined NPU liveness and correctness | Blocked | Startup fails before the smoke request, so liveness and correctness are not reached | Resolve startup classification, then pass cold concurrency-8 liveness and correctness on exact pinned heads |
+| Combined NPU liveness and correctness | Planned | No current v0.5.19 result exists | Pass default smoke first, then cold concurrency-8 liveness and correctness on exact pinned heads |
+| SGLang main interface experiment | Historical | Main exposed `scheduler_stage_metrics` drift and older capture failures; the baseline is abandoned | Do not use for current acceptance |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
 | Performance target | Deferred | No performance work is part of the current acceptance path | Reopen only after functionality and correctness close |
 | Realtime ASR | Deferred | It is not required for the current offline serving fix | Define a separate protocol and acceptance gate before implementation |
@@ -65,6 +70,8 @@ dispatch overrides, and global `prepare_model_for_torch_compile` changes.
 
 - Completed: the NPU installer, installation documentation, and installer
   tests now use `0.5.19`.
+- Completed: the active SGLang candidate is based on tag commit `0bcd82237`,
+  not main.
 - Pin the exact Omni and SGLang heads in the next hardware task before running
   any server command.
 
@@ -77,7 +84,8 @@ dispatch overrides, and global `prepare_model_for_torch_compile` changes.
 
 ### Phase 2: Minimal SGLang repair
 
-- Rebase onto current SGLang `main`.
+- Apply the current three-file fused-op boundary to the `v0.5.19` release
+  line.
 - Keep only the external fused-kernel compile boundary.
 - Prefer the existing `register_custom_op_from_extern()` helper; evaluate
   registering the op in `sgl_kernel_npu` as the longer-term owner.
@@ -95,11 +103,10 @@ dispatch overrides, and global `prepare_model_for_torch_compile` changes.
 ### Phase 4: Exact-head validation
 
 - Run local static checks and focused tests first.
-- Treat the first startup failure as a classification input, not as evidence
-  for an implementation repair.
-- Run the single-variable failure classification before changing production
-  code.
-- On the isolated NPU server, run cold concurrency-8 liveness and the agreed
+- On the isolated NPU server, first run default startup and one smoke request.
+- Stop at the first failure and classify before adding any more variants.
+- After the default smoke passes, run cold concurrency-8 liveness and the
+  agreed
   correctness workload.
 - Record exact repository heads, dependency versions, and sanitized results.
 - Stop at the first hang, accuracy failure, device error, or unexpected eager
@@ -131,15 +138,13 @@ and forced alignment remain outside this gate.
 
 | Claim | Status | Evidence |
 |---|---|---|
-| Custom fused-op boundary changed PagedAttention tensor layout | Unproven | The observed heap-corruption message does not establish a tensor-layout mismatch |
-| NPU graph/runtime or lower CANN/ATB/torch_npu path causes corruption | Strongest current explanation | Failure occurs at native PagedAttention operation capture; historical compile-enabled capture failed at the same point, while compile-disabled capture passed |
-| Non-interactive launch dropped an allocator or library setting | Alternative | Public Ascend reports show the same heap-corruption signal when `LD_PRELOAD` or related runtime settings apply only to an interactive shell |
-| Asynchronous operator attribution is misleading | Diagnostic caveat | Ascend can report the previous `PagedAttentionOperation` when the real fault is asynchronous; use `ASCEND_LAUNCH_BLOCKING=1` only in the follow-up diagnostic |
-| `torch.compile` is required for the failure | Pending | Arm A disables compile while retaining the decode graph |
-| Decode graph is required for the failure | Pending | Arm B runs only if Arm A passes |
+| SGLang main interface drift | Historical, resolved by baseline change | Main added `scheduler_stage_metrics`; the Omni composition layer lacked it. This cannot occur on `v0.5.19` |
+| Main-baseline PagedAttention and heap-corruption failure | Historical, needs release-line recheck | It was observed on main and is not current evidence for the `v0.5.19` candidate |
+| Fused-op tensor-layout mismatch | Still unproven | No clean release-line failure has been classified |
+| Release-line graph/runtime or lower-stack defect | Unknown | Default `v0.5.19` startup has not yet been run |
 
-The owner is not assigned until the bounded classification returns a first
-complete failure and the first repository frame that owns it.
+The owner is not assigned until the release-line gate returns a first complete
+failure and the first repository frame that owns it.
 
 ## Roadmap Maintenance
 
