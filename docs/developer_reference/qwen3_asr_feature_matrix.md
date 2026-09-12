@@ -19,11 +19,12 @@ SGLang-Omni implementation, and repository tests.
 - Official Qwen3-ForcedAligner model:
   <https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B>
 - SGLang-Omni source baseline: `upstream/main`, currently `6ff46426`
-- SGLang dependency: `sglang==0.5.19`; the SGLang development baseline is its
-  current `main`
+- SGLang dependency: `sglang==0.5.19`; the active runtime baseline is the
+  `v0.5.19` release line, not SGLang main
 - Ascend validation candidates:
-  - SGLang `codex/qwen3-asr-compile-safe-fused-op` at `85e8933d`
-  - SGLang-Omni `codex/qwen3-asr-npu-encoder-stream` code at `5190678c`
+  - SGLang `codex/qwen3-asr-v0519-fused-op` at `e0011e30`, based on tag commit
+    `0bcd82237`
+  - SGLang-Omni `codex/qwen3-asr-npu-encoder-stream-v0519` code at `5190678c`
 
 The NPU implementation and qualification columns describe those candidates.
 They remain provisional until the isolated-server validation completes.
@@ -49,10 +50,10 @@ They remain provisional until the isolated-server validation completes.
 | Batch/concurrency | Official vLLM path supports batch inference | Batched stage with `max_running_requests`, pre-LM batching, and chunk concurrency | Config, engine builder, ASR CI | Same scheduler; device execution differs | Pending |
 | BF16/FP16 | BF16 checkpoints; FlashAttention requires BF16/FP16 | `auto` follows checkpoint dtype; FP16 can be forced | Cookbook dtype notes | Same dtype policy | Pending |
 | Encoder graph | Not a model contract | Optional platform-owned encoder layer-stack graph | CUDA graph tests | Platform returns no NPU backend; this path is effectively eager on NPU | Not claimed |
-| Prefill/decode graph | Not a model contract | Prefill uses the breakable backend; decode graph is enabled by default | Engine builder and graph tests | SGLang NPU graph path | Startup capture fails before qualification; compile dependence under classification |
-| Torch compile | Not a model contract | Enabled by default with `torch_compile_max_bs=2` | Engine builder/default config | Needs the external fused-op boundary | Focused tests pass; startup failure dependence under classification |
-| NPU encoder stream isolation | Not applicable | `encoder_service.py` uses a private device stream and records the default consuming stream | Focused unit tests | Implemented on `5190678c` | Server focused tests pass; end-to-end execution blocked at startup |
-| NPU fused-op compile boundary | Not applicable | Qwen3 imports the external kernel through an opaque custom op | Focused SGLang NPU tests | Implemented on `85e8933d` | Server focused tests pass; runtime attribution unresolved |
+| Prefill/decode graph | Not a model contract | Prefill uses the breakable backend; decode graph is enabled by default | Engine builder and graph tests | SGLang v0.5.19 NPU graph path | Pending release-line startup |
+| Torch compile | Not a model contract | Enabled by default with `torch_compile_max_bs=2` | Engine builder/default config | Needs the external fused-op boundary | Pending release-line startup |
+| NPU encoder stream isolation | Not applicable | `encoder_service.py` uses a private device stream and records the default consuming stream | Focused unit tests | Implemented on `5190678c` | Focused tests pass; release-line smoke pending |
+| NPU fused-op compile boundary | Not applicable | Qwen3 imports the external kernel through an opaque custom op | Focused SGLang NPU tests | Implemented on `e0011e30` over `v0.5.19` | Focused server tests and runtime pending |
 
 ## Current Gaps
 

@@ -6,16 +6,13 @@ logs, model files, audio, and host details on the isolated server.
 
 ## Status
 
-First bounded branch validation failed at the model-smoke startup. The exact
-SGLang and Omni code commits passed their focused tests, but startup aborted
-during NPU decode graph capture with `PagedAttentionOperation`,
-`Capture cuda graph failed`, and `corrupted size vs. prev_size`.
+The active baseline is now the SGLang `v0.5.19` release line, not SGLang main.
+The previous main-based startup failures and the main-only Scheduler
+compatibility fix are historical and must not be mixed into this candidate.
 
-Failure classification is now the only active task. The current strongest
-explanation is a native NPU graph/runtime or lower CANN/ATB/torch_npu failure:
-the allocator-corruption message does not establish a custom-op tensor-layout
-mismatch, and the same PagedAttention capture point has failed in older
-configurations. A missing `torch.compile` variable has not yet been ruled out.
+The current candidate keeps the minimal three-file fused-op boundary on top of
+the `v0.5.19` commit, together with the Omni encoder private-stream change.
+Hardware validation on this release-line stack is pending.
 
 ## Scope
 
@@ -29,8 +26,8 @@ configurations. A missing `torch.compile` variable has not yet been ruled out.
 
 | Repository | Branch | Exact head | Base |
 |---|---|---|---|
-| SGLang | `codex/qwen3-asr-compile-safe-fused-op` | `85e8933dc3ae4ecd44a1e0ebf4595f0fd9011595` | `e91c94805747b60d0b8e8012f3647ae82d4ae862` |
-| SGLang-Omni | `codex/qwen3-asr-npu-encoder-stream` | `5190678c463f6c2b01e4ee0007cf788c3fdc2287` | `6ff46426469a1af2746cef71a9fdcfc09613966d` |
+| SGLang | `codex/qwen3-asr-v0519-fused-op` | `e0011e30fbdb9690f01fa2083d452c93b37bb214` | `v0.5.19` commit `0bcd822377da7b5718e674eaf9c870d349424dd1` |
+| SGLang-Omni | `codex/qwen3-asr-npu-encoder-stream-v0519` | `5190678c463f6c2b01e4ee0007cf788c3fdc2287` | `6ff46426469a1af2746cef71a9fdcfc09613966d` |
 
 The Omni branch tip may advance for handoff, task, and roadmap documents. The
 validation task checks out the code commit above, so documentation commits
@@ -40,9 +37,11 @@ cannot change the tested runtime.
 
 - SGLang: `fused_ops.py` registers the external kernel with
   `register_custom_op_from_extern`; `qwen3.py` imports that wrapper.
-- SGLang: `python -m compileall`, `git diff --check`, and the focused pytest
-  file were run locally. The pytest command skipped because this host has no
-  `sgl_kernel_npu`.
+- SGLang: the same patch was cherry-picked cleanly onto the `v0.5.19` commit;
+  the helper and Qwen3 call site already exist on that release line.
+- SGLang: `python -m compileall` and `git diff --check` pass on the
+  release-line candidate. The focused pytest cannot execute on this Windows
+  host because `sgl_kernel_npu` is unavailable.
 - SGLang: an independent stub loaded the implementation, validated output
   metadata, passed the call through to the external-kernel stub, and confirmed
   `torch.library.infer_schema` accepts the function signature.
@@ -52,9 +51,12 @@ cannot change the tested runtime.
   `attach_embedding` and `_batch_context` passed. The repository pytest suite
   could not collect because this Windows host has no installed SGLang.
 
-## Server Evidence
+## Historical Main-Baseline Evidence
 
-The first server report observed the requested SGLang code hash
+These results belong to the abandoned SGLang main baseline and are not
+current-head evidence.
+
+The first server report observed the requested SGLang main code hash
 `85e8933dc3ae4ecd44a1e0ebf4595f0fd9011595`, but labeled its branch
 `codex/910c-072-chain23-off`; the local branch is
 `codex/qwen3-asr-compile-safe-fused-op`. This is an identity-reporting
@@ -83,13 +85,17 @@ or dynamic-library settings can be absent from non-interactive launches. The
 classification task records those values before changing any of them.
 `PagedAttentionOperation` is also an asynchronous operator report, so its name
 may not identify the true first fault until a blocking diagnostic confirms it.
+The later compile-disabled main run also exposed a separate main-only
+`scheduler_stage_metrics` interface drift. Neither result is part of the active
+`v0.5.19` candidate.
 
 ## Server Facts To Confirm
 
 - Exact SGLang-Omni and SGLang checkout paths and working-tree state.
 - Actual Python, CANN, torch, torch_npu, triton-ascend, and `sgl_kernel_npu`
   versions.
-- Whether the installed SGLang package resolves to the requested branch.
+- Whether the installed SGLang package resolves to the requested release-line
+  checkout and reports the `0.5.19` version line.
 - Ascend device model, count, selected device, and idle memory.
 - Model path and whether the approved smoke WAV is available.
 
@@ -116,10 +122,9 @@ may not identify the true first fault until a blocking diagnostic confirms it.
 
 ## First Task
 
-The focused tests and first model smoke are complete. Run the two-arm,
-single-variable startup classification in
-[`qwen3_asr_ascend_910b_failure_classification_task.md`](qwen3_asr_ascend_910b_failure_classification_task.md).
-Run Arm B only if Arm A passes.
+Run the exact-head release-line validation in
+[`qwen3_asr_ascend_v0519_validation_task.md`](qwen3_asr_ascend_v0519_validation_task.md).
+Do not run the historical main-based task.
 
 ## Return Contract
 
@@ -136,9 +141,8 @@ Focused Omni test:
 Model smoke:
 Target-path evidence:
 Fallback evidence:
-Resolved arm overrides:
-Arm A classification:
-Arm B classification:
+Resolved server args:
+Default profile verification:
 First complete failure and owner repository:
 Server-local artifacts retained:
 Suggested next bounded task:

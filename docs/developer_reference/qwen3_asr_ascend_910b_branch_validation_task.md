@@ -1,5 +1,8 @@
 # Qwen3-ASR Ascend branch-validation task
 
+> Historical: this task pinned the SGLang main candidate. Do not run it.
+> Use [`qwen3_asr_ascend_v0519_validation_task.md`](qwen3_asr_ascend_v0519_validation_task.md).
+
 ## Result
 
 Completed as `failed` on 2026-09-12 at the first model-smoke startup. Keep this
