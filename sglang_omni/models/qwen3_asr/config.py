@@ -41,7 +41,6 @@ class Qwen3ASRFactoryArgs(FactoryArgs):
     pre_lm_cache_size_bytes: int | None = Field(default=None, ge=1)
     pre_lm_max_batch_size: int | None = Field(default=None, ge=1)
     pre_lm_max_batch_wait_ms: int | None = Field(default=None, ge=0)
-    npu_encoder_graph_signature_capacity: int | None = Field(default=None, ge=1)
 
 
 class Qwen3ASRStageConfig(EngineStageConfig):

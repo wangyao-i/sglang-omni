@@ -158,11 +158,7 @@ class Qwen3ASRForConditionalGeneration(nn.Module):
         self._encoder_graph_runner: Qwen3ASREncoderLayerStackGraphRunner | None = None
 
     def init_encoder_graphs(
-        self,
-        *,
-        max_batch_size: int,
-        max_tokens_per_clip: int,
-        signature_capacity: int | None = None,
+        self, *, max_batch_size: int, max_tokens_per_clip: int
     ) -> None:
         device = next(self.audio_tower.parameters()).device
         graph_backend = current_platform.get_device_graph_backend(device)
@@ -172,7 +168,6 @@ class Qwen3ASRForConditionalGeneration(nn.Module):
             self.audio_tower,
             buckets=build_buckets(max_batch_size, max_tokens_per_clip),
             max_batch_size=max_batch_size,
-            signature_capacity=signature_capacity,
             graph_backend=graph_backend,
         )
         runner.capture_all()

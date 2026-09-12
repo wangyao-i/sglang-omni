@@ -81,7 +81,6 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         *,
         buckets: tuple[int, ...],
         max_batch_size: int,
-        signature_capacity: int | None = None,
         graph_backend: DeviceGraphBackend,
     ) -> None:
         self._tower = audio_tower
@@ -102,24 +101,9 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._buckets = buckets[:-1] + (top + self._max_windows_for(top),)
         self._graphs: dict[Hashable, _CapturedGraph] = {}
         self._failed: set[Hashable] = set()
-        # Ascend attention consumes the window boundaries as host-side operator
-        # parameters, so a graph belongs to one exact window layout. Keep a
-        # bounded global registry, but reserve capacity for every unseen token
-        # bucket so a hot bucket cannot starve the rest. There is no eviction;
-        # signatures that cannot be admitted stay eager.
-        self._npu_signature_capacity = (
-            max(max_batch_size, len(self._buckets))
-            if signature_capacity is None
-            else int(signature_capacity)
-        )
-        if self._npu_signature_capacity < 1:
-            raise ValueError("signature_capacity must be >= 1")
-        if self._is_npu and self._npu_signature_capacity < len(self._buckets):
-            raise ValueError(
-                "NPU encoder graph signature capacity must cover every bucket: "
-                f"{self._npu_signature_capacity} < {len(self._buckets)}"
-            )
-        self._npu_signature_count_by_bucket: Counter[int] = Counter()
+        # Mirror SGLang's ViTNpuGraphRunner: key NPU graphs by the exact
+        # host-side window layout instead of inventing a separate capacity
+        # policy around the graph registry.
         self._fallback_counts: Counter[str] = Counter()
         self._reported_replays: set[Hashable] = set()
         self._capture_attention_metadata: VisionAttentionMetadata | None = None
@@ -279,27 +263,11 @@ class Qwen3ASREncoderLayerStackGraphRunner:
 
         entry = self._graphs.get(graph_key)
         if entry is None:
-            if self._is_npu and not self._npu_can_admit(bucket_size):
-                return self._fallback("npu_signature_capacity")
-            try:
-                entry = self._capture(
-                    bucket_size,
-                    window_lens=(
-                        effective_window_lens if self._is_npu else None
-                    ),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[qwen3-asr] encoder graph capture failed for bucket=%d: %s; "
-                    "bucket stays eager",
-                    bucket_size,
-                    exc,
-                )
-                self._failed.add(graph_key)
-                return self._fallback("capture_failed")
+            entry = self._capture(
+                bucket_size,
+                window_lens=(effective_window_lens if self._is_npu else None),
+            )
             self._graphs[graph_key] = entry
-            if self._is_npu:
-                self._npu_signature_count_by_bucket[bucket_size] += 1
 
         entry.hidden_states[:total].copy_(hidden_states)
         if not self._is_npu:
@@ -324,21 +292,6 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         if out.dim() == 3:  # attention backends emit [1, tokens, dim]
             out = out.squeeze(0)
         return out[:total].clone()
-
-    def _npu_can_admit(self, bucket_size: int) -> bool:
-        """Reserve one graph slot for every bucket before admitting extras."""
-        next_total = len(self._graphs) + 1
-        if next_total > self._npu_signature_capacity:
-            return False
-        unseen = sum(
-            1
-            for bucket in self._buckets
-            if self._npu_signature_count_by_bucket[bucket] == 0
-        )
-        next_unseen = unseen - (
-            1 if self._npu_signature_count_by_bucket[bucket_size] == 0 else 0
-        )
-        return next_total + next_unseen <= self._npu_signature_capacity
 
     def _plan(self, total: int, real_windows: int) -> tuple[int, list[int]] | None:
         """Pick a bucket and the dummy-window sizes that absorb its padding."""

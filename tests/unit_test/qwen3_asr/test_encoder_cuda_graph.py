@@ -134,7 +134,7 @@ def test_npu_capture_materializes_sequence_boundaries_on_host():
     assert cu_seqlens.tolist() == [0, 4, 7, 8]
 
 
-def test_npu_replay_reserves_signature_capacity_for_unseen_buckets():
+def test_npu_replay_uses_the_exact_window_layout_as_graph_key():
     captured = []
     replayed = []
     runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
@@ -143,8 +143,6 @@ def test_npu_replay_reserves_signature_capacity_for_unseen_buckets():
     runner._buckets = (8, 16)
     runner._failed = set()
     runner._graphs = {}
-    runner._npu_signature_capacity = 3
-    runner._npu_signature_count_by_bucket = Counter()
     runner._fallback_counts = Counter()
     runner._reported_replays = set()
 
@@ -179,15 +177,22 @@ def test_npu_replay_reserves_signature_capacity_for_unseen_buckets():
     assert captured == [(8, (4, 4)), (8, (2, 2, 4))]
     assert len(replayed) == 3
 
-    # A hot bucket cannot spend the slot reserved for the unseen bucket.
-    assert runner.run(hidden_states, [1, 3]) is None
-    assert captured == [(8, (4, 4)), (8, (2, 2, 4))]
+    assert runner.run(hidden_states, [1, 3]) is not None
+    assert captured == [
+        (8, (4, 4)),
+        (8, (2, 2, 4)),
+        (8, (1, 3, 4)),
+    ]
     assert runner._failed == set()
 
     assert runner.run(torch.ones(8, 2), [8]) is not None
-    assert captured == [(8, (4, 4)), (8, (2, 2, 4)), (16, (8, 8))]
-    assert runner._npu_signature_count_by_bucket == {8: 2, 16: 1}
-    assert runner._fallback_counts == {"npu_signature_capacity": 1}
+    assert captured == [
+        (8, (4, 4)),
+        (8, (2, 2, 4)),
+        (8, (1, 3, 4)),
+        (16, (8, 8)),
+    ]
+    assert runner._fallback_counts == Counter()
 
 
 @pytest.fixture

@@ -316,7 +316,6 @@ def test_qwen3_asr_config_uses_batched_stage_with_64_running_requests() -> None:
     assert stage.factory.pre_lm_cache_size_bytes == 2 * 1024**3
     assert stage.factory.pre_lm_max_batch_size == 8
     assert stage.factory.pre_lm_max_batch_wait_ms == 0
-    assert stage.factory.npu_encoder_graph_signature_capacity is None
     assert type(config).stage_config_cls("asr").engine_stage
     assert (
         PIPELINE_CONFIG_REGISTRY.get_config("Qwen3ASRForConditionalGeneration")
@@ -358,9 +357,6 @@ def test_qwen3_asr_stage_default_enables_pre_lm_encoder() -> None:
     assert signature.parameters["pre_lm_cache_size_bytes"].default == 2 * 1024**3
     assert signature.parameters["pre_lm_max_batch_size"].default == 8
     assert signature.parameters["pre_lm_max_batch_wait_ms"].default == 0
-    assert (
-        signature.parameters["npu_encoder_graph_signature_capacity"].default is None
-    )
 
 
 @pytest.mark.parametrize(
@@ -380,15 +376,6 @@ def test_qwen3_asr_stage_rejects_invalid_pre_lm_batch_knobs(
             "dummy",
             pre_lm_max_batch_size=batch_size,
             pre_lm_max_batch_wait_ms=wait_ms,
-        )
-
-
-def test_qwen3_asr_stage_rejects_invalid_npu_encoder_graph_signature_capacity() -> None:
-    with pytest.raises(
-        ValueError, match="npu_encoder_graph_signature_capacity"
-    ):
-        create_sglang_qwen3_asr_executor(
-            "dummy", npu_encoder_graph_signature_capacity=0
         )
 
 
