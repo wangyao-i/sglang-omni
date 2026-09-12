@@ -33,16 +33,76 @@ onto the release-line commit. It is not based on SGLang main.
 - Fetch both branches and check out the detached runtime heads above.
 - Require clean tracked worktrees. Preserve any unrelated untracked artifact
   outside the checkout; do not use a dirty tree for this gate.
-- Verify that the imported SGLang package resolves to the release-line
-  checkout:
+- Verify the repository identity, installed distribution, and imported module
+  path in one fresh process. Run the following commands before pytest or serve:
 
-  ```bash
-  python -c "import sglang; print(sglang.__version__, sglang.__file__)"
-  ```
+```bash
+cd "${SGLANG_REPO}"
+test "$(git rev-parse HEAD)" = \
+  "e0011e30fbdb9690f01fa2083d452c93b37bb214"
+test -z "$(git status --porcelain)"
 
-- The imported path must resolve to the checked-out release-line repository.
-  If it resolves to a main checkout or another site-packages copy, stop and
-  return `blocked`; do not edit `site-packages` or mix two SGLang installs.
+python - <<'PY'
+import json
+from importlib.metadata import distribution
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+import sglang
+
+repo = Path.cwd().resolve()
+expected_python = repo / "python"
+module = Path(sglang.__file__).resolve()
+print("sglang version:", sglang.__version__)
+print("imported module:", module)
+print("expected module root:", expected_python)
+assert module.is_relative_to(expected_python), (
+    f"wrong SGLang checkout: {module}"
+)
+assert sglang.__version__.startswith(("0.5.19", "0.5.v19")), (
+    f"wrong SGLang release line: {sglang.__version__}"
+)
+
+dist = distribution("sglang")
+direct_url_raw = dist.read_text("direct_url.json")
+assert direct_url_raw, "sglang has no editable direct_url metadata"
+direct_url = json.loads(direct_url_raw)
+assert direct_url.get("dir_info", {}).get("editable") is True, (
+    f"sglang is not an editable checkout: {direct_url}"
+)
+parsed = urlparse(direct_url["url"])
+assert parsed.scheme == "file", f"unexpected editable URL: {direct_url['url']}"
+editable_root = Path(unquote(parsed.path)).resolve()
+print("editable root:", editable_root)
+assert expected_python.is_relative_to(editable_root), (
+    f"editable install points to another checkout: {editable_root}"
+)
+PY
+
+cd "${OMNI_REPO}"
+test "$(git rev-parse HEAD)" = \
+  "5190678c463f6c2b01e4ee0007cf788c3fdc2287"
+test -z "$(git status --porcelain)"
+
+python - <<'PY'
+from pathlib import Path
+
+import sglang_omni
+
+repo = Path.cwd().resolve()
+module = Path(sglang_omni.__file__).resolve()
+print("imported Omni module:", module)
+print("expected Omni root:", repo)
+assert module.is_relative_to(repo), f"wrong SGLang-Omni checkout: {module}"
+PY
+```
+
+- If any assertion fails, stop immediately and return `blocked`; do not run
+  pytest or the model server in that environment.
+- Do not repair this by editing `site-packages` or by relying on whichever
+  editable checkout happens to appear first on `sys.path`. Remove or
+  deactivate the conflicting install through its owning environment, then
+  restart from a fresh process.
 - Record Python, CANN, torch, torch_npu, triton-ascend, and `sgl_kernel_npu`
   versions.
 - Record `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTORCH_NPU_ALLOC_CONF`,
@@ -125,8 +185,8 @@ Do not edit code or environment variables on the server.
 
 ## Return
 
-Return the exact repository heads and worktree state, runtime versions,
-environment values, focused test counts, default startup result, smoke result,
-target-path evidence, fallback/error counts, device health, cleanup state, and
-the first complete failure if any. Keep full logs and response bodies
-server-local.
+Return the exact repository heads and worktree state, imported SGLang module
+path, editable root, runtime versions, environment values, focused test counts,
+default startup result, smoke result, target-path evidence, fallback/error
+counts, device health, cleanup state, and the first complete failure if any.
+Keep full logs and response bodies server-local.

@@ -38,7 +38,7 @@ outside the current phase.
 |---|---|---|---|
 | Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream-v0519` uses code commit `5190678c`; focused stream tests passed previously and remain applicable | Complete a request on the release-line runtime |
 | External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-v0519-fused-op` at `e0011e30` ports the same three-file boundary onto `v0.5.19` | Pass exact-head focused tests and default startup |
-| SGLang v0.5.19 validation | Active | New release-line candidate exists; no current v0.5.19 server result has been collected | Run focused tests and default compile+decode-graph smoke |
+| SGLang v0.5.19 validation | Blocked | The first release-line server report failed Gate 0: `import sglang` resolved to another editable checkout, so its tests and PagedAttention startup failure are invalid for `e0011e30` | Fix the server environment, pass hardened import/HEAD identity checks, then run focused tests and default compile+decode-graph smoke from a fresh process |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
 | Combined NPU liveness and correctness | Planned | No current v0.5.19 result exists | Pass default smoke first, then cold concurrency-8 liveness and correctness on exact pinned heads |
@@ -103,6 +103,9 @@ dispatch overrides, and global `prepare_model_for_torch_compile` changes.
 ### Phase 4: Exact-head validation
 
 - Run local static checks and focused tests first.
+- On the isolated NPU server, pass the hardened Gate 0 repository, editable
+  distribution, and imported-module identity checks before any pytest or
+  server command.
 - On the isolated NPU server, first run default startup and one smoke request.
 - Stop at the first failure and classify before adding any more variants.
 - After the default smoke passes, run cold concurrency-8 liveness and the
@@ -140,7 +143,7 @@ and forced alignment remain outside this gate.
 |---|---|---|
 | SGLang main interface drift | Historical, resolved by baseline change | Main added `scheduler_stage_metrics`; the Omni composition layer lacked it. This cannot occur on `v0.5.19` |
 | Main-baseline PagedAttention and heap-corruption failure | Historical, needs release-line recheck | It was observed on main and is not current evidence for the `v0.5.19` candidate |
-| Fused-op tensor-layout mismatch | Still unproven | No clean release-line failure has been classified |
+| Fused-op tensor-layout mismatch | Unsupported by the latest report | The reported startup failure came from a different editable SGLang checkout; no exact-head release-line failure has been classified |
 | Release-line graph/runtime or lower-stack defect | Unknown | Default `v0.5.19` startup has not yet been run |
 
 The owner is not assigned until the release-line gate returns a first complete

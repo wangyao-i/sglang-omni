@@ -12,7 +12,24 @@ compatibility fix are historical and must not be mixed into this candidate.
 
 The current candidate keeps the minimal three-file fused-op boundary on top of
 the `v0.5.19` commit, together with the Omni encoder private-stream change.
-Hardware validation on this release-line stack is pending.
+Hardware validation on this release-line stack is blocked before execution by
+a Gate 0 identity mismatch.
+
+## Latest Server Report
+
+The latest report is `blocked / invalid identity`, not a hardware failure.
+
+- The declared checkout heads matched the candidate, but `import sglang`
+  resolved to a different `sglang_qwen3-asr-decode-graph-diag` editable
+  checkout and reported a `0.5.v19.dev19` package identity.
+- The focused test counts and `PagedAttentionOperation setup failed` startup
+  failure therefore came from code other than
+  `e0011e30fbdb9690f01fa2083d452c93b37bb214`.
+- Do not attribute the failure to `fused_ops.py`, PagedAttention tensor layout,
+  graph capture, or the `v0.5.19` candidate. No such conclusion is supported.
+- The server must remove or deactivate the conflicting editable installation,
+  start a fresh process, and pass the hardened Gate 0 checks in the validation
+  task before any test or model server is run.
 
 ## Scope
 
@@ -94,8 +111,9 @@ The later compile-disabled main run also exposed a separate main-only
 - Exact SGLang-Omni and SGLang checkout paths and working-tree state.
 - Actual Python, CANN, torch, torch_npu, triton-ascend, and `sgl_kernel_npu`
   versions.
-- Whether the installed SGLang package resolves to the requested release-line
-  checkout and reports the `0.5.19` version line.
+- The actual imported `sglang.__file__`, its editable distribution root, and
+  whether they resolve to the requested release-line checkout and `0.5.19`
+  version line.
 - Ascend device model, count, selected device, and idle memory.
 - Model path and whether the approved smoke WAV is available.
 
@@ -134,6 +152,7 @@ Return only:
 Task status: passed / failed / blocked
 Omni branch / observed HEAD / worktree clean:
 SGLang branch / observed HEAD / worktree clean:
+SGLang imported module / editable root:
 Runtime versions:
 Hardware model / device count / selected device:
 Focused SGLang test:
