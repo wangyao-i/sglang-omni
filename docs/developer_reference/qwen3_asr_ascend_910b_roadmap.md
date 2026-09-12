@@ -34,7 +34,7 @@ errors. Exact corpus/protocol reconciliation is deferred.
 
 | Item | Current decision |
 |---|---|
-| SGLang-Omni | `upstream/main@886ced95` contains merged #2084; the active follow-up runtime code is `efafac55` |
+| SGLang-Omni | `upstream/main@886ced95` contains merged #2084; the active follow-up runtime code is `8ad2a5a9` |
 | SGLang | Pure `v0.5.19` tag commit `0bcd82237` is the active runtime baseline; the fused-op patch `e0011e30` is deferred |
 | SGLang dependency | `sglang==0.5.19` |
 | NPU runtime | CANN, PyTorch, torch_npu, triton-ascend, and sgl-kernel-npu must be selected from their compatibility matrices |
@@ -67,7 +67,7 @@ functional gate passed but a cleanup or qualification gate remains open;
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
 | Combined NPU liveness and correctness | Historical | Pure `v0.5.19` + the pre-merge Omni code `5190678c` passed graph-only startup, smoke, cold concurrency-8 `70/70`, and a 140-request pass with `140/140`, zero empty outputs, and zero garbled outputs | Re-attest the merged-main baseline when the all-graph task runs; the exact WER protocol remains deferred |
-| NPU encoder graph | Implemented | Follow-up runtime code `efafac55` lazily captures exact NPU window signatures with fair admission inside an explicit global capacity | Pass the pinned all-graph hardware task with zero fallback markers |
+| NPU encoder graph | Implemented | Follow-up runtime code `8ad2a5a9` mirrors SGLang's ViT NPU graph runner: lazy capture by exact window layout with host-resident boundaries | Pass the pinned all-graph hardware task with zero fallback markers |
 | NPU prefill graph | Planned | The follow-up task pins the SGLang `breakable` prefill backend on pure `v0.5.19` | Prove positive prefill capture and replay in the all-graph task |
 | All-graph no-compile qualification | Planned | Encoder, prefill, and decode graphs are defined as one exact-head task on merged Omni main plus pure `v0.5.19` | Pass Gate 0-3 in `qwen3_asr_ascend_v0519_all_graphs_task.md` |
 | SGLang main interface experiment | Historical | Main exposed `scheduler_stage_metrics` drift and older capture failures; the baseline is abandoned | Do not use for current acceptance |
@@ -185,7 +185,7 @@ outside this gate.
 The pure `v0.5.19` graph-only startup and smoke gates are closed, and #2084 is
 merged. The next work is exact-head qualification of encoder, prefill, and
 decode graphs together on `0bcd82237` + merged Omni main plus the follow-up
-runtime code `efafac55`. No compile-supported NPU claim and no fused-op
+runtime code `8ad2a5a9`. No compile-supported NPU claim and no fused-op
 requirement are active.
 
 ## Roadmap Maintenance
