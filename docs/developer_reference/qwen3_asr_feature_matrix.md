@@ -25,7 +25,7 @@ SGLang-Omni implementation, and repository tests.
 - Ascend validation candidates:
   - SGLang pure `v0.5.19` tag commit `0bcd82237`, with no fused-op patch
   - SGLang-Omni `codex/qwen3-asr-npu-encoder-prefill-graph-v0519` code at
-    `2cdfa51e`
+    `acd0aff1`
 
 The SGLang `e0011e30` fused-op candidate is archived and deferred. It is not
 part of the active functional baseline.
@@ -54,7 +54,7 @@ provisional until their stated gates complete.
 | Timestamps | Separate Qwen3-ForcedAligner-0.6B, up to 5 minutes, 11 languages | No forced-aligner integration; `verbose_json` exposes chunk boundaries only | Cookbook long-audio notes | Not implemented | Not applicable to current branch |
 | Batch/concurrency | Official vLLM path supports batch inference | Batched stage with `max_running_requests`, pre-LM batching, and chunk concurrency | Config, engine builder, ASR CI | Same scheduler; device execution differs | Pending |
 | BF16/FP16 | BF16 checkpoints; FlashAttention requires BF16/FP16 | `auto` follows checkpoint dtype; FP16 can be forced | Cookbook dtype notes | Same dtype policy | Pending |
-| Encoder graph | Not a model contract | Optional platform-owned encoder layer-stack graph | CUDA graph tests | NPU adapter on `2cdfa51e` lazily captures exact `(bucket_size, window_lens)` signatures and bounds the global cache | All-graph NPU qualification pending |
+| Encoder graph | Not a model contract | Optional platform-owned encoder layer-stack graph | CUDA graph tests | NPU adapter on `acd0aff1` lazily captures exact `(bucket_size, window_lens)` signatures with a per-bucket budget | All-graph NPU qualification pending |
 | Prefill/decode graph | Not a model contract | Prefill uses the breakable backend; decode graph is enabled by default | Engine builder and graph tests | Pure SGLang `v0.5.19` NPU graph path with the follow-up encoder graph active | Encoder, prefill, and decode graph qualification is pending as one exact-head all-graph task |
 | Torch compile | Not a model contract | Enabled by default in the CUDA performance profile with `torch_compile_max_bs=2`; the stage default is disabled | Engine builder/default config | CUDA performance option; not required by the Qwen3-ASR model | Compile+decode-graph startup fails at `PagedAttentionOperation`; pure `v0.5.19` with compile disabled passes the functional smoke gate |
 | NPU encoder stream isolation | Not applicable | `encoder_service.py` uses a private device stream and records the default consuming stream | Focused unit tests | Merged in #2084 through `886ced95` | Merged code is the active baseline; the all-graph task re-attests the integrated path on an exact head |
