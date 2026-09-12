@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+from collections import Counter
 from types import SimpleNamespace
 
 import pytest
@@ -108,6 +109,71 @@ def test_layer_stack_forwards_precomputed_attention_metadata():
     assert seen["forward_metadata"] is attention_metadata
 
 
+def test_npu_capture_all_defers_until_real_window_signature():
+    runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
+    runner._is_npu = True
+    runner._buckets = (128, 256)
+    runner._graphs = {}
+    runner._failed = set()
+
+    runner.capture_all()
+
+    assert runner._graphs == {}
+    assert runner._failed == set()
+
+
+def test_npu_capture_materializes_sequence_boundaries_on_host():
+    runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
+    runner._is_npu = True
+    runner._device = torch.device("meta")
+
+    cu_seqlens = runner._make_static_cu([4, 3, 1])
+
+    assert cu_seqlens.device.type == "cpu"
+    assert cu_seqlens.dtype == torch.int32
+    assert cu_seqlens.tolist() == [0, 4, 7, 8]
+
+
+def test_npu_replay_uses_exact_signature_and_bounds_graph_count():
+    captured = []
+    replayed = []
+    runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
+    runner._is_npu = True
+    runner._max_seqlen = 8
+    runner._failed = set()
+    runner._graphs = {}
+    runner._npu_signature_capacity = 2
+    runner._fallback_counts = Counter()
+    runner._reported_replays = set()
+    runner._plan = lambda total, windows: (8, [8 - total])
+
+    def capture(bucket_size, *, window_lens=None):
+        captured.append((bucket_size, window_lens))
+        return SimpleNamespace(
+            hidden_states=torch.zeros(8, 2),
+            cu_seqlens=torch.tensor([0, 4, 8], dtype=torch.int32),
+            attention_metadata=None,
+            graph=SimpleNamespace(replay=lambda: replayed.append(True)),
+            output=torch.zeros(8, 2),
+        )
+
+    runner._capture = capture
+    hidden_states = torch.ones(4, 2)
+
+    assert runner.run(hidden_states, [4]) is not None
+    assert runner.run(hidden_states, [4]) is not None
+    assert captured == [(8, (4, 4))]
+    assert replayed == [True, True]
+
+    assert runner.run(hidden_states, [2, 2]) is not None
+    assert captured == [(8, (4, 4)), (8, (2, 2, 4))]
+    assert len(replayed) == 3
+
+    assert runner.run(hidden_states, [1, 3]) is None
+    assert captured == [(8, (4, 4)), (8, (2, 2, 4))]
+    assert runner._failed == set()
+
+
 @pytest.fixture
 def asr_server_args():
     from sglang.srt.runtime_context import get_context
@@ -182,9 +248,10 @@ def test_graph_matches_eager_tower(asr_server_args):
         graph_backend=current_platform.get_device_graph_backend(tower_device),
     )
     runner.capture_all()
-    assert runner._graphs and not runner._failed
-    pools = [entry.graph.pool() for entry in runner._graphs.values()]
-    assert len(set(pools)) == len(pools)
+    if not runner._is_npu:
+        assert runner._graphs and not runner._failed
+        pools = [entry.graph.pool() for entry in runner._graphs.values()]
+        assert len(set(pools)) == len(pools)
 
     def check(frame_lens):
         feats = (torch.randn(128, sum(frame_lens), device=device) * 0.05).to(
@@ -198,6 +265,7 @@ def test_graph_matches_eager_tower(asr_server_args):
             tokens_per_window=runner.tokens_per_window,
         )
         out = runner.run(eager_preamble(tower, feats, lens), wl)
+        assert out is not None
         diff = (out.float() - ref.float()).abs().max().item()
         assert diff < 3e-2, f"{frame_lens}: max|diff|={diff}"
 
@@ -210,6 +278,7 @@ def test_graph_matches_eager_tower(asr_server_args):
         check(frame_lens)
     for frame_lens in reversed(sequence):
         check(frame_lens)
+    assert runner._graphs and not runner._failed
 
     assert (
         runner.run(
