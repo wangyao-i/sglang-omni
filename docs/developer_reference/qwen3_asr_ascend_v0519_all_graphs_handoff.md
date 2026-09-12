@@ -28,7 +28,7 @@ validation task.
 | SGLang | `0bcd822377da7b5718e674eaf9c870d349424dd1` (`v0.5.19`) | Clean; no fused-op patch |
 | SGLang-Omni baseline | `886ced95b9c0b76429798bb60dbd34d3f71dad95` | Merge commit for #2084; must be an ancestor of the observed HEAD |
 | SGLang-Omni | `codex/qwen3-asr-npu-encoder-prefill-graph-v0519` | Clean observed HEAD must contain this handoff and differ from the runtime-code commit only under `docs/` |
-| SGLang-Omni runtime code | `1d24091b105c0906cf9d25e19099ecfaf74080df` | Exact encoder/prefill/decode graph implementation and tests |
+| SGLang-Omni runtime code | `2cdfa51e7d88b33559ecbfc2eb647eb001e1d506` | Exact encoder/prefill/decode graph implementation and tests |
 
 The Omni checkout must not contain zero-diff assumptions for the SGLang side:
 verify the imported SGLang module points at the exact clean `v0.5.19` checkout.
@@ -49,6 +49,9 @@ encoder graph runner for NPU:
 
 The existing Qwen3-ASR generation defaults already select
 `cuda_graph_backend_prefill=breakable`; the task pins that value explicitly.
+The NPU test fixture selects `ascend_attn`, matching the production platform
+default. `triton_attn` is a CUDA/ROCm test path and expects device-resident
+`cu_seqlens`, so it must not be forced on Ascend.
 
 ## Prior Art
 
