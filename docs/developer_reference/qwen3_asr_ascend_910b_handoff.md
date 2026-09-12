@@ -12,8 +12,9 @@ compatibility fix are historical and must not be mixed into this candidate.
 
 The current candidate keeps the minimal three-file fused-op boundary on top of
 the `v0.5.19` commit, together with the Omni encoder private-stream change.
-Hardware validation on this release-line stack reached a first complete
-failure during default startup after the SGLang checkout identity was verified.
+The graph-only path passes the functional startup and smoke gate. The
+compile-enabled path remains a separate, unsupported NPU combination. HBM
+cleanup after the graph-only run is unresolved.
 
 ## Latest Server Report
 
@@ -42,6 +43,31 @@ The latest report is a valid exact-head run with an unresolved first failure.
 - The submitted prose labels the frame as `85e8933d`, but the runner line
   numbers match `e0011e30`. Bind the next analysis to the raw log header, not
   the prose label.
+
+## Graph-Only Result
+
+The bounded graph-only run passed on the exact runtime heads:
+
+- SGLang `e0011e30`, Omni `5190678c`;
+- resolved `enable_torch_compile: false`;
+- readiness reached;
+- decode graph capture completed without `PagedAttentionOperation`;
+- one smoke request returned HTTP 200 with a non-empty transcript and
+  `latency=0.283s`;
+- normal shutdown completed;
+- HBM remained at 86% with an unidentified holder.
+
+This resolves the functional scope:
+
+- decode graph is supported when compile is disabled;
+- the `PagedAttentionOperation` setup failure is specific to the
+  compile-enabled capture path;
+- the SGLang fused-op patch is not required for the current NPU functional
+  baseline and should be removed or deferred until a compile performance task
+  proves it necessary.
+
+The HBM holder must be classified before cleanup is marked passed. Do not
+attribute it to the graph-only run until the process ID and owner are known.
 
 ## Scope
 
@@ -152,12 +178,14 @@ The later compile-disabled main run also exposed a separate main-only
 
 ## First Task
 
-The exact-head release-line run with compile and decode graph enabled failed at
-ATB PagedAttention setup. Run the bounded graph-only task in
+The graph-only run passed readiness, decode capture, one smoke request, and
+normal shutdown. Its cleanup result is unresolved because HBM remained at 86%
+with an unidentified holder. Classify that holder without rerunning the model,
+using the cleanup procedure in
 [`qwen3_asr_ascend_v0519_graph_only_task.md`](qwen3_asr_ascend_v0519_graph_only_task.md).
-This changes only `enable_torch_compile` to `false`; decode graph remains
-enabled. Do not run another arm in the same invocation. Do not run the
-historical main-based task.
+After cleanup attribution, make graph-only the explicit NPU profile and test
+the candidate after removing the unnecessary SGLang compile patch. Do not run
+the historical main-based task.
 
 ## Return Contract
 
