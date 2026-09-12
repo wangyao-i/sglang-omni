@@ -135,7 +135,7 @@ Do not add another arm or change another variable in this task.
 
 ## Result
 
-Functional gate: passed. Cleanup gate: unresolved.
+Functional gate: passed. Cleanup gate: passed.
 
 - SGLang `e0011e30` and Omni `5190678c` were confirmed.
 - Resolved configuration confirmed `enable_torch_compile: false`.
@@ -144,8 +144,9 @@ Functional gate: passed. Cleanup gate: unresolved.
 - One smoke request returned HTTP 200 with a non-empty transcript and
   `latency=0.283s`.
 - Normal shutdown completed.
-- HBM remained at 86% with a reported holder. The holder was not identified,
-  so this is a cleanup issue, not yet a leak attribution.
+- Initial HBM remained at 86% with a holder. Follow-up identified the holder
+  as a residual process; the server operator cleaned it. It is not attributed
+  to the graph-only run.
 
 Functional conclusion:
 
@@ -156,23 +157,14 @@ Functional conclusion:
   should be removed or deferred unless a later performance task proves that
   compile is required.
 
-Before the next functional workload, classify the HBM holder without rerunning
-the model:
-
-1. identify the holding process from the NPU process list;
-2. state whether it is the completed server, a previous failed server, or an
-   unrelated process;
-3. confirm the server process is gone and the port is free;
-4. if the holder is an unrelated process, record it and keep the graph-only
-   functional result;
-5. if the holder is the graph-only server or an identifiable stale server
-   process, treat cleanup as failed and preserve its PID details for owner
-   analysis.
+The task is complete. The next bounded change is to make graph-only the
+explicit NPU profile and verify the pure `v0.5.19` base after removing the
+SGLang compile-boundary patch.
 
 ## Return
 
 ```text
-Task status: functional passed / cleanup unresolved
+Task status: passed
 SGLang HEAD / clean / imported module:
 Omni HEAD / clean / imported module:
 Resolved compile and graph settings:

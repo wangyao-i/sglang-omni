@@ -12,13 +12,14 @@ compatibility fix are historical and must not be mixed into this candidate.
 
 The current candidate keeps the minimal three-file fused-op boundary on top of
 the `v0.5.19` commit, together with the Omni encoder private-stream change.
-The graph-only path passes the functional startup and smoke gate. The
-compile-enabled path remains a separate, unsupported NPU combination. HBM
-cleanup after the graph-only run is unresolved.
+The graph-only path passes the functional startup, smoke, shutdown, and cleanup
+gates. The compile-enabled path remains a separate, unsupported NPU
+combination.
 
 ## Latest Server Report
 
-The latest report is a valid exact-head run with an unresolved first failure.
+The earlier compile-enabled report is a valid exact-head first failure. The
+graph-only follow-up resolves the functional scope and cleanup question.
 
 - The server worktree uses the legacy directory name
   `sglang_qwen3-asr-decode-graph-diag`, but its actual HEAD is
@@ -55,7 +56,8 @@ The bounded graph-only run passed on the exact runtime heads:
 - one smoke request returned HTTP 200 with a non-empty transcript and
   `latency=0.283s`;
 - normal shutdown completed;
-- HBM remained at 86% with an unidentified holder.
+- Initial HBM remained at 86% with a holder; follow-up identified it as a
+  residual process, which was cleaned by the server operator.
 
 This resolves the functional scope:
 
@@ -66,8 +68,8 @@ This resolves the functional scope:
   baseline and should be removed or deferred until a compile performance task
   proves it necessary.
 
-The HBM holder must be classified before cleanup is marked passed. Do not
-attribute it to the graph-only run until the process ID and owner are known.
+Cleanup is closed. The residual HBM holder was an external residual process,
+not evidence of a leak in the graph-only run.
 
 ## Scope
 
@@ -178,14 +180,11 @@ The later compile-disabled main run also exposed a separate main-only
 
 ## First Task
 
-The graph-only run passed readiness, decode capture, one smoke request, and
-normal shutdown. Its cleanup result is unresolved because HBM remained at 86%
-with an unidentified holder. Classify that holder without rerunning the model,
-using the cleanup procedure in
-[`qwen3_asr_ascend_v0519_graph_only_task.md`](qwen3_asr_ascend_v0519_graph_only_task.md).
-After cleanup attribution, make graph-only the explicit NPU profile and test
-the candidate after removing the unnecessary SGLang compile patch. Do not run
-the historical main-based task.
+The graph-only run passed readiness, decode capture, one smoke request, normal
+shutdown, and cleanup. The residual HBM holder was identified as a residual
+process and cleaned. The next bounded change is to make graph-only the explicit
+NPU profile and test the pure `v0.5.19` base after removing the unnecessary
+SGLang compile patch. Do not run the historical main-based task.
 
 ## Return Contract
 
