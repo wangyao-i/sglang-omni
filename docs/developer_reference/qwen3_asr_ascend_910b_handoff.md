@@ -199,8 +199,10 @@ non-equivalent exact10 concurrency-1 protocol and reported WER `0.0784`; it is
 accepted as functional evidence for progression, but it is not used to
 recalibrate the WER threshold. The exact WER protocol is deferred as a
 non-blocking verification issue. The next bounded change is to confirm cleanup
-and qualify the current [#2084](https://github.com/sgl-project/sglang-omni/pull/2084)
-head on the pure base. Do not restore the SGLang fused-op patch or use conc1.
+and run a read-only qualification of frozen
+[#2084](https://github.com/sgl-project/sglang-omni/pull/2084) `872e5502` on the
+pure base. Do not modify or rebase the reviewed PR. Do not restore the SGLang
+fused-op patch or use conc1.
 
 ## Return Contract
 

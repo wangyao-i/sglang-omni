@@ -17,11 +17,12 @@ order is now:
 1. **P0 - freeze the minimal functional path.** Pure SGLang `v0.5.19` plus the
    Omni encoder private stream, with decode graph enabled and Torch Compile
    disabled. No fused-op patch.
-2. **P1 - qualify the upstream PR head.** Re-run startup, cold concurrency-8,
-   one 140-request correctness pass, and cleanup on the current
-   [#2084](https://github.com/sgl-project/sglang-omni/pull/2084) head.
-3. **P2 - reduce the shipping diff.** Keep the change platform-neutral, remove
-   diagnostic/deferred mechanisms, and prepare the PR narrative.
+2. **P1 - qualify the frozen upstream PR head.** Re-run startup, cold
+   concurrency-8, one 140-request functional-correctness pass, and cleanup on
+   the reviewed [#2084](https://github.com/sgl-project/sglang-omni/pull/2084)
+   head without changing the PR.
+3. **P2 - freeze reviewed work.** Do not modify, rebase, or rewrite #2084. Any
+   new issue becomes a separate follow-up branch and PR.
 4. **P3 - add capability or performance work.** Encoder/prefill graph, Torch
    Compile, realtime ASR, and the C70 target come only after P0-P2.
 
@@ -34,7 +35,7 @@ errors. Exact corpus/protocol reconciliation is deferred.
 
 | Item | Current decision |
 |---|---|
-| SGLang-Omni | `upstream/main`, currently `6ff46426`; rebase the Omni branch before the final hardware run |
+| SGLang-Omni | The reviewed #2084 head `872e5502` is frozen; do not rebase or modify it. Other work uses follow-up branches |
 | SGLang | Pure `v0.5.19` tag commit `0bcd82237` is the active runtime baseline; the fused-op patch `e0011e30` is deferred |
 | SGLang dependency | `sglang==0.5.19` |
 | NPU runtime | CANN, PyTorch, torch_npu, triton-ascend, and sgl-kernel-npu must be selected from their compatibility matrices |
@@ -67,7 +68,7 @@ functional gate passed but a cleanup or qualification gate remains open;
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
 | Combined NPU liveness and correctness | Done for progression | Pure `v0.5.19` + Omni `5190678c` passed graph-only startup, smoke, cold concurrency-8 `70/70`, and a 140-request pass with `140/140`, zero empty outputs, and zero garbled outputs; the exact WER protocol is deferred | Do not block P0; reconcile the WER protocol only when it changes a product decision |
-| PR #2084 current-head qualification | Planned | The functional evidence above uses Omni code `5190678c`; the current PR head is `872e5502` and requires a fresh hardware pass | Run startup, cold concurrency-8, 140-request functional correctness, and cleanup on the PR head |
+| PR #2084 frozen-head qualification | Planned | The functional evidence above uses Omni code `5190678c`; the reviewed PR head is frozen at `872e5502` and requires a read-only hardware pass | Run startup, cold concurrency-8, 140-request functional correctness, and cleanup on `872e5502`; do not modify the PR |
 | SGLang main interface experiment | Historical | Main exposed `scheduler_stage_metrics` drift and older capture failures; the baseline is abandoned | Do not use for current acceptance |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
 | Performance target | Deferred | No performance work is part of the current acceptance path | Reopen only after functionality and correctness close |
@@ -123,9 +124,9 @@ performance task supplies independent evidence.
 
 ### Phase 3: Omni branch cleanup
 
-- Rebase the private-stream change onto current Omni main.
-- Keep the change platform-neutral and preserve CUDA behavior.
-- Keep the focused encoder-service tests with the implementation.
+- Treat #2084 `872e5502` as frozen after community review.
+- Do not rebase, rewrite, or edit the PR branch.
+- If any defect appears, create a separate follow-up branch and PR.
 
 ### Phase 4: Exact-head validation
 
@@ -146,10 +147,9 @@ performance task supplies independent evidence.
 
 ### Phase 5: Upstream preparation
 
-- Rebase and split the SGLang and Omni changes into reviewable units.
-- Make the PR narrative state only what the current evidence proves.
-- Remove development diagnostics, stale performance claims, and superseded
-  candidate identities from the final description.
+- Keep #2084 unchanged and use it as the current Omni encoder-stream unit.
+- Keep SGLang compile-boundary work separate and deferred.
+- Any post-review issue gets a new branch and a linked follow-up PR.
 
 ## Validation Gates
 
