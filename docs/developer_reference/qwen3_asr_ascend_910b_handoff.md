@@ -81,6 +81,8 @@ allocator signal and may originate in CANN, torch_npu, ATB, graph capture, or
 another runtime path. Public Ascend reports also show that required allocator
 or dynamic-library settings can be absent from non-interactive launches. The
 classification task records those values before changing any of them.
+`PagedAttentionOperation` is also an asynchronous operator report, so its name
+may not identify the true first fault until a blocking diagnostic confirms it.
 
 ## Server Facts To Confirm
 

@@ -134,6 +134,7 @@ and forced alignment remain outside this gate.
 | Custom fused-op boundary changed PagedAttention tensor layout | Unproven | The observed heap-corruption message does not establish a tensor-layout mismatch |
 | NPU graph/runtime or lower CANN/ATB/torch_npu path causes corruption | Strongest current explanation | Failure occurs at native PagedAttention operation capture; historical compile-enabled capture failed at the same point, while compile-disabled capture passed |
 | Non-interactive launch dropped an allocator or library setting | Alternative | Public Ascend reports show the same heap-corruption signal when `LD_PRELOAD` or related runtime settings apply only to an interactive shell |
+| Asynchronous operator attribution is misleading | Diagnostic caveat | Ascend can report the previous `PagedAttentionOperation` when the real fault is asynchronous; use `ASCEND_LAUNCH_BLOCKING=1` only in the follow-up diagnostic |
 | `torch.compile` is required for the failure | Pending | Arm A disables compile while retaining the decode graph |
 | Decode graph is required for the failure | Pending | Arm B runs only if Arm A passes |
 
