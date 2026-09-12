@@ -22,19 +22,22 @@ SGLang-Omni implementation, and repository tests.
 - SGLang dependency: `sglang==0.5.19`; the active runtime baseline is the
   `v0.5.19` release line, not SGLang main
 - Ascend validation candidates:
-  - SGLang `codex/qwen3-asr-v0519-fused-op` at `e0011e30`, based on tag commit
-    `0bcd82237`
+  - SGLang pure `v0.5.19` tag commit `0bcd82237`, with no fused-op patch
   - SGLang-Omni `codex/qwen3-asr-npu-encoder-stream-v0519` code at `5190678c`
 
+The SGLang `e0011e30` fused-op candidate is archived and deferred. It is not
+part of the active functional baseline.
+
 The NPU implementation and qualification columns describe those candidates.
-They remain provisional until the isolated-server validation completes.
+The pure-base graph-only smoke is qualified; all other NPU cells remain
+provisional until their stated gates complete.
 
 ## Matrix
 
 | Feature | Official model declaration | SGLang-Omni behavior | CUDA/runtime evidence | NPU implementation | NPU qualification |
 |---|---|---|---|---|---|
 | Checkpoints | Qwen3-ASR-1.7B and 0.6B | Generic Qwen3-ASR pipeline accepts the architecture | Cookbook and MLX paths exercise 1.7B and 0.6B | Not checkpoint-specific | Pending; current target is 1.7B |
-| Offline transcription | Supported | `/v1/audio/transcriptions` | Cookbook transcription request; ASR CI | Uses the same Omni path | Pending exact-head smoke and correctness |
+| Offline transcription | Supported | `/v1/audio/transcriptions` | Cookbook transcription request; ASR CI | Uses the same Omni path | Exact-head graph-only smoke passed on pure `v0.5.19`; full correctness pending |
 | SSE token streaming | Streaming inference supported by the model | `stream=true` emits incremental transcript deltas while decoding a complete upload | Cookbook and stream-output tests | Depends on the same LM/compile path | Pending |
 | Realtime PCM input | Streaming/offline unified model | `/v1/realtime?intent=transcription`, PCM16 chunks, VAD or explicit commit, replacement partial segments | `test_qwen3_asr_realtime.py` | Not separately changed by the current branch | Not claimed yet |
 | Language identification | 30 languages | Automatic detection when `language` is omitted | Result adapter parses the model language prefix | Same model path | Pending |
@@ -50,10 +53,10 @@ They remain provisional until the isolated-server validation completes.
 | Batch/concurrency | Official vLLM path supports batch inference | Batched stage with `max_running_requests`, pre-LM batching, and chunk concurrency | Config, engine builder, ASR CI | Same scheduler; device execution differs | Pending |
 | BF16/FP16 | BF16 checkpoints; FlashAttention requires BF16/FP16 | `auto` follows checkpoint dtype; FP16 can be forced | Cookbook dtype notes | Same dtype policy | Pending |
 | Encoder graph | Not a model contract | Optional platform-owned encoder layer-stack graph | CUDA graph tests | Platform returns no NPU backend; this path is effectively eager on NPU | Not claimed |
-| Prefill/decode graph | Not a model contract | Prefill uses the breakable backend; decode graph is enabled by default | Engine builder and graph tests | SGLang v0.5.19 NPU graph path | Graph-only with compile disabled passes readiness, decode capture, one non-empty smoke, shutdown, and cleanup on exact heads |
-| Torch compile | Not a model contract | Enabled by default in the CUDA performance profile with `torch_compile_max_bs=2`; the stage default is disabled | Engine builder/default config | CUDA performance option; not required by the Qwen3-ASR model | Compile+decode-graph startup fails at `PagedAttentionOperation`; compile disabled with graph enabled passes the functional smoke gate |
-| NPU encoder stream isolation | Not applicable | `encoder_service.py` uses a private device stream and records the default consuming stream | Focused unit tests | Implemented on `5190678c` | Focused server tests pass; no request was reached because startup failed |
-| NPU fused-op compile boundary | Not applicable | Qwen3 imports the external kernel through an opaque custom op | Focused SGLang NPU tests | Implemented on `e0011e30` over `v0.5.19` | Not required by the passing graph-only path; remove or defer until compile is proven necessary |
+| Prefill/decode graph | Not a model contract | Prefill uses the breakable backend; decode graph is enabled by default | Engine builder and graph tests | Pure SGLang `v0.5.19` NPU graph path | Decode graph passes readiness, capture, one non-empty smoke, and shutdown on pure `v0.5.19`; prefill graph is not separately qualified |
+| Torch compile | Not a model contract | Enabled by default in the CUDA performance profile with `torch_compile_max_bs=2`; the stage default is disabled | Engine builder/default config | CUDA performance option; not required by the Qwen3-ASR model | Compile+decode-graph startup fails at `PagedAttentionOperation`; pure `v0.5.19` with compile disabled passes the functional smoke gate |
+| NPU encoder stream isolation | Not applicable | `encoder_service.py` uses a private device stream and records the default consuming stream | Focused unit tests | Implemented on `5190678c` | Focused server tests and one request on pure `v0.5.19` passed; final PR-head qualification pending |
+| NPU fused-op compile boundary | Not applicable | Qwen3 imports the external kernel through an opaque custom op | Focused SGLang NPU tests | Archived on `e0011e30`; pure `v0.5.19` has no diff against the tag | Not required by the pure-base graph-only path; deferred until compile is proven necessary |
 
 ## Current Gaps
 

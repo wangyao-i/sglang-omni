@@ -1,8 +1,9 @@
 # Qwen3-ASR Ascend branch-validation handoff
 
-This is the Gate 0 handoff for validating the two branch deltas listed below.
-It replaces the older, unrelated handoff state for this restart. Keep raw
-logs, model files, audio, and host details on the isolated server.
+This is the Gate 0 handoff for the current pure `v0.5.19` plus Omni
+encoder-stream candidate. It replaces the older, unrelated handoff state for
+this restart. Keep raw logs, model files, audio, and host details on the
+isolated server.
 
 ## Status
 
@@ -10,11 +11,11 @@ The active baseline is now the SGLang `v0.5.19` release line, not SGLang main.
 The previous main-based startup failures and the main-only Scheduler
 compatibility fix are historical and must not be mixed into this candidate.
 
-The current candidate keeps the minimal three-file fused-op boundary on top of
-the `v0.5.19` commit, together with the Omni encoder private-stream change.
-The graph-only path passes the functional startup, smoke, shutdown, and cleanup
-gates. The compile-enabled path remains a separate, unsupported NPU
-combination.
+The current candidate is the pure SGLang `v0.5.19` commit `0bcd82237`, together
+with the Omni encoder private-stream change. It has no `fused_ops.py` or Qwen3
+diff against the tag. The graph-only path passes the functional startup,
+smoke, and shutdown gates. The compile-enabled path and the archived fused-op
+boundary are separate, unsupported NPU combinations.
 
 ## Latest Server Report
 
@@ -45,9 +46,9 @@ graph-only follow-up resolves the functional scope and cleanup question.
   numbers match `e0011e30`. Bind the next analysis to the raw log header, not
   the prose label.
 
-## Graph-Only Result
+## Graph-Only Results
 
-The bounded graph-only run passed on the exact runtime heads:
+The first bounded graph-only run passed on the patch-bearing runtime heads:
 
 - SGLang `e0011e30`, Omni `5190678c`;
 - resolved `enable_torch_compile: false`;
@@ -68,13 +69,31 @@ This resolves the functional scope:
   baseline and should be removed or deferred until a compile performance task
   proves it necessary.
 
+The follow-up pure-base run passed without the SGLang patch:
+
+- SGLang `0bcd8223` (`v0.5.19` plus its release-line cherry-picks), Omni
+  `5190678c`;
+- `fused_ops.py` and the Qwen3 diff against the tag are both zero;
+- resolved runtime disables `torch.compile`;
+- server readiness reached;
+- decode graph capture completed without `PagedAttentionOperation`;
+- one smoke request returned HTTP 200 with a non-empty transcript and
+  `latency=12.834s`; this cold first-request latency is not a performance
+  result;
+- normal shutdown completed.
+
 Cleanup is closed. The residual HBM holder was an external residual process,
 not evidence of a leak in the graph-only run.
 
+The pure-base result proves that the SGLang fused-op patch is not required for
+the current NPU functional path. The patch remains deferred for a possible
+future compile performance task and must not be restored as a baseline
+dependency.
+
 ## Scope
 
-- Validate that Qwen3's NPU path uses the external fused kernel through an
-  opaque custom-op boundary.
+- Validate that Qwen3-ASR runs on pure SGLang `v0.5.19` with the NPU decode
+  graph enabled and `torch.compile` disabled.
 - Validate that the Qwen3-ASR encoder uses a private device stream and records
   the consuming default stream.
 - Do not run performance, realtime, timestamp, or forced-alignment gates.
@@ -83,7 +102,7 @@ not evidence of a leak in the graph-only run.
 
 | Repository | Branch | Exact head | Base |
 |---|---|---|---|
-| SGLang | `codex/qwen3-asr-v0519-fused-op` | `e0011e30fbdb9690f01fa2083d452c93b37bb214` | `v0.5.19` commit `0bcd822377da7b5718e674eaf9c870d349424dd1` |
+| SGLang | `v0.5.19` tag | `0bcd822377da7b5718e674eaf9c870d349424dd1` | No patch; `e0011e30` is deferred |
 | SGLang-Omni | `codex/qwen3-asr-npu-encoder-stream-v0519` | `5190678c463f6c2b01e4ee0007cf788c3fdc2287` | `6ff46426469a1af2746cef71a9fdcfc09613966d` |
 
 The Omni branch tip may advance for handoff, task, and roadmap documents. The
@@ -92,16 +111,9 @@ cannot change the tested runtime.
 
 ## Local Evidence
 
-- SGLang: `fused_ops.py` registers the external kernel with
-  `register_custom_op_from_extern`; `qwen3.py` imports that wrapper.
-- SGLang: the same patch was cherry-picked cleanly onto the `v0.5.19` commit;
-  the helper and Qwen3 call site already exist on that release line.
-- SGLang: `python -m compileall` and `git diff --check` pass on the
-  release-line candidate. The focused pytest cannot execute on this Windows
-  host because `sgl_kernel_npu` is unavailable.
-- SGLang: an independent stub loaded the implementation, validated output
-  metadata, passed the call through to the external-kernel stub, and confirmed
-  `torch.library.infer_schema` accepts the function signature.
+- SGLang: the active baseline is the pure `v0.5.19` tag commit. The archived
+  patch and its local tests remain historical evidence for the deferred
+  compile experiment, not the functional baseline.
 - Omni: the branch is rebased onto current Omni main and contains focused
   stream-selection, stream-context, and default-stream recording tests.
 - Omni: local `compileall`, AST parsing, and an isolated stub of
@@ -180,11 +192,11 @@ The later compile-disabled main run also exposed a separate main-only
 
 ## First Task
 
-The graph-only run passed readiness, decode capture, one smoke request, normal
-shutdown, and cleanup. The residual HBM holder was identified as a residual
-process and cleaned. The next bounded change is to make graph-only the explicit
-NPU profile and test the pure `v0.5.19` base after removing the unnecessary
-SGLang compile patch. Do not run the historical main-based task.
+The pure `v0.5.19` graph-only run passed readiness, decode capture, one smoke
+request, and normal shutdown. The next bounded change is cold concurrency-8
+liveness, followed by the agreed correctness workload, on the exact pure-base
+heads. Do not restore the SGLang fused-op patch or run the historical
+main-based task.
 
 ## Return Contract
 

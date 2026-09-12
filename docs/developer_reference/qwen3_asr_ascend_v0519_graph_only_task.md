@@ -24,7 +24,7 @@ until a performance task requires it.
 
 | Repository | Exact runtime head |
 |---|---|
-| SGLang | `e0011e30fbdb9690f01fa2083d452c93b37bb214` |
+| SGLang | `0bcd822377da7b5718e674eaf9c870d349424dd1` (pure `v0.5.19`) |
 | SGLang-Omni | `5190678c463f6c2b01e4ee0007cf788c3fdc2287` |
 
 ## Inputs
@@ -32,7 +32,7 @@ until a performance task requires it.
 ```bash
 export SGLANG_REPO=/server/local/sglang
 export OMNI_REPO=/server/local/sglang-omni
-export EXPECTED_SGLANG_HEAD=e0011e30fbdb9690f01fa2083d452c93b37bb214
+export EXPECTED_SGLANG_HEAD=0bcd822377da7b5718e674eaf9c870d349424dd1
 export MODEL_PATH=/server/local/Qwen3-ASR-1.7B
 export SMOKE_WAV=/server/local/approved-smoke.wav
 export PORT=8000
@@ -51,7 +51,7 @@ before starting the server.
 
 Require:
 
-- exact SGLang head `e0011e30`;
+- exact SGLang head `0bcd82237`;
 - exact Omni head `5190678c`;
 - clean worktrees;
 - imported modules under the corresponding checkout roots;
@@ -133,7 +133,9 @@ Do not add another arm or change another variable in this task.
 - Graph-only fails somewhere else: return the first complete failure and its
   first owning repository frame. Do not change code in this task.
 
-## Result
+## Results
+
+### Historical patch-bearing graph-only run
 
 Functional gate: passed. Cleanup gate: passed.
 
@@ -157,9 +159,23 @@ Functional conclusion:
   should be removed or deferred unless a later performance task proves that
   compile is required.
 
-The task is complete. The next bounded change is to make graph-only the
-explicit NPU profile and verify the pure `v0.5.19` base after removing the
-SGLang compile-boundary patch.
+### Pure v0.5.19 follow-up
+
+Functional gate: passed.
+
+- SGLang `0bcd8223` and Omni `5190678c` were confirmed.
+- `fused_ops.py` and the Qwen3 diff against the `v0.5.19` tag were both zero.
+- Server readiness was reached and decode graph capture completed without
+  `PagedAttentionOperation`.
+- One smoke request returned HTTP 200 with a non-empty transcript and
+  `latency=12.834s`. The cold first-request latency is recorded as functional
+  evidence only and is not a performance claim.
+- Normal shutdown was observed.
+
+The follow-up proves that the SGLang fused-op patch is not required for the
+current functional path. The pure base `0bcd82237` is the active candidate.
+The next bounded change is cold concurrency-8 liveness, followed by the agreed
+correctness workload.
 
 ## Return
 

@@ -1,14 +1,14 @@
 # Qwen3-ASR Ascend v0.5.19 capture classification task
 
-This is the next bounded diagnostic after the exact-head candidate run passed
-the focused tests and then stopped at decode graph capture. It is log-first:
-analyze the existing first failure before running another arm.
+This is a historical bounded diagnostic after the patch-bearing candidate run
+passed the focused tests and then stopped at decode graph capture.
 
 The graph-only run in
 [`qwen3_asr_ascend_v0519_graph_only_task.md`](qwen3_asr_ascend_v0519_graph_only_task.md)
-passed the functional and cleanup gates. The conditional base-versus-candidate
-comparison below remains deferred; the next action is the explicit NPU
-graph-only profile and pure-base verification.
+passed the functional and cleanup gates. A later pure `v0.5.19` run also passed
+without the fused-op patch. The conditional base-versus-candidate comparison
+below is no longer needed for the current functional path and must not be run
+without a new compile-performance question.
 
 The task has two stages:
 

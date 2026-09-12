@@ -1,13 +1,13 @@
-# Qwen3-ASR Ascend v0.5.19 validation task
+# Qwen3-ASR Ascend v0.5.19 compile+graph validation task (historical)
 
-This is the active validation task after moving the runtime baseline from
-SGLang main to the `v0.5.19` release line. It replaces the historical
-main-based classification and retry tasks.
+This task is historical. It records the initial patch-bearing candidate and
+the first compile+decode-graph startup failure. The active task is now
+[`qwen3_asr_ascend_v0519_graph_only_task.md`](qwen3_asr_ascend_v0519_graph_only_task.md).
 
 This compile+decode-graph validation produced the first complete startup
-failure. The graph-only follow-up passed the functional and cleanup gates. The
-current next action is to make graph-only the explicit NPU profile and verify
-the pure `v0.5.19` base.
+failure. The graph-only follow-up passed the functional and cleanup gates, and
+the later pure `v0.5.19` run proved that the fused-op patch is not required.
+The current next action is cold concurrency-8 liveness and correctness.
 
 ## Inputs
 

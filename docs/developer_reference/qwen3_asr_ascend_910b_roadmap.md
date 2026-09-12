@@ -12,7 +12,7 @@ Last updated: 2026-09-12.
 | Item | Current decision |
 |---|---|
 | SGLang-Omni | `upstream/main`, currently `6ff46426`; rebase the Omni branch before the final hardware run |
-| SGLang | `v0.5.19` release line is the only active runtime baseline; the candidate patch is `e0011e30` on tag commit `0bcd82237` |
+| SGLang | Pure `v0.5.19` tag commit `0bcd82237` is the active runtime baseline; the fused-op patch `e0011e30` is deferred |
 | SGLang dependency | `sglang==0.5.19` |
 | NPU runtime | CANN, PyTorch, torch_npu, triton-ascend, and sgl-kernel-npu must be selected from their compatibility matrices |
 | Performance | Deferred until the functional and correctness path is complete |
@@ -38,12 +38,12 @@ functional gate passed but a cleanup or qualification gate remains open;
 
 | Workstream | Status | Current state | Exit condition |
 |---|---|---|---|
-| Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream-v0519` uses code commit `5190678c`; focused stream tests passed previously and remain applicable | Complete a request on the release-line runtime |
-| External fused-kernel compile boundary | Deferred | `e0011e30` contains the three-file boundary, but the passing NPU graph-only path does not require compile or this patch | Remove or park the patch unless a future compile performance task proves it necessary |
-| SGLang v0.5.19 validation | Done | Graph-only passed readiness, decode capture, non-empty smoke, shutdown, and cleanup on `e0011e30` + `5190678c`; the residual HBM holder was an external process that was cleaned | Make graph-only the explicit NPU profile and test the pure `v0.5.19` base after removing the unnecessary SGLang compile patch |
+| Omni NPU encoder private stream | Done | `codex/qwen3-asr-npu-encoder-stream-v0519` uses code commit `5190678c`; focused stream tests pass and a request completed on the pure `v0.5.19` runtime | Keep the implementation under final PR-head validation |
+| External fused-kernel compile boundary | Deferred | Pure `v0.5.19` passes graph-only, so `e0011e30` is not required by the active functional path | Keep [#38843](https://github.com/sgl-project/sglang/pull/38843) deferred unless a later compile performance task proves the boundary necessary |
+| SGLang v0.5.19 validation | Done | Pure tag commit `0bcd82237`, with no fused_ops or Qwen3 diff against the tag, reached readiness, captured the decode graph, returned a non-empty smoke transcript, and completed normal shutdown | Preserve the pure base as the active runtime baseline |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
-| Combined NPU liveness and correctness | Planned | Graph-only startup, one smoke request, and cleanup pass; the explicit NPU profile and pure-base candidate remain open | Pin the graph-only profile, remove the unused SGLang patch, then run cold concurrency-8 liveness and correctness on exact heads |
+| Combined NPU liveness and correctness | Planned | Pure `v0.5.19` + Omni `5190678c` passed graph-only startup and one smoke request | Run cold concurrency-8 liveness and the agreed correctness workload on the exact pure-base heads |
 | SGLang main interface experiment | Historical | Main exposed `scheduler_stage_metrics` drift and older capture failures; the baseline is abandoned | Do not use for current acceptance |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
 | Performance target | Deferred | No performance work is part of the current acceptance path | Reopen only after functionality and correctness close |
@@ -51,20 +51,21 @@ functional gate passed but a cleanup or qualification gate remains open;
 
 ## Problem Statement
 
-The retained problem is narrow:
+The retained functional problem is now narrower than the original
+compile-supported stack:
 
-1. On Ascend, Qwen3's NPU path calls `split_qkv_rmsnorm_rope` from
-   `sgl_kernel_npu` while SGLang compiles the model with `fullgraph=True`.
-2. Dynamo can trace into the external Triton launcher and reject host-side
-   launch logic such as `get_device_properties()`.
-3. The boundary must make the external kernel opaque to Dynamo while preserving
-   the real kernel's arguments and outputs at runtime.
-4. The encoder must not submit audio work on the generation submission lane;
-   the private device stream addresses that independent NPU liveness issue.
+1. Pure SGLang `v0.5.19` must run Qwen3-ASR with the NPU decode graph enabled
+   and `enable_torch_compile=false`.
+2. The Omni encoder must submit audio work without conflicting with generation
+   submission; the private device stream is the retained mechanism.
+3. The pure-base candidate must pass cold concurrency-8 liveness and the agreed
+   correctness workload.
 
-The following are not part of this problem: GraphKey, execution guards,
-ordered graph input update, compile-bucket selectors, TopK/RMSNorm/Silu
-dispatch overrides, and global `prepare_model_for_torch_compile` changes.
+The compile-safe fused-op boundary, GraphKey, execution guards, ordered graph
+input update, compile-bucket selectors, TopK/RMSNorm/Silu dispatch overrides,
+and global `prepare_model_for_torch_compile` changes are not part of the active
+functional problem. They remain deferred or rejected unless a future
+performance task supplies independent evidence.
 
 ## Execution Plan
 
@@ -84,17 +85,17 @@ dispatch overrides, and global `prepare_model_for_torch_compile` changes.
 - Model capability, stack implementation, and hardware qualification are
   separate columns.
 
-### Phase 2: Minimal SGLang repair
+### Phase 2: Pure v0.5.19 minimal baseline
 
-- Apply the current three-file fused-op boundary to the `v0.5.19` release
-  line.
-- Keep only the external fused-kernel compile boundary.
-- Prefer the existing `register_custom_op_from_extern()` helper; evaluate
-  registering the op in `sgl_kernel_npu` as the longer-term owner.
-- Keep a focused fake-tensor/opacity test and a value-parity test for the
-  compiled path.
-- Do not restore removed graph, guard, selector, or dispatch changes without
-  new isolating evidence.
+- Completed: pure SGLang `v0.5.19` commit `0bcd82237` is the active candidate.
+- Completed: the SGLang checkout has no `fused_ops.py` or Qwen3 diff against
+  the tag.
+- Completed: readiness, decode graph capture, one non-empty smoke request, and
+  normal shutdown pass with `enable_torch_compile=false`.
+- Archived: the three-file fused-op boundary at `e0011e30` is deferred and is
+  no longer a prerequisite for the functional path.
+- Do not restore graph, guard, selector, dispatch, or compile-boundary changes
+  without a new isolating experiment.
 
 ### Phase 3: Omni branch cleanup
 
@@ -113,9 +114,8 @@ dispatch overrides, and global `prepare_model_for_torch_compile` changes.
   checks pass.
 - On the isolated NPU server, first run default startup and one smoke request.
 - Stop at the first failure and classify before adding any more variants.
-- After the default smoke passes, run cold concurrency-8 liveness and the
-  agreed
-  correctness workload.
+- The pure-base graph-only smoke has passed. Run cold concurrency-8 liveness
+  and the agreed correctness workload next.
 - Record exact repository heads, dependency versions, and sanitized results.
 - Stop at the first hang, accuracy failure, device error, or unexpected eager
   fallback.
@@ -132,15 +132,16 @@ dispatch overrides, and global `prepare_model_for_torch_compile` changes.
 The current phase is complete only when:
 
 - the NPU installer accepts the declared `0.5.19` dependency line;
-- the external fused kernel is opaque in the compiled graph and preserves
-  values;
+- pure SGLang `v0.5.19` passes graph-only startup and decode capture without
+  the fused-op patch;
 - the Omni encoder uses its private device stream without the removed guard;
-- cold concurrency-8 liveness passes on the exact pinned heads; and
+- cold concurrency-8 liveness passes on the exact pure-base heads; and
 - the correctness workload passes with no garbled output and no unexpected
   fallback.
 
-Performance measurements, C70 throughput targets, realtime ASR, timestamps,
-and forced alignment remain outside this gate.
+The pure-base startup and smoke gate is complete. Performance measurements,
+C70 throughput targets, realtime ASR, timestamps, and forced alignment remain
+outside this gate.
 
 ## Current Root-Cause Board
 
@@ -148,15 +149,16 @@ and forced alignment remain outside this gate.
 |---|---|---|
 | SGLang main interface drift | Historical, resolved by baseline change | Main added `scheduler_stage_metrics`; the Omni composition layer lacked it. This cannot occur on `v0.5.19` |
 | Main-baseline PagedAttention and heap-corruption failure | Historical, needs release-line recheck | It was observed on main and is not current evidence for the `v0.5.19` candidate |
-| Fused-op tensor-layout mismatch | Rejected for the graph-only path | Graph-only passes with the same fused-op code, and the compile-enabled failure does not prove a tensor-layout mismatch |
+| Fused-op patch is required for graph-only | Rejected | Pure `v0.5.19` commit `0bcd82237` has no fused-op or Qwen3 diff and passes readiness, decode capture, and smoke |
 | Compile-enabled capture failure at `PagedAttentionOperation` | Scope resolved | The failure reproduces only with `torch.compile` enabled; graph-only with compile disabled passes exact-head startup and smoke |
 | HBM residual after graph-only shutdown | Resolved as external interference | The holder was identified as a residual process and cleaned; it is not attributed to the graph-only run |
 | Generic Ascend Qwen3 evidence covers this run | Scope difference, not root cause | Ascend Qwen3 e2e uses eager decode without torch.compile; Qwen3-ASR enables both compile and decode graph, and the NPU attention implementation selects a different branch when compile is enabled |
 | `torch.compile` is required for Qwen3-ASR | Rejected as a functional requirement | It was introduced as a CUDA low/mid-concurrency performance optimization; the stage default is `enable_torch_compile=False` |
 
-The graph-only function and cleanup gates are closed. The next work is an
-explicit NPU graph-only profile and a pure `v0.5.19` candidate that removes the
-SGLang compile-boundary patch. No compile-supported NPU claim is active.
+The pure `v0.5.19` graph-only startup and smoke gates are closed. The next work
+is cold concurrency-8 liveness and correctness on `0bcd82237` + Omni
+`5190678c`. No compile-supported NPU claim and no fused-op requirement are
+active.
 
 ## Roadmap Maintenance
 
