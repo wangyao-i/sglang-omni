@@ -6,9 +6,9 @@ analyze the existing first failure before running another arm.
 
 The graph-only run in
 [`qwen3_asr_ascend_v0519_graph_only_task.md`](qwen3_asr_ascend_v0519_graph_only_task.md)
-passed the functional gate. The current next action is its HBM-holder cleanup
-classification. The conditional base-versus-candidate comparison below remains
-deferred.
+passed the functional and cleanup gates. The conditional base-versus-candidate
+comparison below remains deferred; the next action is the explicit NPU
+graph-only profile and pure-base verification.
 
 The task has two stages:
 
