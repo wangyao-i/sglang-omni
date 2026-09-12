@@ -17,10 +17,10 @@ Last updated: 2026-09-12.
 | NPU runtime | CANN, PyTorch, torch_npu, triton-ascend, and sgl-kernel-npu must be selected from their compatibility matrices |
 | Performance | Deferred until the functional and correctness path is complete |
 
-The NPU installer currently accepts only the SGLang `0.5.18` release line. That
-is treated as an omission from the `0.5.19` baseline migration, not as a new
-compatibility decision. The installer, documentation, and its tests must be
-aligned before the combined NPU run.
+The NPU installer and its documentation have been aligned to the SGLang
+`0.5.19` release line. The installer test matrix now accepts `0.5.19`
+development, pre-release, final, post-release, and local-build spellings and
+rejects earlier and later release lines.
 
 ## Status
 
@@ -34,8 +34,8 @@ outside the current phase.
 |---|---|---|---|
 | Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream` at `5190678c` is rebased onto Omni main and includes focused stream/record tests; current-head NPU execution is pending | Pass the focused unit tests on the server |
 | External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-compile-safe-fused-op` at `85e8933d` contains the minimal wrapper on current SGLang main and uses `register_custom_op_from_extern` | Pass the NPU trace, registration, and compiled-value parity tests on the server |
-| NPU installer `0.5.19` alignment | Planned | `install_npu.sh` and `installation_npu.md` still declare `0.5.18` | Installer, docs, and tests accept and document the `0.5.19` line |
-| Qwen3-ASR CUDA feature matrix | Planned | Official model features and Omni behavior are known, but no single evidence-backed comparison exists | Every row records model declaration, Omni/CUDA implementation, NPU implementation, and verification evidence |
+| NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
+| Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
 | Combined NPU liveness and correctness | Planned | No current-head combined result exists | Cold concurrency-8 liveness and the agreed correctness gate pass on exact pinned heads |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
 | Performance target | Deferred | No performance work is part of the current acceptance path | Reopen only after functionality and correctness close |
@@ -62,17 +62,17 @@ dispatch overrides, and global `prepare_model_for_torch_compile` changes.
 
 ### Phase 0: Baseline alignment
 
-- Update the NPU installer, installation documentation, and installer tests
-  from `0.5.18` to `0.5.19`.
+- Completed: the NPU installer, installation documentation, and installer
+  tests now use `0.5.19`.
 - Pin the exact Omni and SGLang heads in the next hardware task before running
   any server command.
 
 ### Phase 1: Feature matrix
 
-- Build one row per externally meaningful feature.
-- Separate model capability from stack implementation and hardware
-  qualification.
-- Record the CUDA/Omni evidence source and the corresponding NPU status.
+- Completed: one row per externally meaningful feature is recorded in
+  [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md).
+- Model capability, stack implementation, and hardware qualification are
+  separate columns.
 
 ### Phase 2: Minimal SGLang repair
 
