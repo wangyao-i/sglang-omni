@@ -29,10 +29,10 @@ def repo(tmp_path: Path) -> Path:
         "#!/usr/bin/env bash\n"
         'if [[ "$1" == "-c" && "$2" == *\'version("sglang")\'* ]]; then\n'
         '  [[ "${FAKE_SGLANG_INSTALLED:-1}" == "1" ]] || exit 1\n'
-        "  printf '%s\\n' \"${FAKE_SGLANG_VERSION:-0.5.18}\"\n"
+        "  printf '%s\\n' \"${FAKE_SGLANG_VERSION:-0.5.19}\"\n"
         'elif [[ "$1" == "-" && $# -ge 2 ]]; then\n'
         '  case "$2" in\n'
-        "    0.5.18|0.5.18.*|0.5.18+*|0.5.18a*|0.5.18b*|0.5.18rc*) exit 0 ;;\n"
+        "    0.5.19|0.5.19.*|0.5.19+*|0.5.19a*|0.5.19b*|0.5.19rc*) exit 0 ;;\n"
         "    *) exit 1 ;;\n"
         "  esac\n"
         'elif [[ "$1" == "-c" ]]; then\n'
@@ -93,12 +93,12 @@ def test_install_uses_build_isolation_by_default(repo: Path) -> None:
 @pytest.mark.parametrize(
     "installed",
     [
-        "0.5.18.dev7+gec43c1f20",
-        "0.5.18rc1",
-        "0.5.18",
-        "0.5.18+ascend",
-        "0.5.18.post1",
-        "0.5.18.1",
+        "0.5.19.dev7+g85e8933dc",
+        "0.5.19rc1",
+        "0.5.19",
+        "0.5.19+ascend",
+        "0.5.19.post1",
+        "0.5.19.1",
     ],
 )
 def test_matching_sglang_version_is_accepted(repo: Path, installed: str) -> None:
@@ -113,15 +113,16 @@ def test_matching_sglang_version_is_accepted(repo: Path, installed: str) -> None
     [
         "0.5.16",
         "0.5.17.post1",
-        "0.5.19.dev1",
-        "0.5.19",
+        "0.5.18",
+        "0.5.20.dev1",
+        "0.5.20",
     ],
 )
 def test_mismatched_sglang_version_is_rejected(repo: Path, installed: str) -> None:
     result = _run(repo, "--check", env_overrides={"FAKE_SGLANG_VERSION": installed})
 
     assert result.returncode != 0
-    assert "supported: 0.5.18 release line" in result.stderr
+    assert "supported: 0.5.19 release line" in result.stderr
     assert f"installed: {installed}" in result.stderr
     assert "would run" not in result.stdout
 
@@ -130,7 +131,7 @@ def test_missing_sglang_is_rejected(repo: Path) -> None:
     result = _run(repo, "--check", env_overrides={"FAKE_SGLANG_INSTALLED": "0"})
 
     assert result.returncode != 0
-    assert "supported: 0.5.18 release line" in result.stderr
+    assert "supported: 0.5.19 release line" in result.stderr
     assert "installed: not installed" in result.stderr
     assert "would run" not in result.stdout
 
