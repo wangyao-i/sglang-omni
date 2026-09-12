@@ -85,6 +85,34 @@ Therefore:
 - The conclusion that a fused-op layout change caused this failure is not
   supported by the submitted evidence.
 
+## Difference From Standard Ascend Qwen3
+
+Generic Qwen3 support on SGLang does not qualify this runtime combination:
+
+- The Ascend e2e baseline sets `--attention-backend ascend` and
+  `--disable-cuda-graph`; it does not enable `--enable-torch-compile`.
+- The Qwen3-ASR pipeline configuration sets `enable_torch_compile=True`, and
+  the engine's default profile sets `disable_cuda_graph=False`.
+- The NPU attention backend takes the graph-specialized
+  `forward_decode_graph` path only when graph mode is enabled and
+  `enable_torch_compile` is false. With compilation enabled, graph capture
+  follows a different decode implementation.
+
+Therefore the active run is in the intersection:
+
+```text
+Ascend NPU + Qwen3-ASR composition + torch.compile + decode graph
+```
+
+The generic Qwen3 NPU baseline is:
+
+```text
+Ascend NPU + standard Qwen3 text model + eager decode + no torch.compile
+```
+
+A generic Qwen3 success does not prove the active intersection is supported.
+This is a scope difference and a strong hypothesis, not yet the root cause.
+
 ## Stage 1: Existing-Failure Analysis
 
 Do not start or rerun the model server in this stage.
@@ -114,7 +142,8 @@ Return redacted evidence for:
 7. Any earlier warning, allocator message, device error, fallback marker, or
    shutdown error that precedes the final `PagedAttentionOperation` report.
 8. The exact raw-log identity header, including the checked-out SGLang hash and
-   resolved attention settings.
+   resolved `attention_backend`, `disable_cuda_graph`, and
+   `enable_torch_compile` settings.
 9. The ATB/Runtime error code and complete text immediately before
    `OpParamMaker.cpp:454`.
 10. The effective attention backend and `ASCEND_USE_FIA` value, plus the
@@ -284,6 +313,7 @@ Lower-layer or inner error:
 First repository frame and owning repository:
 Raw-log SGLang identity:
 Failure stage and capture call site:
+Resolved compile and graph flags:
 Operator metadata available:
 Attention backend and ASCEND_USE_FIA:
 ATB inner error code and text:

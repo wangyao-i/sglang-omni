@@ -149,6 +149,7 @@ and forced alignment remain outside this gate.
 | Main-baseline PagedAttention and heap-corruption failure | Historical, needs release-line recheck | It was observed on main and is not current evidence for the `v0.5.19` candidate |
 | Fused-op tensor-layout mismatch | Unsupported by current evidence | The Python stack points at asynchronous `o_proj` and explicitly warns it may be inaccurate; no single-variable comparison connects `fused_ops.py` to the ATB setup failure |
 | Release-line capture failure at `PagedAttentionOperation` | Active first failure, strongest lead is NPU decode attention | Native frames confirm `atb::OperationSetup` failure for PagedAttention; an existing repository note maps the same signature to decode attention between QKV and `o_proj`, but exact-run proof is still missing |
+| Generic Ascend Qwen3 evidence covers this run | Scope difference, not root cause | Ascend Qwen3 e2e uses eager decode without torch.compile; Qwen3-ASR enables both compile and decode graph, and the NPU attention implementation selects a different branch when compile is enabled |
 
 The next task must preserve this first failure and extract the complete ordered
 traceback, lower-layer error, capture call site, and first owning repository
