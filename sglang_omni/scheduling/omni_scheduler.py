@@ -21,6 +21,7 @@ import types
 from array import array
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
+from importlib.util import find_spec
 from itertools import islice
 from typing import Any, Callable
 
@@ -39,6 +40,10 @@ from sglang.srt.managers.scheduler import validate_input_length
 from sglang.srt.mem_cache.common import release_kv_cache
 from sglang.srt.runtime_context import get_model, get_serving
 from sglang.srt.utils import broadcast_pyobj
+
+_HAS_SCHEDULER_STAGE_METRICS = (
+    find_spec("sglang.srt.observability.scheduler_stage_metrics") is not None
+)
 
 from sglang_omni.admission import QueueFullError
 from sglang_omni.profiler.event_recorder import emit as _emit_event
@@ -503,6 +508,11 @@ class OmniScheduler:
         self.ipc_channels = _OmniIpcChannels(self)
         self.init_metrics_collector(self.tp_rank, self.pp_rank, self.dp_rank)
         self.init_metrics_reporter(self.tp_rank, self.pp_rank, self.dp_rank)
+        self.scheduler_stage_metrics = (
+            self.metrics_reporter.scheduler_stage_metrics
+            if _HAS_SCHEDULER_STAGE_METRICS
+            else None
+        )
         self._init_upstream_scheduler_components()
 
         self._running = False

@@ -2027,6 +2027,7 @@ def _construct_omni_scheduler(
             SimpleNamespace(
                 reset_metrics=lambda: None,
                 is_stats_logging_rank=False,
+                scheduler_stage_metrics=object(),
             ),
         ),
         raising=False,
@@ -2164,6 +2165,27 @@ def test_omni_scheduler_initializes_upstream_queue_limit(monkeypatch) -> None:
     assert scheduler._abort_on_queued_limit(object()) is False
 
 
+def test_omni_scheduler_mirrors_upstream_scheduler_stage_metrics(monkeypatch) -> None:
+    scheduler = _construct_omni_scheduler(monkeypatch)
+
+    assert (
+        scheduler.scheduler_stage_metrics
+        is scheduler.metrics_reporter.scheduler_stage_metrics
+    )
+
+
+def test_omni_scheduler_supports_v0519_without_scheduler_stage_metrics(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        omni_scheduler_module, "_HAS_SCHEDULER_STAGE_METRICS", False
+    )
+
+    scheduler = _construct_omni_scheduler(monkeypatch)
+
+    assert scheduler.scheduler_stage_metrics is None
+
+
 def test_refresh_upstream_parallel_state_reads_dcp_from_the_parallel_bag(
     monkeypatch,
 ) -> None:
@@ -2282,6 +2304,7 @@ def test_omni_scheduler_binds_one_execution_bridge_to_any_runner(
             SimpleNamespace(
                 reset_metrics=lambda: None,
                 is_stats_logging_rank=False,
+                scheduler_stage_metrics=object(),
             ),
         ),
         raising=False,
