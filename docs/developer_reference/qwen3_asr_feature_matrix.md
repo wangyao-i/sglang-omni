@@ -50,10 +50,10 @@ They remain provisional until the isolated-server validation completes.
 | Batch/concurrency | Official vLLM path supports batch inference | Batched stage with `max_running_requests`, pre-LM batching, and chunk concurrency | Config, engine builder, ASR CI | Same scheduler; device execution differs | Pending |
 | BF16/FP16 | BF16 checkpoints; FlashAttention requires BF16/FP16 | `auto` follows checkpoint dtype; FP16 can be forced | Cookbook dtype notes | Same dtype policy | Pending |
 | Encoder graph | Not a model contract | Optional platform-owned encoder layer-stack graph | CUDA graph tests | Platform returns no NPU backend; this path is effectively eager on NPU | Not claimed |
-| Prefill/decode graph | Not a model contract | Prefill uses the breakable backend; decode graph is enabled by default | Engine builder and graph tests | SGLang v0.5.19 NPU graph path | Pending release-line startup |
-| Torch compile | Not a model contract | Enabled by default with `torch_compile_max_bs=2` | Engine builder/default config | Needs the external fused-op boundary | Pending release-line startup |
-| NPU encoder stream isolation | Not applicable | `encoder_service.py` uses a private device stream and records the default consuming stream | Focused unit tests | Implemented on `5190678c` | Focused tests pass; release-line smoke pending |
-| NPU fused-op compile boundary | Not applicable | Qwen3 imports the external kernel through an opaque custom op | Focused SGLang NPU tests | Implemented on `e0011e30` over `v0.5.19` | Focused server tests and runtime pending |
+| Prefill/decode graph | Not a model contract | Prefill uses the breakable backend; decode graph is enabled by default | Engine builder and graph tests | SGLang v0.5.19 NPU graph path | Exact-head startup reaches decode capture, then fails at `PagedAttentionOperation`; classification pending |
+| Torch compile | Not a model contract | Enabled by default with `torch_compile_max_bs=2` | Engine builder/default config | Needs the external fused-op boundary | Exact-head startup reaches decode capture; compile/capture ownership of the failure is unproven |
+| NPU encoder stream isolation | Not applicable | `encoder_service.py` uses a private device stream and records the default consuming stream | Focused unit tests | Implemented on `5190678c` | Focused server tests pass; no request was reached because startup failed |
+| NPU fused-op compile boundary | Not applicable | Qwen3 imports the external kernel through an opaque custom op | Focused SGLang NPU tests | Implemented on `e0011e30` over `v0.5.19` | Focused server tests pass; startup failure classification is pending |
 
 ## Current Gaps
 

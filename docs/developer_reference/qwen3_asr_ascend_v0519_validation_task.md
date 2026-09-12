@@ -18,6 +18,11 @@ mkdir -p "${EVIDENCE}"
 
 Do not return the values of these variables.
 
+`SGLANG_REPO` and `OMNI_REPO` must be the actual checkout roots imported by
+Python. A legacy directory name is not a code identity and is not a Gate 0
+failure when the exact HEAD, clean worktree, and imported module path all
+agree.
+
 ## Exact Identity
 
 | Repository | Branch | Exact runtime head | Base |
@@ -30,7 +35,9 @@ onto the release-line commit. It is not based on SGLang main.
 
 ## Gate 0
 
-- Fetch both branches and check out the detached runtime heads above.
+- Fetch both branches and check out the detached runtime heads above in the
+  actual checkout roots. Do not create or switch to a second checkout merely
+  to make a directory name match the logical repository name.
 - Require clean tracked worktrees. Preserve any unrelated untracked artifact
   outside the checkout; do not use a dirty tree for this gate.
 - Verify the repository identity, installed distribution, and imported module

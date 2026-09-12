@@ -31,14 +31,15 @@ are retained as historical evidence only.
 Legend: **Done** means implemented and verified at the stated scope;
 **Implemented** means code exists but current-head qualification is pending;
 **Planned** means agreed work that has not started; **Historical** means useful
-evidence that does not apply to the current heads; **Deferred** means explicitly
-outside the current phase.
+evidence that does not apply to the current heads; **Failed** means an
+exact-head run stopped at a first complete failure; **Deferred** means
+explicitly outside the current phase.
 
 | Workstream | Status | Current state | Exit condition |
 |---|---|---|---|
 | Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream-v0519` uses code commit `5190678c`; focused stream tests passed previously and remain applicable | Complete a request on the release-line runtime |
 | External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-v0519-fused-op` at `e0011e30` ports the same three-file boundary onto `v0.5.19` | Pass exact-head focused tests and default startup |
-| SGLang v0.5.19 validation | Blocked | The first release-line server report failed Gate 0: `import sglang` resolved to another editable checkout, so its tests and PagedAttention startup failure are invalid for `e0011e30` | Fix the server environment, pass hardened import/HEAD identity checks, then run focused tests and default compile+decode-graph smoke from a fresh process |
+| SGLang v0.5.19 validation | Failed | Identity is confirmed: the legacy-named worktree is clean at `e0011e30` and Python imports from that checkout. Focused tests passed; default startup then stopped at `PagedAttentionOperation setup failed` during decode graph capture | Classify the first failure without changing `fused_ops.py`; run one bounded discriminant experiment, then fix the owning layer |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
 | Combined NPU liveness and correctness | Planned | No current v0.5.19 result exists | Pass default smoke first, then cold concurrency-8 liveness and correctness on exact pinned heads |
@@ -106,6 +107,9 @@ dispatch overrides, and global `prepare_model_for_torch_compile` changes.
 - On the isolated NPU server, pass the hardened Gate 0 repository, editable
   distribution, and imported-module identity checks before any pytest or
   server command.
+- Identify a checkout by exact HEAD, clean worktree, and imported module path,
+  not by directory name. A legacy worktree name is acceptable when all three
+  checks pass.
 - On the isolated NPU server, first run default startup and one smoke request.
 - Stop at the first failure and classify before adding any more variants.
 - After the default smoke passes, run cold concurrency-8 liveness and the
@@ -143,11 +147,12 @@ and forced alignment remain outside this gate.
 |---|---|---|
 | SGLang main interface drift | Historical, resolved by baseline change | Main added `scheduler_stage_metrics`; the Omni composition layer lacked it. This cannot occur on `v0.5.19` |
 | Main-baseline PagedAttention and heap-corruption failure | Historical, needs release-line recheck | It was observed on main and is not current evidence for the `v0.5.19` candidate |
-| Fused-op tensor-layout mismatch | Unsupported by the latest report | The reported startup failure came from a different editable SGLang checkout; no exact-head release-line failure has been classified |
-| Release-line graph/runtime or lower-stack defect | Unknown | Default `v0.5.19` startup has not yet been run |
+| Fused-op tensor-layout mismatch | Unproven | The exact-head startup failure is valid, but no single-variable comparison connects it to `fused_ops.py`; `PagedAttentionOperation` is an asynchronous report |
+| Release-line capture failure at `PagedAttentionOperation` | Active first failure, owner unknown | Exact candidate `e0011e30` reached decode graph capture, then reported operator setup failure and `Capture cuda graph failed` |
 
-The owner is not assigned until the release-line gate returns a first complete
-failure and the first repository frame that owns it.
+The next task must preserve this first failure and identify the owning layer
+from the first repository frame, runtime state, and a bounded discriminant
+experiment. No code change is selected yet.
 
 ## Roadmap Maintenance
 
