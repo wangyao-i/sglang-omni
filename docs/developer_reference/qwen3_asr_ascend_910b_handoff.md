@@ -152,13 +152,12 @@ The later compile-disabled main run also exposed a separate main-only
 
 ## First Task
 
-The exact-head release-line validation has completed through its first startup
-failure. First run the log-first evidence analysis in
-[`qwen3_asr_ascend_v0519_capture_classification_task.md`](qwen3_asr_ascend_v0519_capture_classification_task.md).
-Do not start another server or run the conditional A/B until the analysis
-identifies two mechanisms that the existing logs cannot distinguish and a new
-local task explicitly approves the experiment. Do not run the historical
-main-based task.
+The exact-head release-line run with compile and decode graph enabled failed at
+ATB PagedAttention setup. Run the bounded graph-only task in
+[`qwen3_asr_ascend_v0519_graph_only_task.md`](qwen3_asr_ascend_v0519_graph_only_task.md).
+This changes only `enable_torch_compile` to `false`; decode graph remains
+enabled. Do not run another arm in the same invocation. Do not run the
+historical main-based task.
 
 ## Return Contract
 

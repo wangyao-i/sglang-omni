@@ -39,7 +39,7 @@ explicitly outside the current phase.
 |---|---|---|---|
 | Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream-v0519` uses code commit `5190678c`; focused stream tests passed previously and remain applicable | Complete a request on the release-line runtime |
 | External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-v0519-fused-op` at `e0011e30` ports the same three-file boundary onto `v0.5.19` | Pass exact-head focused tests and default startup |
-| SGLang v0.5.19 validation | Failed | Identity is confirmed: the legacy-named worktree is clean at `e0011e30` and Python imports from that checkout. Focused tests passed; default startup then stopped at `PagedAttentionOperation setup failed` during decode graph capture | Complete the log-first analysis in [`qwen3_asr_ascend_v0519_capture_classification_task.md`](qwen3_asr_ascend_v0519_capture_classification_task.md); run the conditional A/B only after local approval |
+| SGLang v0.5.19 validation | Failed | Compile+decode-graph startup failed at `PagedAttentionOperation` setup. `torch.compile` is a CUDA performance option, while the Qwen3-ASR stage default is disabled and NPU has a graph-only attention branch | Run [`qwen3_asr_ascend_v0519_graph_only_task.md`](qwen3_asr_ascend_v0519_graph_only_task.md) with compile disabled and decode graph enabled |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
 | Combined NPU liveness and correctness | Planned | No current v0.5.19 result exists | Pass default smoke first, then cold concurrency-8 liveness and correctness on exact pinned heads |
@@ -150,6 +150,7 @@ and forced alignment remain outside this gate.
 | Fused-op tensor-layout mismatch | Unsupported by current evidence | The Python stack points at asynchronous `o_proj` and explicitly warns it may be inaccurate; no single-variable comparison connects `fused_ops.py` to the ATB setup failure |
 | Release-line capture failure at `PagedAttentionOperation` | Active first failure, strongest lead is NPU decode attention | Native frames confirm `atb::OperationSetup` failure for PagedAttention; an existing repository note maps the same signature to decode attention between QKV and `o_proj`, but exact-run proof is still missing |
 | Generic Ascend Qwen3 evidence covers this run | Scope difference, not root cause | Ascend Qwen3 e2e uses eager decode without torch.compile; Qwen3-ASR enables both compile and decode graph, and the NPU attention implementation selects a different branch when compile is enabled |
+| `torch.compile` is required for Qwen3-ASR | Rejected as a functional requirement | It was introduced as a CUDA low/mid-concurrency performance optimization; the stage default is `enable_torch_compile=False` |
 
 The next task must preserve this first failure and extract the complete ordered
 traceback, lower-layer error, capture call site, and first owning repository
