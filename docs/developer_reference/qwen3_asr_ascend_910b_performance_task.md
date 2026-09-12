@@ -1801,9 +1801,17 @@ have to be re-attested on the new commits before the retirement is qualified.
 
 Run against the shipping candidate branches rather than the development tree:
 SGLang-Omni `qwen3-asr-ascend-full` at `d58afeda` and SGLang
-`qwen3-asr-ascend-full` at `dfaf5e50c`. The development tree expressed the same
+`qwen3-asr-ascend-full` at `891a70626`. The development tree expressed the same
 fix through diagnostic switches and is superseded for this task; `910C-070` arm
 A was still a switch, so only a run on these heads qualifies the retirement.
+The SGLang candidate was rewritten from `dfaf5e50c` to `891a70626`: the stateful
+decode-attention graph break, graph context hook, and explicit compile-bucket
+selection were removed, leaving the fused-op custom-op boundary and the shared
+compile-safe context. The `910C-034`/`910C-035` experiments never isolated the
+remaining fused-op dispatch changes cleanly, and the `910C-054` correctness
+result came from the removed graph-break code. Treat phase 2 below as the first
+clean correctness check of the retained chains on `891a70626`, not as a
+reproduction of `910C-054`.
 The SGLang-Omni candidate was subsequently squashed to one commit on top of
 `origin/main` and now touches one file, `encoder_service.py` (+14/-4). Its Ascend
 encoder layer-stack graph was removed rather than shipped unreachable:
@@ -1836,8 +1844,8 @@ Three phases, in this order:
 2. Correctness at the shipping profile: one fresh M1c process through the
    140-request workload, with `max_total_tokens=32768`,
    `mem_fraction_static=0.80` and `torch_compile_max_bs=2`, that is the upstream
-   prefix policy compiling `[1, 2]`. This reproduces the `910C-054` A1 profile,
-   which is the known-correct combined graph+compile configuration.
+   prefix policy compiling `[1, 2]`. This matches the `910C-054` A1 profile,
+   but not its code: correctness must be re-established on `891a70626`.
 3. Performance at the shipping profile: three fresh M1c processes, each running
    one `exact10` C70 measurement with the packaged harness and its warm-up.
 4. Exploratory, only after 1-3 pass and only if time remains: one fresh process

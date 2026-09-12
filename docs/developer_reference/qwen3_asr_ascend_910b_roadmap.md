@@ -100,9 +100,9 @@ The reference for the shipping configuration is the `910C-070` arm A band: p95
 the encoder on its own stream and no guard installed. It was taken on a
 development build that expressed both the stream fix and the compile coverage
 through switches, so this section will be refreshed by `910C-071`, which
-re-measures the shipped heads using the upstream compile-coverage knob. The
-earlier 1.442 s / 59.88 requests/s reading, and the guarded band that replaced it
-as the anchor, are both superseded.
+re-measures SGLang `891a70626` and Omni `d58afeda` using the upstream
+compile-coverage knob. The earlier 1.442 s / 59.88 requests/s reading, and the
+guarded band that replaced it as the anchor, are both superseded.
 
 The gap to the challenge target, measured against the arm A band, is
 approximately 2.7-2.9x in p95 latency and 2.2-2.3x in throughput.
