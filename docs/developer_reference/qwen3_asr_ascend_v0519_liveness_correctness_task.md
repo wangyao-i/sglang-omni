@@ -126,93 +126,58 @@ Require:
 Stop at the first failure. Do not continue to Gate 2 from a failed or polluted
 process.
 
-## Gate 2: 140-Request Correctness (Concurrency 8)
+## Gate 2: Reuse The Qualified 140-Request Correctness Protocol
 
-Stop the Gate 1 process normally, wait for the port to become free, and start a
-new process with the same launch command and a new log file:
+The `0.078` versus `0.02` discrepancy is already diagnosed. It is an evaluation
+protocol difference, not a model or SGLang regression:
 
-```bash
-cd "${OMNI_REPO}"
-sgl-omni serve \
-  --model-path "${MODEL_PATH}" \
-  --model-name Qwen/Qwen3-ASR-1.7B \
-  --port "${PORT}" \
-  --asr.engine.enable_torch_compile false \
-  >"${EVIDENCE}/server-correctness.log" 2>&1 &
-SERVER_PID=$!
-```
+- the non-equivalent conc1 path produced WER about `0.0778`;
+- the packaged exact10 harness produced `0.0176`-`0.0179`;
+- the M1c reference produced `0.0161`.
 
-Wait for readiness. Run the first 140 deterministic SeedTTS English samples at
-concurrency 8:
+Do not invent a replacement correctness protocol. The current SeedTTS
+benchmark command is not a substitute for the previously qualified exact10
+workload, and concurrency 1 is not an acceptance protocol.
 
-```bash
-cd "${OMNI_REPO}"
-python -m benchmarks.eval.benchmark_asr_seedtts \
-  --host 127.0.0.1 --port "${PORT}" \
-  --model-path Qwen/Qwen3-ASR-1.7B \
-  --lang en --max-samples 140 \
-  --concurrencies 8 --repeats 1 \
-  --disable-resource-monitor \
-  --output "${EVIDENCE}/correctness-140.json" \
-  --save-raw-dir "${EVIDENCE}/raw-correctness"
-```
+Before running any correctness request, perform a read-only recovery of the
+exact qualified invocation from the retained M1c, `910C-062`, and `910C-071`
+artifacts. Record:
 
-This restart gate uses the historical NPU qualification band as its reference,
-not the CUDA CI threshold. Do not use concurrency 1 for acceptance: prior
-exact10 evaluation at concurrency 1 produced a non-equivalent WER around
-`0.0778`, while the qualified harness produced `0.0176`-`0.0179`. A
-concurrency-1 run may be retained only as diagnostic evidence.
+- the exact client and script path;
+- the pinned manifest SHA-256 and sample count;
+- the exact concurrency, repeat count, warm-up partition, and request timeout;
+- whether the cold concurrency-8 gate preceded the correctness phase;
+- the raw per-sample JSONL path and its schema;
+- the resolved server configuration used by that qualified run.
+
+If that invocation is not recoverable, stop and return `blocked`. Do not run a
+new correctness protocol, do not lower the WER threshold, and do not substitute
+the `benchmark_asr_seedtts` conc8 command.
+
+Only after the qualified invocation is recovered, stop the Gate 1 process,
+confirm the port and device are idle, and launch a fresh pure-base service with
+the same graph-only settings. Run that exact 140-request correctness workload.
 
 Require:
 
-- `evaluated=140`, `total=140`, and `skipped=0`;
-- corpus WER `<= 0.02`;
-- no sample with WER `> 0.5` and no empty hypothesis;
-- no timeout, HTTP error, device error, ACL error, allocator error, or
-  unexpected fallback.
-
-Count the two failure classes from the raw JSONL with a read-only check:
-
-```bash
-python - <<'PY'
-import json
-import os
-
-path = os.environ["EVIDENCE"] + "/raw-correctness/conc8_rep1.jsonl"
-empty = 0
-catastrophic = 0
-with open(path, encoding="utf-8") as handle:
-    for line in handle:
-        record = json.loads(line)
-        if not record.get("is_success"):
-            continue
-        hypothesis = (record.get("hyp_text") or "").strip()
-        wer = record.get("wer")
-        empty += int(not hypothesis)
-        catastrophic += int(wer is not None and wer > 0.5)
-
-print("empty_hypotheses:", empty)
-print("per_sample_wer_gt_0_5:", catastrophic)
-assert empty == 0
-assert catastrophic == 0
-PY
-```
-
-Stop on the first correctness failure. Do not tune sampling, corpus, parser,
-prompt, model revision, concurrency, or graph settings in this task.
+- all 140 requests completed with no timeout or transport failure;
+- corpus WER is in the qualified `0.016`-`0.019` band;
+- zero garbled outputs, where a garbled output is any successful sample with
+  WER greater than `0.5` or an empty hypothesis;
+- zero unexpected eager or compile fallback.
 
 ## Run History
 
-### 2026-09-12: protocol mismatch, not accepted
+### 2026-09-12: known protocol mismatch, not accepted
 
 The server passed Gate 0 and the 70-request cold concurrency-8 liveness gate.
 Its correctness attempt reported 140/140 completion, zero garbled outputs, and
-WER `0.0784`, but it used an exact10 concatenated corpus at concurrency 1
-rather than the Gate 2 command above. That value is consistent with the
-historical non-equivalent `0.0778` protocol and cannot close the correctness
-gate. Gate 2 must be rerun with the current repository benchmark and
-concurrency 8. The shutdown check also returned without confirming HBM or port
-state, so cleanup must be verified before the rerun.
+WER `0.0784`, but it used the known non-equivalent exact10 concurrency-1 path.
+This result is consistent with the historical `0.0778` protocol and does not
+close the correctness gate. The fix is to recover and reuse the qualified
+invocation, not to rerun the same path under a new threshold. The shutdown
+check also returned without confirming HBM or port state, so cleanup must be
+verified before the next run.
 
 ## Gate 3: Shutdown And Cleanup
 

@@ -197,11 +197,12 @@ request, and normal shutdown. The 70-request cold concurrency-8 gate also
 passed 70/70. A first 140-request correctness attempt used the known
 non-equivalent exact10 concurrency-1 protocol and reported WER `0.0784`; it is
 diagnostic only and does not close the correctness gate. The next bounded
-change is to confirm cleanup and rerun the concurrency-8 correctness command in
-[`qwen3_asr_ascend_v0519_liveness_correctness_task.md`](qwen3_asr_ascend_v0519_liveness_correctness_task.md):
-the exact pure-base heads remain required. Do not restore the SGLang fused-op
-patch, run the historical main-based task, or lower the `WER <= 0.02`
-threshold.
+change is to confirm cleanup, recover the exact previously qualified 140-request
+invocation from retained M1c/`910C-062`/`910C-071` artifacts, and only then run
+that same protocol on the pure base, as specified in
+[`qwen3_asr_ascend_v0519_liveness_correctness_task.md`](qwen3_asr_ascend_v0519_liveness_correctness_task.md).
+Do not restore the SGLang fused-op patch, use conc1, invent a replacement
+correctness protocol, or lower the WER threshold.
 
 ## Return Contract
 
