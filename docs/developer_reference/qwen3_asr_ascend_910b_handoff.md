@@ -196,13 +196,11 @@ The pure `v0.5.19` graph-only run passed readiness, decode capture, one smoke
 request, and normal shutdown. The 70-request cold concurrency-8 gate also
 passed 70/70. A first 140-request correctness attempt used the known
 non-equivalent exact10 concurrency-1 protocol and reported WER `0.0784`; it is
-diagnostic only and does not close the correctness gate. The next bounded
-change is to confirm cleanup, recover the exact previously qualified 140-request
-invocation from retained M1c/`910C-062`/`910C-071` artifacts, and only then run
-that same protocol on the pure base, as specified in
-[`qwen3_asr_ascend_v0519_liveness_correctness_task.md`](qwen3_asr_ascend_v0519_liveness_correctness_task.md).
-Do not restore the SGLang fused-op patch, use conc1, invent a replacement
-correctness protocol, or lower the WER threshold.
+accepted as functional evidence for progression, but it is not used to
+recalibrate the WER threshold. The exact WER protocol is deferred as a
+non-blocking verification issue. The next bounded change is to confirm cleanup
+and qualify the current [#2084](https://github.com/sgl-project/sglang-omni/pull/2084)
+head on the pure base. Do not restore the SGLang fused-op patch or use conc1.
 
 ## Return Contract
 

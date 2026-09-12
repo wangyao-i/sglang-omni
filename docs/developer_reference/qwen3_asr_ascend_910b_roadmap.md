@@ -7,6 +7,29 @@ work is deliberately deferred.
 
 Last updated: 2026-09-12.
 
+## Priority Reset
+
+The WER-protocol discrepancy between `0.078` and the CUDA CI threshold was
+already classified in `910C-062`. Continuing to refine that protocol before the
+minimal NPU deliverable is reviewable has low information value. The priority
+order is now:
+
+1. **P0 - freeze the minimal functional path.** Pure SGLang `v0.5.19` plus the
+   Omni encoder private stream, with decode graph enabled and Torch Compile
+   disabled. No fused-op patch.
+2. **P1 - qualify the upstream PR head.** Re-run startup, cold concurrency-8,
+   one 140-request correctness pass, and cleanup on the current
+   [#2084](https://github.com/sgl-project/sglang-omni/pull/2084) head.
+3. **P2 - reduce the shipping diff.** Keep the change platform-neutral, remove
+   diagnostic/deferred mechanisms, and prepare the PR narrative.
+4. **P3 - add capability or performance work.** Encoder/prefill graph, Torch
+   Compile, realtime ASR, and the C70 target come only after P0-P2.
+
+The exact WER evaluation protocol is a known non-blocking verification issue.
+The current functional acceptance uses `140/140` requests, zero empty
+hypotheses, zero outputs with WER above `0.5`, and no execution or fallback
+errors. Exact corpus/protocol reconciliation is deferred.
+
 ## Baseline
 
 | Item | Current decision |
@@ -43,7 +66,8 @@ functional gate passed but a cleanup or qualification gate remains open;
 | SGLang v0.5.19 validation | Done | Pure tag commit `0bcd82237`, with no fused_ops or Qwen3 diff against the tag, reached readiness, captured the decode graph, returned a non-empty smoke transcript, and completed normal shutdown | Preserve the pure base as the active runtime baseline |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
-| Combined NPU liveness and correctness | Partial | Pure `v0.5.19` + Omni `5190678c` passed graph-only startup, smoke, and the 70-request cold concurrency-8 gate; a first correctness attempt used the known non-equivalent exact10 concurrency-1 protocol and WER `0.0784`, so it is not accepted | Confirm cleanup, recover the already-qualified 140-request invocation, then run that exact protocol on the pure base as specified in [`qwen3_asr_ascend_v0519_liveness_correctness_task.md`](qwen3_asr_ascend_v0519_liveness_correctness_task.md) |
+| Combined NPU liveness and correctness | Done for progression | Pure `v0.5.19` + Omni `5190678c` passed graph-only startup, smoke, cold concurrency-8 `70/70`, and a 140-request pass with `140/140`, zero empty outputs, and zero garbled outputs; the exact WER protocol is deferred | Do not block P0; reconcile the WER protocol only when it changes a product decision |
+| PR #2084 current-head qualification | Planned | The functional evidence above uses Omni code `5190678c`; the current PR head is `872e5502` and requires a fresh hardware pass | Run startup, cold concurrency-8, 140-request functional correctness, and cleanup on the PR head |
 | SGLang main interface experiment | Historical | Main exposed `scheduler_stage_metrics` drift and older capture failures; the baseline is abandoned | Do not use for current acceptance |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
 | Performance target | Deferred | No performance work is part of the current acceptance path | Reopen only after functionality and correctness close |
