@@ -1,5 +1,28 @@
 # Qwen3-ASR Ascend startup-failure classification task
 
+## Result
+
+Arm A completed with `enable_torch_compile=false` and the decode graph
+enabled. Prefill and decode capture both succeeded. Startup then failed before
+Smoke in `OmniScheduler.get_next_batch_to_run()`:
+
+```text
+AttributeError: 'OmniScheduler' has no attribute 'scheduler_stage_metrics'
+```
+
+The first repository frame is
+`sglang_omni/scheduling/omni_scheduler.py:749` in `__getattr__`.
+
+This is an Omni/upstream instance-contract failure, not the earlier
+`PagedAttentionOperation` or heap-corruption failure. SGLang's decorated
+upstream scheduler method reads `self.scheduler_stage_metrics`, which
+`Scheduler.__init__` initializes from
+`self.metrics_reporter.scheduler_stage_metrics`; `OmniScheduler` mirrors many
+other upstream fields but had missed this one.
+
+Arm B was not run. The local repair is Omni commit `24552a65`; continue with
+[`qwen3_asr_ascend_910b_scheduler_metrics_retry_task.md`](qwen3_asr_ascend_910b_scheduler_metrics_retry_task.md).
+
 Run this task only after the baseline in
 [`qwen3_asr_ascend_910b_handoff.md`](qwen3_asr_ascend_910b_handoff.md) has
 been acknowledged and the exact heads have been checked out.

@@ -6,16 +6,19 @@ logs, model files, audio, and host details on the isolated server.
 
 ## Status
 
-First bounded branch validation failed at the model-smoke startup. The exact
-SGLang and Omni code commits passed their focused tests, but startup aborted
-during NPU decode graph capture with `PagedAttentionOperation`,
-`Capture cuda graph failed`, and `corrupted size vs. prev_size`.
+The first branch-validation startup failed during compile-enabled NPU decode
+graph capture. Classification then ran the compile-disabled arm: prefill and
+decode capture both succeeded, proving the fused-op boundary was not needed
+to reproduce that first crash. Startup then exposed a separate Omni
+integration failure, `OmniScheduler` missing the newly added upstream
+`scheduler_stage_metrics` instance field.
 
-Failure classification is now the only active task. The current strongest
-explanation is a native NPU graph/runtime or lower CANN/ATB/torch_npu failure:
-the allocator-corruption message does not establish a custom-op tensor-layout
-mismatch, and the same PagedAttention capture point has failed in older
-configurations. A missing `torch.compile` variable has not yet been ruled out.
+The local repair is Omni commit `24552a65`. On SGLang main it mirrors
+`self.metrics_reporter.scheduler_stage_metrics` exactly as
+`Scheduler.__init__` does; on the declared `sglang==0.5.19` line, where the
+main-only module is absent, it initializes the field to `None`. The next
+active task is the three-gate retry in
+[`qwen3_asr_ascend_910b_scheduler_metrics_retry_task.md`](qwen3_asr_ascend_910b_scheduler_metrics_retry_task.md).
 
 ## Scope
 
@@ -84,6 +87,18 @@ classification task records those values before changing any of them.
 `PagedAttentionOperation` is also an asynchronous operator report, so its name
 may not identify the true first fault until a blocking diagnostic confirms it.
 
+The subsequent compile-disabled arm reached successful prefill and decode
+capture, then failed before smoke with:
+
+```text
+AttributeError: 'OmniScheduler' has no attribute 'scheduler_stage_metrics'
+sglang_omni/scheduling/omni_scheduler.py:749 in __getattr__
+```
+
+That failure is classified as an upstream API compatibility omission in the
+composition layer. The SGLang decorator is correct; the Omni scheduler needed
+to mirror the new upstream field.
+
 ## Server Facts To Confirm
 
 - Exact SGLang-Omni and SGLang checkout paths and working-tree state.
@@ -116,10 +131,9 @@ may not identify the true first fault until a blocking diagnostic confirms it.
 
 ## First Task
 
-The focused tests and first model smoke are complete. Run the two-arm,
-single-variable startup classification in
-[`qwen3_asr_ascend_910b_failure_classification_task.md`](qwen3_asr_ascend_910b_failure_classification_task.md).
-Run Arm B only if Arm A passes.
+Run the exact-head scheduler-metrics retry in
+[`qwen3_asr_ascend_910b_scheduler_metrics_retry_task.md`](qwen3_asr_ascend_910b_scheduler_metrics_retry_task.md).
+Run R2 only if R1 passes and R3 only if R2 passes.
 
 ## Return Contract
 
@@ -137,8 +151,9 @@ Model smoke:
 Target-path evidence:
 Fallback evidence:
 Resolved arm overrides:
-Arm A classification:
-Arm B classification:
+R1 classification:
+R2 classification:
+R3 classification:
 First complete failure and owner repository:
 Server-local artifacts retained:
 Suggested next bounded task:

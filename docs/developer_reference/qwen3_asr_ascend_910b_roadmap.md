@@ -34,10 +34,11 @@ outside the current phase.
 |---|---|---|---|
 | Omni NPU encoder private stream | Implemented | `codex/qwen3-asr-npu-encoder-stream` at `5190678c` passed `30 passed, 1 skipped` focused tests on the server; end-to-end execution is blocked by startup classification | Complete a request on the classified runtime |
 | External fused-kernel compile boundary | Implemented | `codex/qwen3-asr-compile-safe-fused-op` at `85e8933d` passed `5 passed` focused server tests; startup failure attribution is unresolved | Pass exact-head startup and classify whether the failure depends on compile |
-| Startup-failure classification | Active | Current default fails at PagedAttention-operation decode graph capture with a native heap-corruption signal; strongest current explanation is graph/runtime or lower CANN/ATB/torch_npu, not a proven fused-op tensor-layout mismatch | Run the compile-off/decode-on arm; only if it passes, run the compile-on/decode-off arm |
+| Startup-failure classification | Partial | Compile-off/decode-on completed both graph captures; the first failure was then `OmniScheduler` missing upstream `scheduler_stage_metrics`, not the original attention/heap-corruption signature | Retry exact candidate `24552a65` through compile/graph gates |
+| Omni scheduler stage-metrics compatibility | Implemented | `24552a65` mirrors the main-only reporter field when available and uses `None` on the declared `sglang==0.5.19` line; focused tests cover both layouts | Pass the exact-head scheduler tests and R1 startup |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
-| Combined NPU liveness and correctness | Blocked | Startup fails before the smoke request, so liveness and correctness are not reached | Resolve startup classification, then pass cold concurrency-8 liveness and correctness on exact pinned heads |
+| Combined NPU liveness and correctness | Blocked | Startup classification reached the Scheduler API compatibility fix; liveness and correctness are not yet rerun | Pass the retry gates, then cold concurrency-8 liveness and correctness on exact pinned heads |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
 | Performance target | Deferred | No performance work is part of the current acceptance path | Reopen only after functionality and correctness close |
 | Realtime ASR | Deferred | It is not required for the current offline serving fix | Define a separate protocol and acceptance gate before implementation |
@@ -131,12 +132,13 @@ and forced alignment remain outside this gate.
 
 | Claim | Status | Evidence |
 |---|---|---|
-| Custom fused-op boundary changed PagedAttention tensor layout | Unproven | The observed heap-corruption message does not establish a tensor-layout mismatch |
-| NPU graph/runtime or lower CANN/ATB/torch_npu path causes corruption | Strongest current explanation | Failure occurs at native PagedAttention operation capture; historical compile-enabled capture failed at the same point, while compile-disabled capture passed |
+| Custom fused-op boundary changed PagedAttention tensor layout | Rejected for the current observed first failure | Compile-disabled execution passed prefill and decode capture; the failure moved to the Omni scheduler before smoke |
+| `OmniScheduler` missed an upstream instance contract | Confirmed | The decorated upstream scheduler method reads `self.scheduler_stage_metrics`; `24552a65` mirrors it on main, preserves v0.5.19 compatibility, and adds regression tests |
+| Compile-enabled graph path has an independent defect | Pending | R2 and R3 retry the compile separation after the confirmed Scheduler fix |
 | Non-interactive launch dropped an allocator or library setting | Alternative | Public Ascend reports show the same heap-corruption signal when `LD_PRELOAD` or related runtime settings apply only to an interactive shell |
 | Asynchronous operator attribution is misleading | Diagnostic caveat | Ascend can report the previous `PagedAttentionOperation` when the real fault is asynchronous; use `ASCEND_LAUNCH_BLOCKING=1` only in the follow-up diagnostic |
-| `torch.compile` is required for the failure | Pending | Arm A disables compile while retaining the decode graph |
-| Decode graph is required for the failure | Pending | Arm B runs only if Arm A passes |
+| `torch.compile` is required for the original capture failure | Pending | R2 disables the decode graph while compile stays enabled |
+| Decode graph is required for the original capture failure | Pending | R3 returns to the original compile-plus-decode-graph combination |
 
 The owner is not assigned until the bounded classification returns a first
 complete failure and the first repository frame that owns it.
