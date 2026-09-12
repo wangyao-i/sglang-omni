@@ -113,8 +113,8 @@ PY
 - Record Python, CANN, torch, torch_npu, triton-ascend, and `sgl_kernel_npu`
   versions.
 - Record `LD_PRELOAD`, `LD_LIBRARY_PATH`, `PYTORCH_NPU_ALLOC_CONF`,
-  `STREAMS_PER_DEVICE`, `HCCL_BUFFSIZE`, and `ASCEND_LAUNCH_BLOCKING` without
-  changing them.
+  `STREAMS_PER_DEVICE`, `HCCL_BUFFSIZE`, `ASCEND_LAUNCH_BLOCKING`, and
+  `ASCEND_USE_FIA` without changing them.
 - Confirm no residual process, port `8000` free, and the selected NPU healthy.
 
 Stop and return `blocked` if the code does not resolve to the requested

@@ -57,6 +57,34 @@ The candidate arm already produced:
 Treat that failure as valid exact-head evidence. Do not modify `fused_ops.py`,
 PagedAttention, graph policy, source, or environment during this task.
 
+## Submitted Stack Assessment
+
+The submitted native and Python stack adds these facts:
+
+- `atb::OperationSetup` failed for `PagedAttentionOperation` at
+  `OpParamMaker.cpp:454`.
+- The Python trace ends at `qwen3.py:305`, the `o_proj` linear call.
+- The runtime explicitly says the operator is asynchronous and the stacktrace
+  may be inaccurate.
+
+Therefore:
+
+- The native failure is confirmed as an ATB operation-setup failure for
+  PagedAttention.
+- The `o_proj` frame is not evidence that `o_proj`, its matmul, or the fused
+  QKV/RoPE boundary caused the failure.
+- A repository comment at
+  `python/sglang/srt/hardware_backend/npu/quantization/linear_method_npu.py`
+  records a previous `atb::OperationSetup` decode failure as the NPU
+  decode-attention path between QKV and `o_proj`, not the matmul. This is a lead
+  consistent with the native operator name, not proof for this run.
+- The analysis says the frame came from `85e8933d`, while the
+  `decode_cuda_graph_runner.py` line numbers match the active candidate
+  `e0011e30`. The raw log header and captured stack must be used to resolve the
+  provenance. Do not rely on a prose hash label.
+- The conclusion that a fused-op layout change caused this failure is not
+  supported by the submitted evidence.
+
 ## Stage 1: Existing-Failure Analysis
 
 Do not start or rerun the model server in this stage.
@@ -85,6 +113,12 @@ Return redacted evidence for:
    metadata.
 7. Any earlier warning, allocator message, device error, fallback marker, or
    shutdown error that precedes the final `PagedAttentionOperation` report.
+8. The exact raw-log identity header, including the checked-out SGLang hash and
+   resolved attention settings.
+9. The ATB/Runtime error code and complete text immediately before
+   `OpParamMaker.cpp:454`.
+10. The effective attention backend and `ASCEND_USE_FIA` value, plus the
+    PagedAttention input specification if logged.
 
 Classify the evidence into one provisional category:
 
@@ -248,8 +282,11 @@ SGLang and Omni identities:
 First complete traceback frames:
 Lower-layer or inner error:
 First repository frame and owning repository:
+Raw-log SGLang identity:
 Failure stage and capture call site:
 Operator metadata available:
+Attention backend and ASCEND_USE_FIA:
+ATB inner error code and text:
 Resolved arguments and environment:
 Provisional category:
 Supporting evidence:

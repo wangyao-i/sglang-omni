@@ -30,11 +30,18 @@ The latest report is a valid exact-head run with an unresolved first failure.
 - The run stopped at the first complete startup failure during decode graph
   capture: `PagedAttentionOperation setup failed` followed by
   `Capture cuda graph failed`.
-- The failure is valid exact-head evidence, but its owner and root cause remain
-  unproven. `PagedAttentionOperation` is an asynchronous operator report, and
-  no single-variable experiment has connected the failure to `fused_ops.py`.
+- The failure is valid exact-head evidence. Native frames show
+  `atb::OperationSetup` failed for PagedAttention, while the Python stack ends
+  at the asynchronous `o_proj` call and explicitly warns that the stack may be
+  inaccurate.
+- The failure owner and root cause remain unproven. The repository already
+  records a previous ATB setup failure in the NPU decode-attention path between
+  QKV and `o_proj`; that is a lead, not a conclusion for this run.
 - Do not modify `fused_ops.py`, PagedAttention, or the compile boundary based on
   the operator name alone. Classify the first failure before selecting a fix.
+- The submitted prose labels the frame as `85e8933d`, but the runner line
+  numbers match `e0011e30`. Bind the next analysis to the raw log header, not
+  the prose label.
 
 ## Scope
 
