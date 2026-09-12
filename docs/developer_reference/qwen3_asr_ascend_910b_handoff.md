@@ -12,24 +12,29 @@ compatibility fix are historical and must not be mixed into this candidate.
 
 The current candidate keeps the minimal three-file fused-op boundary on top of
 the `v0.5.19` commit, together with the Omni encoder private-stream change.
-Hardware validation on this release-line stack is blocked before execution by
-a Gate 0 identity mismatch.
+Hardware validation on this release-line stack reached a first complete
+failure during default startup after the SGLang checkout identity was verified.
 
 ## Latest Server Report
 
-The latest report is `blocked / invalid identity`, not a hardware failure.
+The latest report is a valid exact-head run with an unresolved first failure.
 
-- The declared checkout heads matched the candidate, but `import sglang`
-  resolved to a different `sglang_qwen3-asr-decode-graph-diag` editable
-  checkout and reported a `0.5.v19.dev19` package identity.
-- The focused test counts and `PagedAttentionOperation setup failed` startup
-  failure therefore came from code other than
-  `e0011e30fbdb9690f01fa2083d452c93b37bb214`.
-- Do not attribute the failure to `fused_ops.py`, PagedAttention tensor layout,
-  graph capture, or the `v0.5.19` candidate. No such conclusion is supported.
-- The server must remove or deactivate the conflicting editable installation,
-  start a fresh process, and pass the hardened Gate 0 checks in the validation
-  task before any test or model server is run.
+- The server worktree uses the legacy directory name
+  `sglang_qwen3-asr-decode-graph-diag`, but its actual HEAD is
+  `e0011e30fbdb9690f01fa2083d452c93b37bb214`, its worktree is clean, and
+  `python -c "import sglang"` resolves to that checkout's `python/sglang`.
+- A directory name is not a code identity. The checkout is valid because the
+  exact clean commit and the imported module path agree.
+- SGLang `test_fused_ops.py` passed `5` tests and Omni
+  `test_encoder_service.py` passed `30` tests with `1` skip.
+- The run stopped at the first complete startup failure during decode graph
+  capture: `PagedAttentionOperation setup failed` followed by
+  `Capture cuda graph failed`.
+- The failure is valid exact-head evidence, but its owner and root cause remain
+  unproven. `PagedAttentionOperation` is an asynchronous operator report, and
+  no single-variable experiment has connected the failure to `fused_ops.py`.
+- Do not modify `fused_ops.py`, PagedAttention, or the compile boundary based on
+  the operator name alone. Classify the first failure before selecting a fix.
 
 ## Scope
 
