@@ -225,17 +225,18 @@ Repeat for `soak-2.json` and `soak-3.json`.
 Require after each soak pass:
 
 - `140/140` completed, zero failures, zero timeouts, zero empty hypotheses;
-- no new `[qwen3-asr] captured encoder layer-stack graph` line after the
-  warm-up;
+- no new `[qwen3-asr] captured encoder layer-stack graph` line after the first
+  soak pass; the first soak pass may absorb a small number of new batching
+  layouts, but passes 2 and 3 must not increase the capture count;
 - zero `encoder graph eager fallback reason=` lines;
 - positive encoder, prefill, and decode replay evidence;
 - no ACL, ATB, allocator, stream, device, capture, or replay error;
 - service remains responsive between passes.
 
 HBM must not show monotonic growth across the three passes. Temporary
-capture-time growth is allowed, but the final pass must return to a stable band
-consistent with the post-warm-up baseline, within the platform's normal
-measurement noise.
+capture-time growth is allowed, but after the capture count stabilizes, the
+remaining passes must return to a stable band consistent with that stabilized
+baseline, within the platform's normal measurement noise.
 
 ## Gate 4: Shutdown And Cleanup
 
@@ -255,7 +256,7 @@ Stop at the first occurrence of:
 - `PagedAttentionOperation`, ATB, ACL, allocator, stream, device, or OOM error;
 - timeout, hang, missing or duplicate request result, or empty transcript;
 - any `encoder graph eager fallback reason=` line;
-- a new encoder capture after the Gate 3 warm-up;
+- a new encoder capture after Gate 3 soak pass 1;
 - garbled-output or request-accounting failure;
 - a Torch Compile marker;
 - cleanup failure.
@@ -294,6 +295,7 @@ Gate 2 corpus WER:
 Gate 2 graph markers and forbidden errors:
 Gate 3 warm-up and soak evaluated / total / skipped:
 Gate 3 new encoder captures after warm-up per pass:
+Gate 3 capture count warm-up / soak 1 / soak 2 / soak 3:
 Gate 3 graph replay/fallback markers per pass:
 Gate 3 HBM baseline / pass 1 / pass 2 / pass 3:
 Shutdown and cleanup state:
