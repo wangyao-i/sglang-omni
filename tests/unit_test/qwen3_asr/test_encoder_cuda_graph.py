@@ -134,7 +134,7 @@ def test_npu_capture_materializes_sequence_boundaries_on_host():
     assert cu_seqlens.tolist() == [0, 4, 7, 8]
 
 
-def test_npu_replay_uses_exact_signature_and_bounds_graph_count():
+def test_npu_replay_uses_exact_signature_and_bounds_each_bucket():
     captured = []
     replayed = []
     runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
@@ -142,19 +142,28 @@ def test_npu_replay_uses_exact_signature_and_bounds_graph_count():
     runner._max_seqlen = 8
     runner._failed = set()
     runner._graphs = {}
-    runner._npu_signature_capacity = 2
+    runner._npu_signature_capacity_per_bucket = 2
+    runner._npu_signature_count_by_bucket = Counter()
     runner._fallback_counts = Counter()
     runner._reported_replays = set()
-    runner._plan = lambda total, windows: (8, [8 - total])
+
+    def plan(total, windows):
+        if total == 8:
+            return 16, [8]
+        if windows == 1:
+            return 8, [4]
+        return 8, [8 - total]
+
+    runner._plan = plan
 
     def capture(bucket_size, *, window_lens=None):
         captured.append((bucket_size, window_lens))
         return SimpleNamespace(
-            hidden_states=torch.zeros(8, 2),
+            hidden_states=torch.zeros(bucket_size, 2),
             cu_seqlens=torch.tensor([0, 4, 8], dtype=torch.int32),
             attention_metadata=None,
             graph=SimpleNamespace(replay=lambda: replayed.append(True)),
-            output=torch.zeros(8, 2),
+            output=torch.zeros(bucket_size, 2),
         )
 
     runner._capture = capture
@@ -169,9 +178,15 @@ def test_npu_replay_uses_exact_signature_and_bounds_graph_count():
     assert captured == [(8, (4, 4)), (8, (2, 2, 4))]
     assert len(replayed) == 3
 
+    # The bucket-local budget is exhausted, but another bucket still captures.
     assert runner.run(hidden_states, [1, 3]) is None
     assert captured == [(8, (4, 4)), (8, (2, 2, 4))]
     assert runner._failed == set()
+
+    assert runner.run(torch.ones(8, 2), [8]) is not None
+    assert captured == [(8, (4, 4)), (8, (2, 2, 4)), (16, (8, 8))]
+    assert runner._npu_signature_count_by_bucket == {8: 2, 16: 1}
+    assert runner._fallback_counts == {"npu_signature_capacity": 1}
 
 
 @pytest.fixture

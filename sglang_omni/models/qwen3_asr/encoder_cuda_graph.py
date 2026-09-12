@@ -103,9 +103,11 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._failed: set[Hashable] = set()
         # Ascend attention consumes the window boundaries as host-side operator
         # parameters. A graph therefore belongs to one exact window layout, not
-        # only to its token bucket. Bound the global cache by the configured
-        # encoder batch size; unseen layouts stay eager once it is full.
-        self._npu_signature_capacity = max_batch_size
+        # only to its token bucket. Give every bucket the configured encoder
+        # batch-size budget so one hot bucket cannot starve the rest. There is
+        # no eviction; an unseen layout stays eager after its bucket is full.
+        self._npu_signature_capacity_per_bucket = max_batch_size
+        self._npu_signature_count_by_bucket: Counter[int] = Counter()
         self._fallback_counts: Counter[str] = Counter()
         self._reported_replays: set[Hashable] = set()
         self._capture_attention_metadata: VisionAttentionMetadata | None = None
@@ -265,7 +267,11 @@ class Qwen3ASREncoderLayerStackGraphRunner:
 
         entry = self._graphs.get(graph_key)
         if entry is None:
-            if self._is_npu and len(self._graphs) >= self._npu_signature_capacity:
+            if (
+                self._is_npu
+                and self._npu_signature_count_by_bucket[bucket_size]
+                >= self._npu_signature_capacity_per_bucket
+            ):
                 return self._fallback("npu_signature_capacity")
             try:
                 entry = self._capture(
@@ -284,6 +290,8 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 self._failed.add(graph_key)
                 return self._fallback("capture_failed")
             self._graphs[graph_key] = entry
+            if self._is_npu:
+                self._npu_signature_count_by_bucket[bucket_size] += 1
 
         entry.hidden_states[:total].copy_(hidden_states)
         if not self._is_npu:
