@@ -9,7 +9,8 @@ graph profile. It is a functional qualification, not a performance task.
 export SGLANG_REPO=/server/local/sglang
 export OMNI_REPO=/server/local/sglang-omni
 export EXPECTED_SGLANG_HEAD=0bcd822377da7b5718e674eaf9c870d349424dd1
-export EXPECTED_OMNI_CODE_HEAD=d4fbc10452491edfd347b8db04b577e4b0795a93
+export EXPECTED_OMNI_BASE_HEAD=886ced95b9c0b76429798bb60dbd34d3f71dad95
+export EXPECTED_OMNI_CODE_HEAD=1d24091b105c0906cf9d25e19099ecfaf74080df
 export MODEL_PATH=/server/local/Qwen3-ASR-1.7B
 export PORT=8000
 export EVIDENCE=/server/local/evidence/qwen3-asr-v0519-all-graphs
@@ -33,6 +34,7 @@ git diff --exit-code "${EXPECTED_SGLANG_HEAD}" -- \
 
 cd "${OMNI_REPO}"
 test -z "$(git status --porcelain)"
+git merge-base --is-ancestor "${EXPECTED_OMNI_BASE_HEAD}" HEAD
 git diff --exit-code "${EXPECTED_OMNI_CODE_HEAD}" HEAD -- \
   sglang_omni tests
 test -z "$(git diff --name-only "${EXPECTED_OMNI_CODE_HEAD}" HEAD | \

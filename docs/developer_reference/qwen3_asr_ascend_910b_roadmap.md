@@ -14,16 +14,15 @@ already classified in `910C-062`. Continuing to refine that protocol before the
 minimal NPU deliverable is reviewable has low information value. The priority
 order is now:
 
-1. **P0 - freeze the minimal functional path.** Pure SGLang `v0.5.19` plus the
-   Omni encoder private stream, with decode graph enabled and Torch Compile
+1. **P0 - retain the merged minimal functional path.** Pure SGLang `v0.5.19`
+   plus the merged [#2084](https://github.com/sgl-project/sglang-omni/pull/2084)
+   encoder private stream, with decode graph enabled and Torch Compile
    disabled. No fused-op patch.
-2. **P1 - qualify the frozen upstream PR head.** Re-run startup, cold
-   concurrency-8, one 140-request functional-correctness pass, and cleanup on
-   the reviewed [#2084](https://github.com/sgl-project/sglang-omni/pull/2084)
-   head without changing the PR.
-3. **P2 - freeze reviewed work.** Do not modify, rebase, or rewrite #2084. Any
-   new issue becomes a separate follow-up branch and PR.
-4. **P3 - add capability or performance work.** Encoder/prefill graph, Torch
+2. **P1 - qualify the all-graph follow-up.** Run encoder, prefill, and decode
+   graphs together on the merged main baseline, still with Torch Compile off.
+3. **P2 - keep merged work frozen.** Do not modify, rebase, or rewrite the
+   merged #2084 history. New capabilities use follow-up branches and PRs.
+4. **P3 - add performance work.** Remaining graph modes, Torch
    Compile, realtime ASR, and the C70 target come only after P0-P2.
 
 The exact WER evaluation protocol is a known non-blocking verification issue.
@@ -35,7 +34,7 @@ errors. Exact corpus/protocol reconciliation is deferred.
 
 | Item | Current decision |
 |---|---|
-| SGLang-Omni | The reviewed #2084 head `872e5502` is frozen; do not rebase or modify it. Other work uses follow-up branches |
+| SGLang-Omni | `upstream/main@886ced95` contains merged #2084; the active follow-up runtime code is `1d24091b` |
 | SGLang | Pure `v0.5.19` tag commit `0bcd82237` is the active runtime baseline; the fused-op patch `e0011e30` is deferred |
 | SGLang dependency | `sglang==0.5.19` |
 | NPU runtime | CANN, PyTorch, torch_npu, triton-ascend, and sgl-kernel-npu must be selected from their compatibility matrices |
@@ -62,13 +61,15 @@ functional gate passed but a cleanup or qualification gate remains open;
 
 | Workstream | Status | Current state | Exit condition |
 |---|---|---|---|
-| Omni NPU encoder private stream | Done | `codex/qwen3-asr-npu-encoder-stream-v0519` uses code commit `5190678c`; focused stream tests pass and a request completed on the pure `v0.5.19` runtime | Keep the implementation under final PR-head validation |
+| Omni NPU encoder private stream | Done | Merged in [#2084](https://github.com/sgl-project/sglang-omni/pull/2084) through merge commit `886ced95`; the prior branch was reviewed and frozen before merge | Do not rewrite the merged history; use a follow-up PR for new behavior |
 | External fused-kernel compile boundary | Deferred | Pure `v0.5.19` passes graph-only, so `e0011e30` is not required by the active functional path | Keep [#38843](https://github.com/sgl-project/sglang/pull/38843) deferred unless a later compile performance task proves the boundary necessary |
 | SGLang v0.5.19 validation | Done | Pure tag commit `0bcd82237`, with no fused_ops or Qwen3 diff against the tag, reached readiness, captured the decode graph, returned a non-empty smoke transcript, and completed normal shutdown | Preserve the pure base as the active runtime baseline |
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
-| Combined NPU liveness and correctness | Done for progression | Pure `v0.5.19` + Omni `5190678c` passed graph-only startup, smoke, cold concurrency-8 `70/70`, and a 140-request pass with `140/140`, zero empty outputs, and zero garbled outputs; the exact WER protocol is deferred | Do not block P0; reconcile the WER protocol only when it changes a product decision |
-| PR #2084 frozen-head qualification | Planned | The functional evidence above uses Omni code `5190678c`; the reviewed PR head is frozen at `872e5502` and requires a read-only hardware pass | Run startup, cold concurrency-8, 140-request functional correctness, and cleanup on `872e5502`; do not modify the PR |
+| Combined NPU liveness and correctness | Historical | Pure `v0.5.19` + the pre-merge Omni code `5190678c` passed graph-only startup, smoke, cold concurrency-8 `70/70`, and a 140-request pass with `140/140`, zero empty outputs, and zero garbled outputs | Re-attest the merged-main baseline when the all-graph task runs; the exact WER protocol remains deferred |
+| NPU encoder graph | Implemented | Follow-up runtime code `1d24091b` lazily captures exact NPU window signatures and bounds the global signature cache by `max_batch_size` | Pass the pinned all-graph hardware task with zero fallback markers |
+| NPU prefill graph | Planned | The follow-up task pins the SGLang `breakable` prefill backend on pure `v0.5.19` | Prove positive prefill capture and replay in the all-graph task |
+| All-graph no-compile qualification | Planned | Encoder, prefill, and decode graphs are defined as one exact-head task on merged Omni main plus pure `v0.5.19` | Pass Gate 0-3 in `qwen3_asr_ascend_v0519_all_graphs_task.md` |
 | SGLang main interface experiment | Historical | Main exposed `scheduler_stage_metrics` drift and older capture failures; the baseline is abandoned | Do not use for current acceptance |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
 | Performance target | Deferred | No performance work is part of the current acceptance path | Reopen only after functionality and correctness close |
@@ -124,9 +125,9 @@ performance task supplies independent evidence.
 
 ### Phase 3: Omni branch cleanup
 
-- Treat #2084 `872e5502` as frozen after community review.
-- Do not rebase, rewrite, or edit the PR branch.
-- If any defect appears, create a separate follow-up branch and PR.
+- Completed: #2084 merged through `886ced95`.
+- Do not rewrite or reopen the merged PR history.
+- Start new capability work from merged main on a separate follow-up branch.
 
 ### Phase 4: Exact-head validation
 
@@ -147,9 +148,11 @@ performance task supplies independent evidence.
 
 ### Phase 5: Upstream preparation
 
-- Keep #2084 unchanged and use it as the current Omni encoder-stream unit.
+- Keep the merged #2084 encoder-stream unit unchanged.
+- Prepare the encoder graph as a separate follow-up PR after exact-head
+  hardware qualification.
 - Keep SGLang compile-boundary work separate and deferred.
-- Any post-review issue gets a new branch and a linked follow-up PR.
+- Any post-merge defect gets a new branch and a linked follow-up PR.
 
 ## Validation Gates
 
@@ -179,10 +182,11 @@ outside this gate.
 | Generic Ascend Qwen3 evidence covers this run | Scope difference, not root cause | Ascend Qwen3 e2e uses eager decode without torch.compile; Qwen3-ASR enables both compile and decode graph, and the NPU attention implementation selects a different branch when compile is enabled |
 | `torch.compile` is required for Qwen3-ASR | Rejected as a functional requirement | It was introduced as a CUDA low/mid-concurrency performance optimization; the stage default is `enable_torch_compile=False` |
 
-The pure `v0.5.19` graph-only startup and smoke gates are closed. The next work
-is cold concurrency-8 liveness and correctness on `0bcd82237` + Omni
-`5190678c`. No compile-supported NPU claim and no fused-op requirement are
-active.
+The pure `v0.5.19` graph-only startup and smoke gates are closed, and #2084 is
+merged. The next work is exact-head qualification of encoder, prefill, and
+decode graphs together on `0bcd82237` + merged Omni main plus the follow-up
+runtime code `1d24091b`. No compile-supported NPU claim and no fused-op
+requirement are active.
 
 ## Roadmap Maintenance
 
