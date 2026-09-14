@@ -146,6 +146,22 @@ requests, and sets `mem_fraction_static` to `0.65`. Its bounds are specific to
 the validated RTX 4090 layout; use the default configuration or a separately
 qualified profile on other GPU architectures.
 
+On Ascend NPU, Qwen3-ASR runs in graph-only mode. Torch compilation is
+disabled by the engine profile even when the typed pipeline default asks for
+it; encoder graph capture, breakable prefill graphs, and full decode graphs
+remain enabled. Use the normal server command:
+
+```bash
+sgl-omni serve \
+  --model-path Qwen/Qwen3-ASR-1.7B \
+  --port 8000
+```
+
+The NPU profile keeps `disable_cuda_graph=false`,
+`cuda_graph_backend_prefill=breakable`, and `enable_torch_compile=false`.
+Setting `--asr.engine.enable_torch_compile true` does not override this
+platform constraint.
+
 For example, force synchronous decode when comparing modes:
 
 ```bash
