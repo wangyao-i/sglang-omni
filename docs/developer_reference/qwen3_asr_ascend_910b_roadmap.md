@@ -85,7 +85,7 @@ explicitly outside the current phase.
 | NPU encoder graph | Implemented | PR #2160 at `302cf932` contains lazy bucket capture, replay-time host-input updates through the platform graph backend, a finite bucket registry, a shared NPU graph pool, and fail-fast capture/update errors | Re-run the all-graph task on the PR #2016 integration code head `f55c3b09` with zero unexpected fallback or update failures |
 | Encoder graph layout-key consolidation | Done | On Ascend 910C, layouts `[500]` and `[450]` reused one token-bucket graph through `NPUGraph.update()` and both stayed within `3e-2` of eager output; the old exact-layout key and 32-entry policy were removed | Preserve bucket-only identity and re-attest it as part of the combined 140-request all-graph gate |
 | NPU prefill graph | Implemented | The all-graph candidate selects SGLang `breakable` prefill and preserves the NPU graph-only profile even when the typed pipeline default enables Torch Compile | Re-run the all-graph task on `f55c3b09` with positive prefill capture and replay |
-| All-graph functional qualification | Pending revalidation | Earlier all-graph smoke and 140-request runs used behavior predecessors. The current candidate includes the graph-only config change and must be re-attested | On a clean host, pass one fresh-process cold conc8 run over 140 requests, with zero empty outputs, zero garbled outputs, positive encoder/prefill/decode evidence, and clean shutdown |
+| All-graph functional qualification | Failed; diagnosis pending | Gate 0 passed on `f55c3b09`, then the cold conc8 run on handoff `773ad0aa` hung after 16/140 requests with the SGLang decoder helper blocked in graph update; forced cleanup left 86% HBM | Recover the isolated card, run the 32-request ordered-update probe on SGLang `4d819e5aa2`, then retry the 140-request gate only if the mechanism passes |
 | All-graph stability and performance qualification | Deferred | Multi-run liveness, graph-registry soak, HBM trend analysis, C70, throughput, p95, and latency are not part of the functional target | Define a separate exact-head task after the functional gate is reviewable |
 | SGLang main interface experiment | Historical | Main exposed `scheduler_stage_metrics` drift and older capture failures; the baseline is abandoned | Do not use for current acceptance |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
@@ -204,13 +204,16 @@ forced alignment remain outside this gate.
 | HBM residual after graph-only shutdown | Resolved as external interference | The holder was identified as a residual process and cleaned; it is not attributed to the graph-only run |
 | Generic Ascend Qwen3 evidence covers this run | Scope difference, not root cause | Ascend Qwen3 e2e uses eager decode without torch.compile; Qwen3-ASR enables both compile and decode graph, and the NPU attention implementation selects a different branch when compile is enabled |
 | `torch.compile` is required for Qwen3-ASR | Rejected as a functional requirement | It was introduced as a CUDA low/mid-concurrency performance optimization; the stage default is `enable_torch_compile=False` |
+| Decoder threaded update remains live after enabling the NPU encoder graph | Rejected on current integration head | Gate 0 passed, but the cold conc8 run hung after 16 requests with the decoder helper blocked in `graph_task_update_begin`; all three graph paths had captured and no ACL, ATB, PagedAttention, or OOM error preceded the stall |
+| Three concurrent submitters explain the current hang | Plausible, pending current-head discrimination | Historical `910C-065` established this mechanism before the shipping private encoder stream, but the current stack newly adds an encoder graph update/replay pair; SGLang `4d819e5aa2` removes only the decoder helper for a bounded 32-request probe |
 
 The pure `v0.5.19` graph-only startup and smoke gates are closed, and #2084 is
 merged. PR #2160 now carries the bucket-key NPU encoder graph. The all-graph
 candidate adds the graph-only profile needed to prevent typed pipeline defaults
-from re-enabling Torch Compile. Earlier all-graph results are useful behavior
-evidence, but they are not current-head qualification for `f55c3b09`.
-Realtime is next as a separate qualification task. Timestamps remain a
+from re-enabling Torch Compile. Current-head Gate 0 is green, but the threaded
+decoder update path is not live with all three graphs enabled. The ordered
+update probe is next; realtime stays blocked until the 140-request all-graph
+gate passes. Timestamps remain a
 separate forced-aligner feature. Performance and stability qualification are
 deferred. No compile-supported NPU claim and no fused-op requirement are
 active.
