@@ -166,6 +166,41 @@ def test_qwen_strategy_waits_for_unfixed_chunks_before_using_prefix() -> None:
     assert third.extra_params["_asr_streaming_prefix_text"] == "hello world"
 
 
+def test_qwen_strategy_skips_rollback_on_final_decode() -> None:
+    strategy = Qwen3ASRStreamingStrategy()
+    state = strategy.create_state(model_name="qwen3-asr", language="English")
+    for transcript in ("hello wor", "hello world"):
+        strategy.update_hypothesis(
+            generated_text=transcript,
+            language="English",
+            state=state,
+        )
+
+    final_request = strategy.build_decode_request(
+        audio=b"wav", state=state, is_final=True, request_id="r-final"
+    )
+
+    assert final_request.extra_params["_asr_streaming_prefix_text"] == "hello world"
+    assert final_request.extra_params["_asr_streaming_rollback_tokens"] == 0
+
+
+def test_qwen_strategy_final_decode_keeps_the_stability_gate() -> None:
+    strategy = Qwen3ASRStreamingStrategy()
+    state = strategy.create_state(model_name="qwen3-asr", language="English")
+    strategy.update_hypothesis(
+        generated_text="hello wor",
+        language="English",
+        state=state,
+    )
+
+    final_request = strategy.build_decode_request(
+        audio=b"wav", state=state, is_final=True, request_id="r-final"
+    )
+
+    assert final_request.extra_params["_asr_streaming_prefix_text"] is None
+    assert final_request.extra_params["_asr_streaming_rollback_tokens"] == 0
+
+
 def test_qwen_strategy_skips_prefix_until_language_is_known() -> None:
     strategy = Qwen3ASRStreamingStrategy()
     state = strategy.create_state(model_name="qwen3-asr", language=None)

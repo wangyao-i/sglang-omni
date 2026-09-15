@@ -37,7 +37,7 @@ class Qwen3ASRStreamingStrategy:
         is_final: bool,
         request_id: str,
     ) -> GenerateRequest:
-        del is_final, request_id
+        del request_id
         qwen_state = self._state(state)
 
         use_prefix = (
@@ -45,6 +45,7 @@ class Qwen3ASRStreamingStrategy:
             and bool(qwen_state.transcript)
             and qwen_state.language is not None
         )
+        rollback_tokens = _ROLLBACK_TOKENS if use_prefix and not is_final else 0
         request = build_speech_to_text_generate_request(
             audio_bytes=audio,
             filename="realtime-segment.wav",
@@ -61,9 +62,7 @@ class Qwen3ASRStreamingStrategy:
                 "_asr_streaming_prefix_text": (
                     qwen_state.transcript if use_prefix else None
                 ),
-                "_asr_streaming_rollback_tokens": (
-                    _ROLLBACK_TOKENS if use_prefix else 0
-                ),
+                "_asr_streaming_rollback_tokens": rollback_tokens,
             }
         )
         return request
