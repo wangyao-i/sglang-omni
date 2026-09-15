@@ -1,6 +1,7 @@
 # Qwen3-ASR Ascend NPU realtime handoff
 
-Status: implementation reuse complete; isolated-hardware qualification pending.
+Status: PR #2016 integration base prepared; Qwen3-ASR realtime development and
+isolated-hardware qualification are pending on the combined validation branch.
 
 ## Objective
 
@@ -8,7 +9,8 @@ Qualify live PCM transcription on the same no-Torch-Compile, all-graph profile
 used by the offline Qwen3-ASR path:
 
 - SGLang `v0.5.19`;
-- SGLang-Omni `8d2fcaaa`;
+- SGLang-Omni PR #2016 base `18c8cfd2` plus the integration code candidate
+  `b8a37792`;
 - encoder graph, breakable prefill graph, and full decode graph enabled;
 - `enable_torch_compile=false`;
 - `/v1/realtime?intent=transcription` with manual commit and server VAD;
@@ -21,11 +23,17 @@ This workstream does not add a second realtime implementation for NPU.
 | Repository | Candidate | Required state |
 |---|---|---|
 | SGLang | `0bcd822377da7b5718e674eaf9c870d349424dd1` (`v0.5.19`) | Clean; no fused-op or Qwen3 model patch |
+| SGLang-Omni PR #2016 base | `18c8cfd2eeeb495569426875a2e2bf4114133caf` | Exact branch currently used by the server; contains the realtime work under review and merged #2084 |
 | SGLang-Omni PR #2160 | `1638c5dddb012686210f85ed3ee050fed1ac4597` | Frozen code candidate |
-| SGLang-Omni all-graph/realtime base | `8d2fcaaab24e44a69ba41d06d7ee7467aee0cd11` | Clean; contains the NPU graph-only profile |
+| SGLang-Omni all-graph integration base | `cb0ea08c5f852de6e152945a7e71808959f81ee2` | PR #2016 + PR #2160 + NPU graph-only profile |
+| SGLang-Omni validation code candidate | `b8a37792829ef402edf7b5c83136ab5c804cf5af` | Adds the Qwen3-ASR final-prefix realtime behavior; docs-only descendants are allowed |
 
-The realtime branch is stacked on `8d2fcaaa`; it currently contains no
-additional production code.
+The validation branch is based on PR #2016 and uses the same integrated code
+head as all-graph qualification. The first bounded Qwen3-ASR realtime change
+reuses PR #2016's final-decode rule: after the existing two-refresh stability
+gate and language check pass, a final decode retains the full stable prefix and
+sets token rollback to zero. No NPU-specific realtime branch has been added;
+further behavior must be justified by a failing realtime gate on this stack.
 
 ## Code Finding
 
@@ -93,7 +101,7 @@ qualification.
 - No word timestamps or forced alignment.
 - No production code change while the existing device-agnostic path is still
   awaiting exact-head hardware evidence.
-- No change to PR #2160.
+- No change to PR #2016 or PR #2160.
 
 ## Server Task
 

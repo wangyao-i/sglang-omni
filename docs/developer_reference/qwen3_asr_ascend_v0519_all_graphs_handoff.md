@@ -1,8 +1,8 @@
 # Qwen3-ASR Ascend v0.5.19 all-graph handoff
 
-Status: current candidate is `8d2fcaaa`; functional isolated hardware
-revalidation is pending after the NPU graph-only profile change. Earlier runs
-remain historical evidence, not current-head qualification.
+Status: the PR #2016-based integration code candidate is `b8a37792`;
+functional isolated-hardware revalidation is pending. Earlier runs remain
+historical evidence, not current-head qualification.
 
 ## Objective
 
@@ -10,7 +10,8 @@ Validate the smallest no-Torch-Compile profile with encoder, prefill, and decode
 graphs enabled together:
 
 - SGLang pure `v0.5.19`;
-- Omni main with the merged #2084 NPU encoder private stream;
+- Omni PR #2016 at the exact server-validation head, which already contains
+  the merged #2084 NPU encoder private stream;
 - NPU encoder layer-stack graph;
 - SGLang `breakable` prefill graph;
 - NPU full decode graph;
@@ -18,18 +19,20 @@ graphs enabled together:
 - no execution guard, fused-op patch, compile selector, or private encoder graph
   pool.
 
-This branch starts from the merge commit for #2084. It does not modify or
-reopen that PR; it adds only the NPU encoder layer-stack graph and its
-validation task.
+This integration branch starts from PR #2016, merges the frozen PR #2160 head,
+and applies the NPU graph-only profile. It does not modify either community PR.
+Realtime development and all-graph qualification share this integration base
+so the server does not need to switch branches between the two workstreams.
 
 ## Exact Identity
 
 | Repository | Exact runtime head | Required state |
 |---|---|---|
 | SGLang | `0bcd822377da7b5718e674eaf9c870d349424dd1` (`v0.5.19`) | Clean; no fused-op patch |
-| SGLang-Omni baseline | `886ced95b9c0b76429798bb60dbd34d3f71dad95` | Merge commit for #2084; must be an ancestor of the observed HEAD |
+| SGLang-Omni PR #2016 base | `18c8cfd2eeeb495569426875a2e2bf4114133caf` | Exact server-validation base; must be an ancestor of the observed HEAD |
 | SGLang-Omni PR #2160 candidate | `1638c5dddb012686210f85ed3ee050fed1ac4597` | Frozen encoder/prefill graph code and tests |
-| SGLang-Omni all-graph candidate | `8d2fcaaab24e44a69ba41d06d7ee7467aee0cd11` | Current runtime candidate for encoder, prefill, and decode graph revalidation |
+| SGLang-Omni all-graph integration base | `cb0ea08c5f852de6e152945a7e71808959f81ee2` | PR #2016 + PR #2160 + NPU graph-only profile |
+| SGLang-Omni validation code candidate | `b8a37792829ef402edf7b5c83136ab5c804cf5af` | Adds the bounded Qwen3-ASR realtime final-prefix change; docs-only descendants are allowed by Gate 0 |
 
 The Omni checkout must not contain zero-diff assumptions for the SGLang side:
 verify the imported SGLang module points at the exact clean `v0.5.19` checkout.
@@ -44,10 +47,14 @@ graph runner for NPU:
 - The first real request captures by exact `(bucket_size, window_lens)`.
 - Cumulative window boundaries remain host-resident on NPU.
 - Different real window layouts for one token bucket receive separate graphs.
-- The NPU graph registry mirrors SGLang's `ViTNpuGraphRunner`: lazy capture by
-  the exact `(bucket_size, window_lens)` key, with the window boundaries kept
-  host-resident. There is no separate capacity knob or capacity-based eager
-  fallback; capture failures propagate instead of silently changing paths.
+- The NPU graph registry captures lazily by exact
+  `(bucket_size, window_lens)` layout and shares one graph pool across captured
+  layouts. A runner-wide `max_graphs` limit, defaulting to 32, bounds the total
+  number of NPU graphs across all buckets. Once the limit is reached,
+  previously captured layouts continue to replay while unseen layouts return
+  to the eager path. This capacity fallback is distinct from capture failure:
+  an NPU capture failure is terminal, and subsequent requests raise until the
+  process is restarted with encoder graphs disabled.
 - First replay of each signature is logged for positive target-path evidence.
 
 The all-graph candidate also forces `enable_torch_compile=false` on NPU after

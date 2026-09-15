@@ -8,7 +8,8 @@ This is a functional qualification task. It is not a performance or soak task.
 export SGLANG_REPO=/server/local/sglang
 export OMNI_REPO=/server/local/sglang-omni
 export EXPECTED_SGLANG_HEAD=0bcd822377da7b5718e674eaf9c870d349424dd1
-export EXPECTED_OMNI_BASE_HEAD=8d2fcaaab24e44a69ba41d06d7ee7467aee0cd11
+export EXPECTED_OMNI_BASE_HEAD=18c8cfd2eeeb495569426875a2e2bf4114133caf
+export EXPECTED_OMNI_CODE_HEAD=b8a37792829ef402edf7b5c83136ab5c804cf5af
 export MODEL_PATH=/server/local/Qwen3-ASR-1.7B
 export ASCEND_RT_VISIBLE_DEVICES=14
 export PORT=8000
@@ -32,7 +33,12 @@ test ! -e python/sglang/srt/hardware_backend/npu/fused_ops.py
 
 cd "${OMNI_REPO}"
 test -z "$(git status --porcelain)"
-test "$(git rev-parse HEAD)" = "${EXPECTED_OMNI_BASE_HEAD}"
+git merge-base --is-ancestor "${EXPECTED_OMNI_BASE_HEAD}" HEAD
+git merge-base --is-ancestor 1638c5dddb012686210f85ed3ee050fed1ac4597 HEAD
+git diff --exit-code "${EXPECTED_OMNI_CODE_HEAD}" HEAD -- \
+  sglang_omni tests
+test -z "$(git diff --name-only "${EXPECTED_OMNI_CODE_HEAD}" HEAD | \
+  grep -v '^docs/')"
 
 python - <<'PY'
 import os

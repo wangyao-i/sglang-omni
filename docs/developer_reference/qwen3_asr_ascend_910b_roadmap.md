@@ -5,7 +5,7 @@ effort. Detailed hardware evidence belongs in the hardware handoff or task
 pages; this roadmap records what is complete, what is still pending, and which
 work is deliberately deferred.
 
-Last updated: 2026-09-14.
+Last updated: 2026-09-15.
 
 ## Priority Reset
 
@@ -46,9 +46,9 @@ errors. Exact corpus/protocol reconciliation is deferred.
 | Item | Current decision |
 |---|---|
 | SGLang-Omni merged base | `upstream/main@886ced95` contains merged #2084 |
+| SGLang-Omni server validation base | PR #2016 at `18c8cfd2eeeb495569426875a2e2bf4114133caf` |
 | SGLang-Omni PR #2160 candidate | `1638c5dddb012686210f85ed3ee050fed1ac4597`; frozen for maintainer review |
-| SGLang-Omni all-graph candidate | `8d2fcaaab24e44a69ba41d06d7ee7467aee0cd11`; contains PR #2160 plus the NPU graph-only profile |
-| SGLang-Omni realtime candidate | `8d2fcaaab24e44a69ba41d06d7ee7467aee0cd11`; stacked on the all-graph candidate and currently has no extra production code |
+| SGLang-Omni all-graph/realtime integration code | `b8a37792829ef402edf7b5c83136ab5c804cf5af`; combines PR #2016, frozen PR #2160, the NPU graph-only profile, and the bounded Qwen3-ASR final-prefix change |
 | SGLang | Pure `v0.5.19` tag commit `0bcd82237` is the active runtime baseline; the fused-op patch `e0011e30` is deferred |
 | SGLang dependency | `sglang==0.5.19` |
 | NPU runtime | CANN, PyTorch, torch_npu, triton-ascend, and sgl-kernel-npu must be selected from their compatibility matrices |
@@ -82,15 +82,15 @@ explicitly outside the current phase.
 | NPU installer `0.5.19` alignment | Done | `install_npu.sh`, installation docs, `pyproject_npu.toml`, and installer tests now target `0.5.19` | Run the installer suite in a Linux CI environment |
 | Qwen3-ASR feature matrix | Done | [`qwen3_asr_feature_matrix.md`](qwen3_asr_feature_matrix.md) records model, Omni/CUDA, NPU implementation, and NPU qualification separately | Refresh rows when exact-head server evidence arrives |
 | Combined NPU liveness and correctness | Historical | Pure `v0.5.19` + the pre-merge Omni code `5190678c` passed graph-only startup, smoke, cold concurrency-8 `70/70`, and a 140-request pass with `140/140`, zero empty outputs, and zero garbled outputs | Re-attest the merged-main baseline when the all-graph task runs; the exact WER protocol remains deferred |
-| NPU encoder graph | Implemented | PR #2160 at `1638c5dd` contains lazy exact-layout capture, a shared NPU graph pool, a global 32-graph bound, and fail-fast capture errors | Re-run the all-graph task on `8d2fcaaa` with zero unexpected fallback markers |
+| NPU encoder graph | Implemented | PR #2160 at `1638c5dd` contains lazy exact-layout capture, a shared NPU graph pool, a global 32-graph bound, and fail-fast capture errors | Re-run the all-graph task on the PR #2016 integration code head `b8a37792` with zero unexpected fallback markers |
 | Encoder graph layout-key consolidation | Deferred | The current qualification keeps the exact `(bucket_size, effective_window_lens)` key. vLLM's encoder graph manager illustrates a budget-key plus replay-buffer contract, but Qwen3-ASR has no reusable audio encoder graph hook; the relevant NPU precedent is vLLM Ascend's FIA graph-task update path | After the exact-layout all-graph gate passes, prove in an isolated POC that one graph per token bucket can replay two window layouts with eager-parity output and no recapture. Proceed only if the measured graph/memory benefit justifies changing the shared SGLang vision-attention path |
-| NPU prefill graph | Implemented | The all-graph candidate selects SGLang `breakable` prefill and preserves the NPU graph-only profile even when the typed pipeline default enables Torch Compile | Re-run the all-graph task on `8d2fcaaa` with positive prefill capture and replay |
+| NPU prefill graph | Implemented | The all-graph candidate selects SGLang `breakable` prefill and preserves the NPU graph-only profile even when the typed pipeline default enables Torch Compile | Re-run the all-graph task on `b8a37792` with positive prefill capture and replay |
 | All-graph functional qualification | Pending revalidation | Earlier all-graph smoke and 140-request runs used behavior predecessors. The current candidate includes the graph-only config change and must be re-attested | On a clean host, pass one fresh-process cold conc8 run over 140 requests, with zero empty outputs, zero garbled outputs, positive encoder/prefill/decode evidence, and clean shutdown |
 | All-graph stability and performance qualification | Deferred | Multi-run liveness, graph-registry soak, HBM trend analysis, C70, throughput, p95, and latency are not part of the functional target | Define a separate exact-head task after the functional gate is reviewable |
 | SGLang main interface experiment | Historical | Main exposed `scheduler_stage_metrics` drift and older capture failures; the baseline is abandoned | Do not use for current acceptance |
 | Historical `910C-071` result | Historical | It qualified the old combined candidate, but later scope removal changed the candidate and the result is not current-head evidence | Replace it with a new exact-head result or leave it clearly historical |
 | Performance target | Deferred | No performance work is part of the current acceptance path | Reopen only after functionality and correctness close |
-| Realtime ASR | Implemented, qualification pending | Existing `/v1/realtime` session and Qwen3-ASR streaming strategy are device-agnostic. The candidate is stacked on `8d2fcaaa`; no NPU-specific production code is currently required | Pass `qwen3_asr_ascend_npu_realtime_task.md` on a clean card, including manual commit, server VAD, cancellation, disconnect/reconnect, positive graph activity, and no unexpected fallback |
+| Realtime ASR | Development/qualification pending | The integration branch starts from PR #2016 and reuses the existing `/v1/realtime` session and Qwen3-ASR streaming strategy. Add production code only for failures demonstrated on the exact combined stack | After the all-graph gate, pass `qwen3_asr_ascend_npu_realtime_task.md` on a clean card, including manual commit, server VAD, cancellation, disconnect/reconnect, positive graph activity, and no unexpected fallback |
 | Timestamps / forced alignment | Planned, separate PR | Qwen3-ASR does not emit word timestamps. `Qwen3-ForcedAligner-0.6B` is a separate NAR checkpoint covering 11 languages and up to 5 minutes | Run the official package probe, define an explicit alignment-stage and response contract, then qualify it independently; see `qwen3_asr_forced_aligner_integration.md` |
 
 ## Problem Statement
@@ -160,7 +160,7 @@ performance task supplies independent evidence.
 - Stop at the first failure and classify before adding any more variants.
 - The all-graph implementation has changed since the earlier smoke and
   140-request runs. Re-run the cold concurrency-8 liveness and agreed
-  correctness workload on `8d2fcaaa`.
+  correctness workload on integration code head `b8a37792`.
 - Record exact repository heads, dependency versions, and sanitized results.
 - Stop at the first hang, accuracy failure, device error, or unexpected eager
   fallback.
@@ -172,7 +172,8 @@ performance task supplies independent evidence.
 - Re-run exact-head hardware qualification after PR #2160, then prepare the
   graph-only configuration as a separate follow-up PR.
 - Keep SGLang compile-boundary work separate and deferred.
-- Keep realtime and forced alignment in separate branches and PRs.
+- Keep all-graph and realtime in the shared validation branch, but split their
+  eventual delivery PRs; forced alignment remains a separate branch and PR.
 - Any post-merge defect gets a new branch and a linked follow-up PR.
 
 ## Validation Gates
@@ -183,7 +184,7 @@ The current phase is complete only when:
 - pure SGLang `v0.5.19` passes graph-only startup and decode capture without
   the fused-op patch;
 - the Omni encoder uses its private device stream without the removed guard;
-- one cold concurrency-8 run over 140 requests succeeds on `8d2fcaaa` with no
+- one cold concurrency-8 run over 140 requests succeeds on `b8a37792` with no
   garbled output and no unexpected fallback;
 - the realtime task passes manual commit, server VAD, cancellation,
   disconnect/reconnect, and bounded graph activity without unexpected fallback.
@@ -208,7 +209,7 @@ The pure `v0.5.19` graph-only startup and smoke gates are closed, and #2084 is
 merged. PR #2160 now carries the bounded NPU encoder graph. The all-graph
 candidate adds the graph-only profile needed to prevent typed pipeline defaults
 from re-enabling Torch Compile. Earlier all-graph results are useful behavior
-evidence, but they are not current-head qualification for `8d2fcaaa`.
+evidence, but they are not current-head qualification for `b8a37792`.
 Realtime is next as a separate qualification task. Timestamps remain a
 separate forced-aligner feature. Performance and stability qualification are
 deferred. No compile-supported NPU claim and no fused-op requirement are
