@@ -151,5 +151,7 @@ Supported Models
    developer_reference/reference_encode_service.md
    developer_reference/profiler.md
    developer_reference/qwen3_asr_concurrency_profile.md
+   developer_reference/qwen3_asr_npu_host_input_update_handoff.md
+   developer_reference/qwen3_asr_npu_host_input_update_task.md
    developer_reference/rl_admin_control.md
    developer_reference/bump_version.md
