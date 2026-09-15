@@ -129,6 +129,7 @@ def _make_engine_builder(
         stream_emit_interval_s=0.05,
     )
     builder.context_length = context_length
+    builder.gpu_id = 0
     return builder
 
 
