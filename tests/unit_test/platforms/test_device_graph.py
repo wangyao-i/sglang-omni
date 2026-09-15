@@ -206,16 +206,20 @@ def test_non_npu_backends_reject_host_input_updates(
         backend.replay(graph, host_input_updates=[{"value": [1]}])
 
 
-def test_each_backend_uses_the_keyword_its_torch_context_declares() -> None:
-    """The stub tests above accept any keyword, so pin the real ones here.
-
-    Both contexts are plain Python classes that a build without the device still
-    exposes, so this runs anywhere.
-    """
+def test_cuda_graph_context_declares_the_expected_keywords() -> None:
+    """The stub tests accept any keyword, so pin the real CUDA context here."""
     cuda = inspect.signature(torch.cuda.graph).parameters
-    xpu = inspect.signature(torch.xpu.graph).parameters
-
     assert "cuda_graph" in cuda and "capture_error_mode" in cuda
+
+
+def test_xpu_graph_context_declares_the_expected_keywords() -> None:
+    """Some non-XPU PyTorch distributions do not expose the XPU graph API."""
+    try:
+        xpu_graph = torch.xpu.graph
+    except AttributeError:
+        pytest.skip("this PyTorch distribution does not expose torch.xpu.graph")
+
+    xpu = inspect.signature(xpu_graph).parameters
     assert "xpu_graph" in xpu and "capture_error_mode" not in xpu
 
 
