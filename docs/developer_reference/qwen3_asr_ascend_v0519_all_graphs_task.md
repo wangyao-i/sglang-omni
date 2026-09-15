@@ -12,7 +12,8 @@ export SGLANG_REPO=/server/local/sglang
 export OMNI_REPO=/server/local/sglang-omni
 export EXPECTED_SGLANG_HEAD=0bcd822377da7b5718e674eaf9c870d349424dd1
 export EXPECTED_OMNI_BASE_HEAD=18c8cfd2eeeb495569426875a2e2bf4114133caf
-export EXPECTED_OMNI_CODE_HEAD=6a59057eb744ccb1a03692c369a7d7b288dbe3aa
+export EXPECTED_OMNI_CODE_HEAD=3b1fee2269cdcee9a3a957d5a456e2477b39f05e
+export EXPECTED_PR2160_SOURCE_HEAD=302cf932fcf17ce2f1e836b44a06a6a8d9979451
 export MODEL_PATH=/server/local/Qwen3-ASR-1.7B
 export ASCEND_RT_VISIBLE_DEVICES=14
 export PORT=8000
@@ -66,6 +67,11 @@ git diff --exit-code "${EXPECTED_OMNI_CODE_HEAD}" HEAD -- \
   sglang_omni tests
 test -z "$(git diff --name-only "${EXPECTED_OMNI_CODE_HEAD}" HEAD | \
   grep -v '^docs/')"
+git diff --exit-code "${EXPECTED_PR2160_SOURCE_HEAD}" HEAD -- \
+  sglang_omni/models/qwen3_asr/encoder_cuda_graph.py \
+  sglang_omni/platforms/device_graph.py \
+  tests/unit_test/qwen3_asr/test_encoder_cuda_graph.py \
+  tests/unit_test/platforms/test_device_graph.py
 
 python - <<'PY'
 import sglang
@@ -98,6 +104,7 @@ Run the focused local regression and then the complete Qwen3-ASR suite:
 ```bash
 cd "${OMNI_REPO}"
 python -m pytest -q \
+  tests/unit_test/platforms/test_device_graph.py \
   tests/unit_test/qwen3_asr/test_encoder_cuda_graph.py \
   tests/unit_test/qwen3_asr/test_encoder_service.py \
   >"${EVIDENCE}/test-focused.log" 2>&1
@@ -176,8 +183,10 @@ Require:
 - no hang or no-progress interval;
 - no ACL, allocator, stream, device, ATB, or `PagedAttentionOperation` error;
 - no Torch Compile marker;
-- all three target graph paths positive;
-- zero encoder graph fallback markers.
+- the focused mechanism test proves encoder replay across two layouts in one
+  bucket; the service has at least one encoder capture and zero encoder graph
+  fallback or host-input update failure markers;
+- prefill and decode graph paths have positive capture/replay evidence.
 
 Stop at the first failure.
 
@@ -228,7 +237,7 @@ Focused test result:
 Full Qwen3-ASR test result:
 Gate 1 evaluated / total / skipped / failures / timeouts:
 Gate 1 wall clock:
-Gate 1 encoder capture/replay/fallback markers:
+Gate 1 encoder capture/fallback/update-error markers and focused replay result:
 Gate 1 prefill capture/replay/eager markers:
 Gate 1 decode capture/replay/eager markers:
 Shutdown and cleanup state:

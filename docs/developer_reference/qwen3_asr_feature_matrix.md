@@ -20,19 +20,19 @@ SGLang-Omni implementation, and repository tests.
   <https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B>
 - SGLang-Omni source baseline: `upstream/main` contains merged #2084
 - SGLang-Omni PR #2160 candidate:
-  `1638c5dddb012686210f85ed3ee050fed1ac4597`
+  `302cf932fcf17ce2f1e836b44a06a6a8d9979451`
 - SGLang-Omni PR #2016 server-validation base:
   `18c8cfd2eeeb495569426875a2e2bf4114133caf`
 - SGLang-Omni all-graph and realtime integration code:
-  `6a59057eb744ccb1a03692c369a7d7b288dbe3aa`, which combines PR #2016,
-  frozen PR #2160, the NPU graph-only profile, and the bounded Qwen3-ASR
-  final-prefix change, then aligns PR #2016 final decode with its stability
-  gate
+  `3b1fee2269cdcee9a3a957d5a456e2477b39f05e`, which combines PR #2016,
+  the validated PR #2160 bucket-key update path, the NPU graph-only profile,
+  and the bounded Qwen3-ASR final-prefix change, then aligns PR #2016 final
+  decode with its stability gate
 - SGLang dependency: `sglang==0.5.19`; the active runtime baseline is the
   `v0.5.19` release line, not SGLang main
 - Ascend validation candidates:
   - SGLang pure `v0.5.19` tag commit `0bcd82237`, with no fused-op patch
-  - SGLang-Omni combined all-graph/realtime validation code at `6a59057e`
+  - SGLang-Omni combined all-graph/realtime validation code at `3b1fee22`
 
 The SGLang `e0011e30` fused-op candidate is archived and deferred. It is not
 part of the active functional baseline.
@@ -61,7 +61,7 @@ provisional until their stated gates complete.
 | Timestamps | Separate Qwen3-ForcedAligner-0.6B, up to 5 minutes, 11 languages | No forced-aligner integration; `verbose_json` exposes chunk boundaries only | Cookbook long-audio notes | Planned as a separate alignment stage; see `qwen3_asr_forced_aligner_integration.md` | Not implemented |
 | Batch/concurrency | Official vLLM path supports batch inference | Batched stage with `max_running_requests`, pre-LM batching, and chunk concurrency | Config, engine builder, ASR CI | Same scheduler; device execution differs | Pending |
 | BF16/FP16 | BF16 checkpoints; FlashAttention requires BF16/FP16 | `auto` follows checkpoint dtype; FP16 can be forced | Cookbook dtype notes | Same dtype policy | Pending |
-| Encoder graph | Not a model contract | Optional platform-owned encoder layer-stack graph | CUDA graph tests | PR #2160 adds a lazy exact-layout NPU graph with host-resident boundaries, a shared graph pool, a 32-entry bound, and fail-fast capture errors | Current-head all-graph qualification pending |
+| Encoder graph | Not a model contract | Optional platform-owned encoder layer-stack graph | CUDA graph tests | PR #2160 adds lazy token-bucket NPU graphs, replay-time host-boundary updates, a shared graph pool, and fail-fast capture/update errors | Current-head all-graph qualification pending |
 | Prefill/decode graph | Not a model contract | Prefill uses the breakable backend; decode graph is enabled by default | Engine builder and graph tests | The all-graph candidate pins `breakable` prefill and full decode with the NPU encoder graph active | Encoder, prefill, and decode graph qualification is pending as one exact-head all-graph task |
 | Torch compile | Not a model contract | Enabled by default in the CUDA performance profile with `torch_compile_max_bs=2`; the stage default is disabled | Engine builder/default config | The NPU profile forces `enable_torch_compile=false` even when typed pipeline defaults request compilation | Compile is not part of the NPU graph-only support claim |
 | NPU encoder stream isolation | Not applicable | `encoder_service.py` uses a private device stream and records the default consuming stream | Focused unit tests | Merged in #2084 through `886ced95` | Merged code is the active baseline; the all-graph task re-attests the integrated path on an exact head |

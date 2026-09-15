@@ -10,7 +10,7 @@ used by the offline Qwen3-ASR path:
 
 - SGLang `v0.5.19`;
 - SGLang-Omni PR #2016 base `18c8cfd2` plus the integration code candidate
-  `6a59057e`;
+  `3b1fee22`;
 - encoder graph, breakable prefill graph, and full decode graph enabled;
 - `enable_torch_compile=false`;
 - `/v1/realtime?intent=transcription` with manual commit and server VAD;
@@ -24,9 +24,9 @@ This workstream does not add a second realtime implementation for NPU.
 |---|---|---|
 | SGLang | `0bcd822377da7b5718e674eaf9c870d349424dd1` (`v0.5.19`) | Clean; no fused-op or Qwen3 model patch |
 | SGLang-Omni PR #2016 base | `18c8cfd2eeeb495569426875a2e2bf4114133caf` | Exact branch currently used by the server; contains the realtime work under review and merged #2084 |
-| SGLang-Omni PR #2160 | `1638c5dddb012686210f85ed3ee050fed1ac4597` | Frozen code candidate |
+| SGLang-Omni PR #2160 | `302cf932fcf17ce2f1e836b44a06a6a8d9979451` | Validated bucket-key code candidate |
 | SGLang-Omni all-graph integration base | `cb0ea08c5f852de6e152945a7e71808959f81ee2` | PR #2016 + PR #2160 + NPU graph-only profile |
-| SGLang-Omni validation code candidate | `6a59057eb744ccb1a03692c369a7d7b288dbe3aa` | Adds Qwen3-ASR final-prefix behavior and preserves PR #2016's stability gate on final decode; docs-only descendants are allowed |
+| SGLang-Omni validation code candidate | `3b1fee2269cdcee9a3a957d5a456e2477b39f05e` | Adds the validated NPU bucket-key update path after the Qwen3-ASR final-prefix and stability-gate changes; docs-only descendants are allowed |
 
 The validation branch is based on PR #2016 and uses the same integrated code
 head as all-graph qualification. The first bounded Qwen3-ASR realtime change
@@ -84,15 +84,13 @@ The realtime workload must show:
 
 ## Current Risk
 
-Realtime partial decodes use increasing audio lengths. On NPU, each new exact
-encoder window layout can create a separate encoder graph until the graph
-registry reaches its `32`-entry bound. Repeating the same decode interval and
-sample durations should reuse layouts, but the first bounded qualification
-must prove that the planned workload stays within the bound.
+Realtime partial decodes use increasing audio lengths, so repeated turns can
+update the host-side encoder window boundaries many times within one token
+bucket. The mechanism gate proves two layouts, but the bounded realtime
+qualification must still show that repeated update/replay completes without a
+hang, update error, recapture, or eager fallback.
 
-An encoder-capacity fallback is allowed only if the product contract explicitly
-accepts eager fallback. It is not accepted in this first all-graph
-qualification.
+No encoder fallback is accepted in this first all-graph qualification.
 
 ## Non-Goals
 

@@ -9,7 +9,7 @@ export SGLANG_REPO=/server/local/sglang
 export OMNI_REPO=/server/local/sglang-omni
 export EXPECTED_SGLANG_HEAD=0bcd822377da7b5718e674eaf9c870d349424dd1
 export EXPECTED_OMNI_BASE_HEAD=18c8cfd2eeeb495569426875a2e2bf4114133caf
-export EXPECTED_OMNI_CODE_HEAD=6a59057eb744ccb1a03692c369a7d7b288dbe3aa
+export EXPECTED_OMNI_CODE_HEAD=3b1fee2269cdcee9a3a957d5a456e2477b39f05e
 export MODEL_PATH=/server/local/Qwen3-ASR-1.7B
 export ASCEND_RT_VISIBLE_DEVICES=14
 export PORT=8000
@@ -163,10 +163,11 @@ Record corpus WER but do not use it as a performance threshold.
 
 Scan the server log and require:
 
-- at least one positive encoder capture and replay;
+- the prerequisite all-graph gate has proved encoder bucket replay; this run
+  has at least one encoder capture and zero fallback or update failure;
 - positive prefill capture and replay evidence;
 - positive decode replay evidence;
-- zero encoder-capacity fallback for this bounded workload;
+- zero encoder fallback or host-input update failure for this bounded workload;
 - zero Torch Compile markers;
 - zero ACL, ATB, allocator, stream, device, graph-capture, or
   `PagedAttentionOperation` errors.
