@@ -48,7 +48,9 @@ class FunASRStreamingStrategy:
         # possibly corrupting text that may already be correct, for no
         # benefit — skip it and trust the accumulated transcript instead.
         if is_final:
-            use_prefix = bool(fun_state.transcript)
+            use_prefix = fun_state.chunk_id >= _UNFIXED_CHUNK_NUM and bool(
+                fun_state.transcript
+            )
             rollback_chars = 0
         else:
             use_prefix = fun_state.chunk_id >= _UNFIXED_CHUNK_NUM and bool(
