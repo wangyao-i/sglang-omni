@@ -24,14 +24,15 @@ SGLang-Omni implementation, and repository tests.
 - SGLang-Omni PR #2016 server-validation base:
   `18c8cfd2eeeb495569426875a2e2bf4114133caf`
 - SGLang-Omni all-graph and realtime integration code:
-  `b8a37792829ef402edf7b5c83136ab5c804cf5af`, which combines PR #2016,
+  `6a59057eb744ccb1a03692c369a7d7b288dbe3aa`, which combines PR #2016,
   frozen PR #2160, the NPU graph-only profile, and the bounded Qwen3-ASR
-  final-prefix change
+  final-prefix change, then aligns PR #2016 final decode with its stability
+  gate
 - SGLang dependency: `sglang==0.5.19`; the active runtime baseline is the
   `v0.5.19` release line, not SGLang main
 - Ascend validation candidates:
   - SGLang pure `v0.5.19` tag commit `0bcd82237`, with no fused-op patch
-  - SGLang-Omni combined all-graph/realtime validation code at `b8a37792`
+  - SGLang-Omni combined all-graph/realtime validation code at `6a59057e`
 
 The SGLang `e0011e30` fused-op candidate is archived and deferred. It is not
 part of the active functional baseline.

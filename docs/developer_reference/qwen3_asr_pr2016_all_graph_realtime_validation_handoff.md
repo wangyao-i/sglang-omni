@@ -24,7 +24,8 @@ PR #2016 or PR #2160, and it must not be submitted upstream as one combined PR.
 | PR #2160 | `1638c5dddb012686210f85ed3ee050fed1ac4597` | Frozen NPU encoder graph candidate |
 | Integration merge | `4afce5fb` | Records both PR histories without rewriting either one |
 | All-graph integration base | `cb0ea08c5f852de6e152945a7e71808959f81ee2` | Adds the NPU graph-only profile |
-| Validation code | `b8a37792829ef402edf7b5c83136ab5c804cf5af` | Adds the bounded Qwen3-ASR final-prefix realtime change |
+| Qwen3-ASR realtime code | `b8a37792829ef402edf7b5c83136ab5c804cf5af` | Adds the bounded Qwen3-ASR final-prefix realtime change |
+| Validation code | `6a59057eb744ccb1a03692c369a7d7b288dbe3aa` | Preserves PR #2016's stability gate on final decode |
 | SGLang runtime | `0bcd822377da7b5718e674eaf9c870d349424dd1` | Clean `v0.5.19`; no fused-op patch |
 
 Local branch:

@@ -1,6 +1,6 @@
 # Qwen3-ASR Ascend v0.5.19 all-graph handoff
 
-Status: the PR #2016-based integration code candidate is `b8a37792`;
+Status: the PR #2016-based integration code candidate is `6a59057e`;
 functional isolated-hardware revalidation is pending. Earlier runs remain
 historical evidence, not current-head qualification.
 
@@ -32,7 +32,7 @@ so the server does not need to switch branches between the two workstreams.
 | SGLang-Omni PR #2016 base | `18c8cfd2eeeb495569426875a2e2bf4114133caf` | Exact server-validation base; must be an ancestor of the observed HEAD |
 | SGLang-Omni PR #2160 candidate | `1638c5dddb012686210f85ed3ee050fed1ac4597` | Frozen encoder/prefill graph code and tests |
 | SGLang-Omni all-graph integration base | `cb0ea08c5f852de6e152945a7e71808959f81ee2` | PR #2016 + PR #2160 + NPU graph-only profile |
-| SGLang-Omni validation code candidate | `b8a37792829ef402edf7b5c83136ab5c804cf5af` | Adds the bounded Qwen3-ASR realtime final-prefix change; docs-only descendants are allowed by Gate 0 |
+| SGLang-Omni validation code candidate | `6a59057eb744ccb1a03692c369a7d7b288dbe3aa` | Adds bounded Qwen3-ASR final-prefix behavior and aligns PR #2016 final decode with its stability-gate test; docs-only descendants are allowed by Gate 0 |
 
 The Omni checkout must not contain zero-diff assumptions for the SGLang side:
 verify the imported SGLang module points at the exact clean `v0.5.19` checkout.
