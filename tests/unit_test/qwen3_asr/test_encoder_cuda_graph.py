@@ -131,8 +131,9 @@ def test_layer_stack_forwards_precomputed_attention_metadata():
     hidden_states = torch.zeros(8, 4)
     cu_seqlens = torch.tensor([0, 4, 8], dtype=torch.int32)
     attention_metadata = object()
+    runner._capture_attention_metadata = attention_metadata
 
-    output = runner._layer_stack(hidden_states, cu_seqlens, attention_metadata)
+    output = runner._layer_stack(hidden_states, cu_seqlens)
 
     assert torch.equal(output, hidden_states)
     assert seen["cu_seqlens"] is cu_seqlens

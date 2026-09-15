@@ -112,6 +112,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._max_graphs = max_graphs
         self._graph_pool: Any | None = None
         self._capture_failed = False
+        self._capture_attention_metadata: VisionAttentionMetadata | None = None
 
     @property
     def tokens_per_window(self) -> int:
@@ -136,10 +137,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 self._failed.add(bucket_size)
 
     def _layer_stack(
-        self,
-        hidden_states: torch.Tensor,
-        cu_seqlens: torch.Tensor,
-        attention_metadata: VisionAttentionMetadata | None,
+        self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor
     ) -> torch.Tensor:
         """The computation we capture: 24 layers + ln_post + proj chain."""
         tower = self._tower
@@ -151,7 +149,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 x=h,
                 cu_seqlens=cu_seqlens,
                 max_seqlen=self._max_seqlen,
-                forward_metadata=attention_metadata,
+                forward_metadata=self._capture_attention_metadata,
             )
             h = residual + h
             residual = h
@@ -218,10 +216,11 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 seq_lens=static_cu[1:] - static_cu[:-1],
                 max_seqlen=self._max_seqlen,
             )
+        self._capture_attention_metadata = attention_metadata
 
         def run_once() -> torch.Tensor:
             with torch.no_grad():
-                return self._layer_stack(static_hs, static_cu, attention_metadata)
+                return self._layer_stack(static_hs, static_cu)
 
         device_module = self._device_module
         side = device_module.Stream(device)
