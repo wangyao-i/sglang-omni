@@ -1,8 +1,10 @@
 # Qwen3-ASR Ascend v0.5.19 all-graph handoff
 
-Status: the PR #2016-based integration code candidate is `3b1fee22`;
-functional isolated-hardware revalidation is pending. Earlier runs remain
-historical evidence, not current-head qualification.
+Status: the PR #2016-based integration code candidate is `f55c3b09`;
+functional isolated-hardware revalidation is pending. Gate 0 on `c2e94971`
+stopped at a test-fixture failure before service startup; `f55c3b09` initializes
+the missing builder `gpu_id`. Earlier hardware runs remain historical evidence,
+not current-head qualification.
 
 ## Objective
 
@@ -32,7 +34,7 @@ so the server does not need to switch branches between the two workstreams.
 | SGLang-Omni PR #2016 base | `18c8cfd2eeeb495569426875a2e2bf4114133caf` | Exact server-validation base; must be an ancestor of the observed HEAD |
 | SGLang-Omni PR #2160 candidate | `302cf932fcf17ce2f1e836b44a06a6a8d9979451` | Bucket-key encoder graph code and tests; source-equivalent commits are applied to this integration branch |
 | SGLang-Omni all-graph integration base | `cb0ea08c5f852de6e152945a7e71808959f81ee2` | PR #2016 + PR #2160 + NPU graph-only profile |
-| SGLang-Omni validation code candidate | `3b1fee2269cdcee9a3a957d5a456e2477b39f05e` | Adds the validated NPU bucket-key update path after the existing Qwen3-ASR realtime and graph-only integration; docs-only descendants are allowed by Gate 0 |
+| SGLang-Omni validation code candidate | `f55c3b094419b4b8c2aba84d83c1c55c0ebaa1de` | Adds the validated NPU bucket-key update path and initializes the test builder device identity required by the full-suite Gate 0; docs-only descendants are allowed |
 
 The Omni checkout must not contain zero-diff assumptions for the SGLang side:
 verify the imported SGLang module points at the exact clean `v0.5.19` checkout.
@@ -107,6 +109,15 @@ Required positive evidence:
    host-input update failure or eager fallback?
 4. Does graceful shutdown leave no process, port, graph handle, or target-card
    HBM holder behind?
+
+## Latest First Failure
+
+On `c2e94971`, focused tests passed (`40 passed, 1 skipped`), then the full
+Qwen3-ASR suite stopped at
+`test_qwen3_asr_npu_forces_graph_only_profile`: the test helper constructed a
+builder without the `gpu_id` normally assigned by production infrastructure.
+No service or hardware workload started. `f55c3b09` fixes only that test
+fixture; the complete Gate 0 must restart on the new exact head.
 
 ## Server Task
 
