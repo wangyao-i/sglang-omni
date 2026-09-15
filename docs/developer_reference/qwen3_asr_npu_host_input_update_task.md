@@ -113,3 +113,29 @@ Return the filled result template from the handoff. Raw logs, environment dumps,
 internal paths, addresses, hostnames, and device identifiers stay on the
 server. A server-side repair is not part of this gate: if one appears necessary,
 return the failure first and wait for a new bounded task.
+
+## 4. Focused-test closure after the `fcaa07b9` mechanism result
+
+The 910C run at `fcaa07b9` exposed one repository test issue: the installed NPU
+PyTorch distribution does not provide `torch.xpu.graph`. After the local branch
+contains the test-only correction, verify that the new HEAD is a descendant of
+the hardware-tested commit and inspect the intervening paths before rerunning:
+
+```bash
+cd "$PROBE_TREE"
+git fetch origin "$PROBE_BRANCH"
+git switch --detach "origin/$PROBE_BRANCH"
+git merge-base --is-ancestor fcaa07b9b51975ece8ec65dfde0a5c6d9c61a8c4 HEAD
+git diff --name-only fcaa07b9b51975ece8ec65dfde0a5c6d9c61a8c4..HEAD
+python -m pytest -q tests/unit_test/platforms/test_device_graph.py
+python -m pytest -q tests/unit_test/qwen3_asr/test_encoder_cuda_graph.py \
+  -k "npu_replay_updates_window_boundaries_for_bucket_graph or npu_captures_share_one_graph_pool"
+git diff --check
+```
+
+Only tests and handoff/task documentation may differ from `fcaa07b9`; otherwise
+stop and require a new hardware gate. Expected on this NPU distribution is all
+available platform tests passing with exactly the unavailable XPU introspection
+test skipped, plus both focused encoder tests passing. This closure does not
+claim HBM, service, stability, concurrency, all-graph, realtime, or performance
+qualification.

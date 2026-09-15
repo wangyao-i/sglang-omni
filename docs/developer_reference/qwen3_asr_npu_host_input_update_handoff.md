@@ -2,7 +2,8 @@
 
 ## Status and decision
 
-- Status: **待 910C 执行**（诊断分支，不是 #2160 交付结论）。
+- Status: **核心机制已通过；聚焦测试兼容项待复验**（诊断分支，不是
+  #2160 交付结论）。
 - Root-cause owner: local Qwen3-ASR graph-key workstream.
 - Single causal question: on one encoder token bucket, can `NPUGraph.update()`
   replace the Ascend attention host-side cumulative window boundaries between
@@ -26,7 +27,7 @@
 | Model/data | hard constraint | repository's synthetic two-layer accelerator test only; no private audio or model weights are required |
 | Checkout | hard constraint | use a separate worktree/process; do not modify or stop the #2016 all-graph/realtime validation checkout |
 | Network/data boundary | hard constraint | no private paths, hostnames, addresses, credentials, raw logs, or input contents leave the server |
-| Remote availability | pending local action | the candidate branch has not been pushed at handoff authoring time; server must not reconstruct the patch from chat |
+| Remote availability | known | `origin/codex/qwen3-asr-npu-host-input-update-probe` was published at `fcaa07b9b51975ece8ec65dfde0a5c6d9c61a8c4` |
 
 The server agent first signs this contract by returning the actual checkout,
 HEAD, clean/dirty state, dependency HEAD, runtime, hardware, and whether the
@@ -76,6 +77,43 @@ These results prove the control-flow contract only. They do not prove that
 `torch_npu` updates all captured attention nodes or that numerical results are
 correct on 910C.
 
+## 910C result at `fcaa07b9`
+
+The server reported the following exact matrix:
+
+- SGLang-Omni `fcaa07b9b51975ece8ec65dfde0a5c6d9c61a8c4` on
+  `codex/qwen3-asr-npu-host-input-update-probe`;
+- SGLang `0bcd822377da7b5718e674eaf9c870d349424dd1`, clean;
+- `torch 2.10.0`, `torch_npu 2.10.0.post2`, CANN 9.0.1, Ascend 910C;
+- both focused encoder tests passed;
+- `test_graph_matches_eager_tower` passed in 14.47 seconds: `[500]` captured
+  the graph, `[450]` reused the same bucket entry, both stayed below the
+  predeclared `3e-2` maximum absolute error, and update/replay completed with
+  no eager fallback, capture failure, ACL error, or device error.
+
+This closes the single causal question: on this exact runtime matrix, host-side
+window boundaries can change while one bucket-keyed encoder graph is reused and
+remains aligned with eager execution.
+
+Two qualification deviations remain explicit:
+
+1. `test_device_graph.py` produced 13 passes and one failure because this NPU
+   PyTorch distribution has no `torch.xpu.graph`. The failing test combined
+   CUDA and XPU API introspection even though the XPU API is optional in that
+   distribution. The repository-owned fix splits the assertions and skips only
+   the unavailable XPU introspection; the NPU mechanism code is unchanged.
+2. The device had a concurrent workload, so the server did not perform an
+   attributable HBM observation. Synchronization completed, but this run is not
+   memory-health, stability, service, concurrency, or performance evidence.
+
+Because Gate 1 failed before Gate 2, the server execution did not follow the
+predeclared first-failure stop rule. The later mechanism result is retained as
+valid diagnostic evidence for the causal question, but the complete task is not
+recorded as an unconditional qualification pass. On a descendant containing
+only the test/documentation correction, rerun the focused contract tests from a
+fresh process. The 910C mechanism gate need not be repeated unless production
+code, dependency HEAD, runtime, or hardware changes.
+
 ## Mode audit
 
 | Mode/change | Source | Needed for this question | Last known basis | Removal/review condition |
@@ -83,7 +121,7 @@ correct on 910C.
 | Encoder layer-stack graph | #2160 | yes | exact-layout graph candidate | retain independent of this diagnostic result |
 | NPU lazy capture | #2160 | yes | avoids synthetic NPU layouts at startup | review separately; not varied here |
 | `auto_dispatch_capture` | SGLang v0.5.19 NPU runner | yes | mature host-input update path | remove if the 910C gate fails |
-| bucket-only NPU key | this diagnostic candidate | yes, sole policy change | no hardware evidence yet | promote only after gate pass; otherwise delete |
+| bucket-only NPU key | this diagnostic candidate | yes, sole policy change | passed the `fcaa07b9` 910C mechanism gate | eligible for a separate delivery change after focused-test closure and current-head review |
 | all-graph/realtime modes | separate #2016 validation line | no | separate branch and evidence | must stay disabled/outside this probe |
 
 ## Execution and stop policy
