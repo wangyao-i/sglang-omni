@@ -9,6 +9,7 @@ choice belongs on the platform rather than in a per-model branch.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any, Protocol
@@ -35,6 +36,7 @@ class DeviceGraphBackend(Protocol):
         graph: Any,
         *,
         host_input_updates: list[dict[str, Any]] | None = None,
+        device: torch.device | None = None,
     ) -> None:
         """Replay a graph, applying backend-supported host input updates first."""
         ...
@@ -70,7 +72,9 @@ class CudaDeviceGraphBackend:
         graph: Any,
         *,
         host_input_updates: list[dict[str, Any]] | None = None,
+        device: torch.device | None = None,
     ) -> None:
+        del device
         if host_input_updates is not None:
             raise ValueError("CUDA graphs do not support host input updates")
         graph.replay()
@@ -106,10 +110,36 @@ class NpuDeviceGraphBackend:
         graph: Any,
         *,
         host_input_updates: list[dict[str, Any]] | None = None,
+        device: torch.device | None = None,
     ) -> None:
-        if host_input_updates is not None:
-            graph.update(cpu_update_input=host_input_updates)
-        graph.replay()
+        if host_input_updates is None:
+            graph.replay()
+            return
+        if device is None:
+            raise ValueError("NPU host input updates require the graph device")
+
+        update_error: list[BaseException] = []
+
+        def update() -> None:
+            try:
+                # Device selection is thread-local in torch_npu.
+                torch.npu.set_device(device)
+                graph.update(cpu_update_input=host_input_updates)
+            except BaseException as exc:  # noqa: BLE001
+                update_error.append(exc)
+
+        # torch_npu pairs update and replay concurrently; completing update first
+        # can block waiting for replay to consume the new host parameters.
+        update_thread = threading.Thread(target=update)
+        update_thread.start()
+        try:
+            graph.replay()
+        finally:
+            update_thread.join()
+        if update_error:
+            raise RuntimeError("NPU graph host input update failed") from update_error[
+                0
+            ]
 
 
 class XpuDeviceGraphBackend:
@@ -143,7 +173,9 @@ class XpuDeviceGraphBackend:
         graph: Any,
         *,
         host_input_updates: list[dict[str, Any]] | None = None,
+        device: torch.device | None = None,
     ) -> None:
+        del device
         if host_input_updates is not None:
             raise ValueError("XPU graphs do not support host input updates")
         graph.replay()

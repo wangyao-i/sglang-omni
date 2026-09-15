@@ -34,7 +34,8 @@ def _npu_runner(*, max_graphs=32):
         def __init__(self):
             self.host_input_updates = []
 
-        def replay(self, graph, *, host_input_updates=None):
+        def replay(self, graph, *, host_input_updates=None, device=None):
+            assert device is runner_device
             self.host_input_updates.append(host_input_updates)
             graph.replay()
 
@@ -46,6 +47,8 @@ def _npu_runner(*, max_graphs=32):
     r._failed = set()
     r._graphs = {}
     r._capture_failed = False
+    runner_device = SimpleNamespace(type="npu", index=0)
+    r._device = runner_device
     r._graph_backend = Backend()
     return r
 

@@ -317,7 +317,11 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 entry.attention_metadata.seq_lens.copy_(
                     cu[1:] - cu[:-1], non_blocking=True
                 )
-        self._graph_backend.replay(entry.graph, host_input_updates=host_input_updates)
+        self._graph_backend.replay(
+            entry.graph,
+            host_input_updates=host_input_updates,
+            device=self._device,
+        )
         out = entry.output
         if out.dim() == 3:  # attention backends emit [1, tokens, dim]
             out = out.squeeze(0)

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import threading
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -36,7 +37,12 @@ def _recording_module(graph_attr: str) -> SimpleNamespace:
         calls.append(kwargs)
         return nullcontext()
 
-    return SimpleNamespace(calls=calls, graph=graph, **{graph_attr: _Graph})
+    return SimpleNamespace(
+        calls=calls,
+        graph=graph,
+        set_device=lambda device: None,
+        **{graph_attr: _Graph},
+    )
 
 
 def test_cuda_backend_records_into_a_cuda_graph(monkeypatch) -> None:
@@ -114,11 +120,66 @@ def test_npu_backend_enables_and_applies_host_input_updates(monkeypatch) -> None
         pass
 
     updates = [{"actual_seq_lengths": [3, 8]}]
-    backend.replay(graph, host_input_updates=updates)
+    device = SimpleNamespace(type="npu", index=3)
+    backend.replay(graph, host_input_updates=updates, device=device)
 
     assert module.calls == [{"npu_graph": graph, "auto_dispatch_capture": True}]
     assert graph.updates == [{"cpu_update_input": updates}]
     assert graph.replays == 1
+
+
+def test_npu_backend_pairs_host_update_with_replay(monkeypatch) -> None:
+    update_started = threading.Event()
+    replay_started = threading.Event()
+    devices = []
+
+    class Graph:
+        def update(self, **kwargs):
+            update_started.set()
+            assert replay_started.wait(timeout=1)
+
+        def replay(self):
+            assert update_started.wait(timeout=1)
+            replay_started.set()
+
+    monkeypatch.setattr(
+        torch,
+        "npu",
+        SimpleNamespace(set_device=devices.append),
+        raising=False,
+    )
+    device = SimpleNamespace(type="npu", index=2)
+
+    NpuDeviceGraphBackend().replay(
+        Graph(), host_input_updates=[{"value": [1]}], device=device
+    )
+
+    assert devices == [device]
+
+
+def test_npu_backend_propagates_host_update_failure(monkeypatch) -> None:
+    class Graph:
+        def update(self, **kwargs):
+            raise ValueError("bad host input")
+
+        def replay(self):
+            pass
+
+    monkeypatch.setattr(
+        torch,
+        "npu",
+        SimpleNamespace(set_device=lambda device: None),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="host input update failed") as exc_info:
+        NpuDeviceGraphBackend().replay(
+            Graph(),
+            host_input_updates=[{"value": [1]}],
+            device=SimpleNamespace(type="npu", index=0),
+        )
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
 
 
 @pytest.mark.parametrize(
