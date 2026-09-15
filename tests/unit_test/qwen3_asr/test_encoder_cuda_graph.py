@@ -30,6 +30,14 @@ def _plan_only_runner(max_batch=8, max_tokens_per_clip=780):
 
 
 def _npu_runner(*, max_graphs=32):
+    class Backend:
+        def __init__(self):
+            self.host_input_updates = []
+
+        def replay(self, graph, *, host_input_updates=None):
+            self.host_input_updates.append(host_input_updates)
+            graph.replay()
+
     r = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
     r._is_npu = True
     r._max_seqlen = 8
@@ -38,6 +46,7 @@ def _npu_runner(*, max_graphs=32):
     r._failed = set()
     r._graphs = {}
     r._capture_failed = False
+    r._graph_backend = Backend()
     return r
 
 
@@ -163,7 +172,7 @@ def test_npu_capture_materializes_sequence_boundaries_on_host():
     assert cu_seqlens.tolist() == [0, 4, 7, 8]
 
 
-def test_npu_replay_uses_the_exact_window_layout_as_graph_key():
+def test_npu_replay_updates_window_boundaries_for_bucket_graph():
     captured = []
     replayed = []
     runner = _npu_runner()
@@ -187,16 +196,39 @@ def test_npu_replay_uses_the_exact_window_layout_as_graph_key():
     assert captured == [(8, (4, 4))]
     assert replayed == [True, True]
 
-    assert runner.run(hidden_states, [2, 2]) is not None
-    assert captured == [(8, (4, 4)), (8, (2, 2, 4))]
+    assert runner.run(torch.ones(3, 2), [3]) is not None
+    assert captured == [(8, (4, 4))]
     assert len(replayed) == 3
+    assert runner._graph_backend.host_input_updates == [
+        [
+            {
+                "actual_seq_lengths": [4, 8],
+                "actual_seq_lengths_kv": [4, 8],
+            }
+        ],
+        [
+            {
+                "actual_seq_lengths": [4, 8],
+                "actual_seq_lengths_kv": [4, 8],
+            }
+        ],
+        [
+            {
+                "actual_seq_lengths": [3, 8],
+                "actual_seq_lengths_kv": [3, 8],
+            }
+        ],
+    ]
     assert runner._failed == set()
 
 
-def test_npu_graph_capacity_returns_none_for_new_layouts():
+def test_npu_graph_capacity_returns_none_for_new_buckets():
     captured = []
     runner = _npu_runner(max_graphs=1)
-    runner._plan = lambda total, windows: (8, [8 - total])
+    runner._buckets = (8, 16)
+    runner._plan = lambda total, windows: (
+        (8, [8 - total]) if total <= 4 else (16, [16 - total])
+    )
 
     def capture(bucket_size, *, window_lens=None):
         captured.append((bucket_size, window_lens))
@@ -213,7 +245,7 @@ def test_npu_graph_capacity_returns_none_for_new_layouts():
 
     assert runner.run(hidden_states, [4]) is not None
     assert runner.run(hidden_states, [4]) is not None
-    assert runner.run(hidden_states, [2, 2]) is None
+    assert runner.run(torch.ones(6, 2), [6]) is None
     assert captured == [(8, (4, 4))]
     assert len(runner._graphs) == 1
 
@@ -239,8 +271,15 @@ def test_npu_captures_share_one_graph_pool():
     pools = []
 
     class Backend:
-        def capture(self, *, pool=None, thread_local_errors=False):
+        def capture(
+            self,
+            *,
+            pool=None,
+            thread_local_errors=False,
+            allow_host_input_update=False,
+        ):
             pools.append(pool)
+            assert allow_host_input_update is True
             return nullcontext(SimpleNamespace())
 
     class DeviceModule:
@@ -402,7 +441,11 @@ def test_graph_matches_eager_tower(asr_server_args):
     # is the order a long clip followed by a short one produces, which no shared
     # graph memory may assume away.
     sequence = ([500], [450], [300, 500, 120], [800, 800, 800, 800])
-    for frame_lens in sequence:
+    check(sequence[0])
+    graph_count = len(runner._graphs)
+    check(sequence[1])
+    assert len(runner._graphs) == graph_count
+    for frame_lens in sequence[2:]:
         check(frame_lens)
     for frame_lens in reversed(sequence):
         check(frame_lens)
