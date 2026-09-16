@@ -39,8 +39,10 @@ def _recording_module(graph_attr: str) -> SimpleNamespace:
 
     return SimpleNamespace(
         calls=calls,
+        current_stream=lambda device=None: ("current_stream", device),
         graph=graph,
         set_device=lambda device: None,
+        stream=lambda stream: nullcontext(),
         **{graph_attr: _Graph},
     )
 
@@ -131,10 +133,26 @@ def test_npu_backend_enables_and_applies_host_input_updates(monkeypatch) -> None
 def test_npu_backend_pairs_host_update_with_replay(monkeypatch) -> None:
     update_started = threading.Event()
     replay_started = threading.Event()
+    helper_stream = threading.local()
+    private_stream = object()
+    current_stream_calls = []
+    entered_streams = []
     devices = []
+
+    class StreamContext:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            entered_streams.append((self.stream, threading.get_ident()))
+            helper_stream.current = self.stream
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            del helper_stream.current
 
     class Graph:
         def update(self, **kwargs):
+            assert helper_stream.current is private_stream
             update_started.set()
             assert replay_started.wait(timeout=1)
 
@@ -145,16 +163,27 @@ def test_npu_backend_pairs_host_update_with_replay(monkeypatch) -> None:
     monkeypatch.setattr(
         torch,
         "npu",
-        SimpleNamespace(set_device=devices.append),
+        SimpleNamespace(
+            current_stream=lambda device: (
+                current_stream_calls.append((device, threading.get_ident()))
+                or private_stream
+            ),
+            set_device=devices.append,
+            stream=StreamContext,
+        ),
         raising=False,
     )
     device = SimpleNamespace(type="npu", index=2)
+    caller_thread = threading.get_ident()
 
     NpuDeviceGraphBackend().replay(
         Graph(), host_input_updates=[{"value": [1]}], device=device
     )
 
     assert devices == [device]
+    assert current_stream_calls == [(device, caller_thread)]
+    assert entered_streams[0][0] is private_stream
+    assert entered_streams[0][1] != caller_thread
 
 
 def test_npu_backend_propagates_host_update_failure(monkeypatch) -> None:
@@ -168,7 +197,11 @@ def test_npu_backend_propagates_host_update_failure(monkeypatch) -> None:
     monkeypatch.setattr(
         torch,
         "npu",
-        SimpleNamespace(set_device=lambda device: None),
+        SimpleNamespace(
+            current_stream=lambda device: object(),
+            set_device=lambda device: None,
+            stream=lambda stream: nullcontext(),
+        ),
         raising=False,
     )
 

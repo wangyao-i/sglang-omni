@@ -119,12 +119,14 @@ class NpuDeviceGraphBackend:
             raise ValueError("NPU host input updates require the graph device")
 
         update_error: list[BaseException] = []
+        update_stream = torch.npu.current_stream(device)
 
         def update() -> None:
             try:
-                # Device selection is thread-local in torch_npu.
+                # Device and current stream are thread-local in torch_npu.
                 torch.npu.set_device(device)
-                graph.update(cpu_update_input=host_input_updates)
+                with torch.npu.stream(update_stream):
+                    graph.update(cpu_update_input=host_input_updates)
             except BaseException as exc:  # noqa: BLE001
                 update_error.append(exc)
 
