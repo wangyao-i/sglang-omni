@@ -95,6 +95,20 @@ class NpuDeviceGraphBackend:
         graph.replay()
 
 
+def get_npu_graph_update_stream() -> Any:
+    """Return torch_npu's process-wide NPUGraph update stream.
+
+    NPUGraph.update() records into one class-level stream shared by every
+    decoder graph in the process. A model-owned updatable graph must join that
+    same stream instead of creating a second graph-task update owner.
+    """
+    from torch_npu.npu.graphs import _GraphDispatchMode
+
+    if _GraphDispatchMode.update_stream is None:
+        _GraphDispatchMode()
+    return _GraphDispatchMode.update_stream
+
+
 class XpuDeviceGraphBackend:
     """Intel XPU."""
 
@@ -129,5 +143,6 @@ __all__ = [
     "CudaDeviceGraphBackend",
     "DeviceGraphBackend",
     "NpuDeviceGraphBackend",
+    "get_npu_graph_update_stream",
     "XpuDeviceGraphBackend",
 ]

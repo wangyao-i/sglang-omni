@@ -21,6 +21,7 @@ import torch
 from sglang.srt.layers.attention.vision import VisionAttentionMetadata
 
 from sglang_omni.platforms import current_platform
+from sglang_omni.platforms.device_graph import get_npu_graph_update_stream
 
 if TYPE_CHECKING:
     from sglang_omni.platforms.device_graph import DeviceGraphBackend
@@ -232,7 +233,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._graph_pool: Any | None = None
         self._capture_failed = False
         self._npu_update_stream = (
-            self._device_module.Stream(self._device) if self._is_npu else None
+            get_npu_graph_update_stream() if self._is_npu else None
         )
 
     @property
