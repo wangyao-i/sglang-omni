@@ -3,8 +3,9 @@
 Status: the PR #2016-based integration code candidate is `f55c3b09`. Gate 0
 passes, but the cold concurrency-8 gate on handoff `773ad0aa` hung after 16 of
 140 requests in the SGLang decoder graph update thread. All-graph qualification
-is blocked while the ordered-update diagnostic task is pending. Earlier
-hardware runs remain historical evidence, not current-head qualification.
+is blocked while an Omni-owned encoder-update ordering diagnostic is pending.
+Earlier hardware runs remain historical evidence, not current-head
+qualification.
 
 ## Objective
 
@@ -31,11 +32,11 @@ so the server does not need to switch branches between the two workstreams.
 | Repository | Exact runtime head | Required state |
 |---|---|---|
 | SGLang | `0bcd822377da7b5718e674eaf9c870d349424dd1` (`v0.5.19`) | Clean; no fused-op patch |
-| SGLang ordered-update diagnostic | `4d819e5aa265e5548a63bdd9bb6ec35b10396950` | One diagnostic change on `v0.5.19`: decoder graph update and replay use the model execution thread |
 | SGLang-Omni PR #2016 base | `18c8cfd2eeeb495569426875a2e2bf4114133caf` | Exact server-validation base; must be an ancestor of the observed HEAD |
 | SGLang-Omni PR #2160 candidate | `302cf932fcf17ce2f1e836b44a06a6a8d9979451` | Bucket-key encoder graph code and tests; source-equivalent commits are applied to this integration branch |
 | SGLang-Omni all-graph integration base | `cb0ea08c5f852de6e152945a7e71808959f81ee2` | PR #2016 + PR #2160 + NPU graph-only profile |
 | SGLang-Omni validation code candidate | `f55c3b094419b4b8c2aba84d83c1c55c0ebaa1de` | Adds the validated NPU bucket-key update path and initializes the test builder device identity required by the full-suite Gate 0; docs-only descendants are allowed |
+| SGLang-Omni encoder-update diagnostic | `b00a8b8b884981fd42d0326073291339ab5c8821` | Diagnostic-only descendant: keeps NPU encoder host-input update and replay on the encoder worker instead of creating a second update helper thread |
 
 The Omni checkout must not contain zero-diff assumptions for the SGLang side:
 verify the imported SGLang module points at the exact clean `v0.5.19` checkout.
@@ -124,8 +125,11 @@ another experiment.
 This failure resembles historical `910C-065`, but the current stack adds a
 captured NPU encoder graph that did not exist in the later private-stream
 shipping candidate. Therefore “three submitters” remains a hypothesis for the
-current head. The next task changes only decoder update ordering and uses a
-bounded 32-request liveness probe; it does not drop a graph path or add a guard.
+current head. The blocked frame is in SGLang, but the new variable and the
+second update helper belong to the Omni encoder graph. The next task therefore
+keeps pristine SGLang `v0.5.19`, orders only the Omni encoder update/replay, and
+uses a bounded 32-request liveness probe. It does not drop a graph path or add a
+guard.
 
 ## Server Task
 
@@ -138,7 +142,7 @@ HBM trend analysis, or a performance measurement. Those belong to a separate
 deferred task after functionality is reviewable.
 
 Before retrying that qualification task, run
-[`qwen3_asr_ascend_ordered_update_probe_task.md`](qwen3_asr_ascend_ordered_update_probe_task.md).
+[`qwen3_asr_ascend_encoder_update_order_probe_task.md`](qwen3_asr_ascend_encoder_update_order_probe_task.md).
 
 ## Required Return
 
