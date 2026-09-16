@@ -128,19 +128,19 @@ def test_npu_backend_enables_and_applies_host_input_updates(monkeypatch) -> None
     assert graph.replays == 1
 
 
-def test_npu_backend_pairs_host_update_with_replay(monkeypatch) -> None:
-    update_started = threading.Event()
-    replay_started = threading.Event()
+def test_npu_backend_orders_host_update_before_replay_on_calling_thread(
+    monkeypatch,
+) -> None:
+    caller_thread = threading.get_ident()
+    calls = []
     devices = []
 
     class Graph:
         def update(self, **kwargs):
-            update_started.set()
-            assert replay_started.wait(timeout=1)
+            calls.append(("update", threading.get_ident(), kwargs))
 
         def replay(self):
-            assert update_started.wait(timeout=1)
-            replay_started.set()
+            calls.append(("replay", threading.get_ident()))
 
     monkeypatch.setattr(
         torch,
@@ -150,11 +150,14 @@ def test_npu_backend_pairs_host_update_with_replay(monkeypatch) -> None:
     )
     device = SimpleNamespace(type="npu", index=2)
 
-    NpuDeviceGraphBackend().replay(
-        Graph(), host_input_updates=[{"value": [1]}], device=device
-    )
+    updates = [{"value": [1]}]
+    NpuDeviceGraphBackend().replay(Graph(), host_input_updates=updates, device=device)
 
     assert devices == [device]
+    assert calls == [
+        ("update", caller_thread, {"cpu_update_input": updates}),
+        ("replay", caller_thread),
+    ]
 
 
 def test_npu_backend_propagates_host_update_failure(monkeypatch) -> None:

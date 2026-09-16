@@ -9,7 +9,6 @@ choice belongs on the platform rather than in a per-model branch.
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any, Protocol
@@ -118,28 +117,14 @@ class NpuDeviceGraphBackend:
         if device is None:
             raise ValueError("NPU host input updates require the graph device")
 
-        update_error: list[BaseException] = []
-
-        def update() -> None:
-            try:
-                # Device selection is thread-local in torch_npu.
-                torch.npu.set_device(device)
-                graph.update(cpu_update_input=host_input_updates)
-            except BaseException as exc:  # noqa: BLE001
-                update_error.append(exc)
-
-        # torch_npu pairs update and replay concurrently; completing update first
-        # can block waiting for replay to consume the new host parameters.
-        update_thread = threading.Thread(target=update)
-        update_thread.start()
         try:
-            graph.replay()
-        finally:
-            update_thread.join()
-        if update_error:
-            raise RuntimeError("NPU graph host input update failed") from update_error[
-                0
-            ]
+            # Keep host-input rebinding on the encoder worker's device and stream
+            # context instead of introducing another NPU submission thread.
+            torch.npu.set_device(device)
+            graph.update(cpu_update_input=host_input_updates)
+        except BaseException as exc:
+            raise RuntimeError("NPU graph host input update failed") from exc
+        graph.replay()
 
 
 class XpuDeviceGraphBackend:
