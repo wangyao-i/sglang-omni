@@ -138,6 +138,20 @@ context holder, and HBM at the idle baseline. Do not continue into the
   investigate overlapping encoder graph work and the CANN graph-task queue
   without changing SGLang.
 
+## Result
+
+Failed. The service completed 24 of 32 requests; eight were missing/timeouts.
+Encoder, prefill, and decode graph paths were all observed, but the encoder
+batch path raised `NPU graph host input update failed`. Its chained cause was
+`graph_task_update_begin` in `NPUGraph.cpp:65`:
+`AclmdlRICaptureTaskUpdateBegin(stream, handle.task_group)` returned error
+`107033`. This is the task's declared "encoder update blocks or fails before
+replay" outcome, not a partial pass. The result rejects same-thread ordered
+encoder update for this runtime path; it does not prove that the original
+helper inherited the correct private stream, nor that concurrent graph
+submitters are unrelated. No symbolic interpretation is assigned to `107033`
+without vendor evidence.
+
 ## Return contract
 
 ```text

@@ -5,7 +5,10 @@ passes, but the cold concurrency-8 gate on handoff `773ad0aa` hung after 16 of
 140 requests in the SGLang decoder graph update thread. All-graph qualification
 is blocked while an Omni-owned encoder-update ordering diagnostic is pending.
 Earlier hardware runs remain historical evidence, not current-head
-qualification.
+qualification. The first Omni-owned ordered encoder-update probe failed: 24 of
+32 requests completed and eight were missing/timeouts after the encoder
+`NPUGraph.update()` path raised CANN error `107033` from
+`AclmdlRICaptureTaskUpdateBegin`.
 
 ## Objective
 
@@ -130,6 +133,16 @@ second update helper belong to the Omni encoder graph. The next task therefore
 keeps pristine SGLang `v0.5.19`, orders only the Omni encoder update/replay, and
 uses a bounded 32-request liveness probe. It does not drop a graph path or add a
 guard.
+
+The ordered encoder-update probe at `8605c0d5` did not pass its frozen gate.
+Although encoder, prefill, and decode graphs were all observed and 24 requests
+completed, eight requests did not complete and the encoder batch path raised
+`NPU graph host input update failed`. The cause chained to
+`graph_task_update_begin` in `NPUGraph.cpp:65`, where
+`AclmdlRICaptureTaskUpdateBegin(stream, handle.task_group)` returned `107033`.
+This rejects same-thread encoder `update -> replay` for this runtime path. It
+does not show that encoder/decoder concurrency is irrelevant, and the numeric
+error is not assigned a symbolic meaning without vendor evidence.
 
 ## Server Task
 
