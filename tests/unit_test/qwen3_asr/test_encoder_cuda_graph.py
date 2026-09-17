@@ -41,6 +41,9 @@ def _npu_runner():
             graph.replay()
 
     class DeviceModule:
+        def current_stream(self):
+            return "encoder-compute"
+
         def stream(self, stream):
             return nullcontext()
 
@@ -54,7 +57,7 @@ def _npu_runner():
     r._device = runner_device
     r._graph_backend = Backend()
     r._device_module = DeviceModule()
-    r._npu_update_stream = object()
+    r._npu_update_stream = SimpleNamespace(wait_stream=lambda stream: None)
     return r
 
 
@@ -164,6 +167,9 @@ def test_npu_replay_updates_window_boundaries_for_bucket_graph():
     operations = []
     runner = _npu_runner()
     runner._plan = lambda total, windows: (8, [8 - total])
+    runner._npu_update_stream.wait_stream = lambda stream: operations.append(
+        ("wait", stream)
+    )
 
     def capture(bucket_size, *, window_lens=None):
         captured.append((bucket_size, window_lens))
@@ -193,10 +199,13 @@ def test_npu_replay_updates_window_boundaries_for_bucket_graph():
     assert runner.run(torch.ones(3, 2), [3]) is not None
     assert captured == [(8, (4, 4))]
     assert operations == [
+        ("wait", "encoder-compute"),
         ("replay", 8),
         ("update", [4, 8]),
+        ("wait", "encoder-compute"),
         ("replay", 8),
         ("update", [4, 8]),
+        ("wait", "encoder-compute"),
         ("replay", 8),
         ("update", [3, 8]),
     ]
