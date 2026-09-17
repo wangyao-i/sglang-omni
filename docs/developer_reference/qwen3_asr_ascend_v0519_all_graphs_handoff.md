@@ -117,6 +117,10 @@ Required positive evidence:
 
 Use
 [`qwen3_asr_ascend_v0519_all_graphs_task.md`](qwen3_asr_ascend_v0519_all_graphs_task.md).
+For the decoder ordered-update diagnosis, first follow
+[`qwen3_asr_decoder_ordered_update_validation_task.md`](qwen3_asr_decoder_ordered_update_validation_task.md),
+which preserves this task's service, correctness, graph-evidence, and cleanup
+contract while changing only the SGLang diagnostic candidate.
 The current task is a bounded functional sequence: one fresh-process cold
 concurrency-8 run over 140 requests, with liveness and correctness assertions,
 followed by shutdown cleanup. Do not add repeat counts, a steady-state soak,
