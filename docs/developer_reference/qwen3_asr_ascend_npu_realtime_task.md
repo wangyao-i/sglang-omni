@@ -9,7 +9,7 @@ export SGLANG_REPO=/server/local/sglang
 export OMNI_REPO=/server/local/sglang-omni
 export EXPECTED_SGLANG_HEAD=0bcd822377da7b5718e674eaf9c870d349424dd1
 export EXPECTED_OMNI_BASE_HEAD=18c8cfd2eeeb495569426875a2e2bf4114133caf
-export EXPECTED_OMNI_CODE_HEAD=3b1fee2269cdcee9a3a957d5a456e2477b39f05e
+export EXPECTED_OMNI_CODE_HEAD=63bc33e05de798d754e9953ebfcee9abd08a11ca
 export MODEL_PATH=/server/local/Qwen3-ASR-1.7B
 export ASCEND_RT_VISIBLE_DEVICES=14
 export PORT=8000
@@ -88,6 +88,7 @@ sgl-omni config resolve \
   --asr.engine.max_running_requests 64 \
   --asr.engine.cuda_graph_max_bs 64 \
   --asr.factory.enable_encoder_cuda_graph true \
+  --asr.factory.enable_pre_lm_encoder false \
   >"${EVIDENCE}/resolved-config.yaml"
 ```
 
@@ -112,6 +113,7 @@ sgl-omni serve \
   --asr.engine.max_running_requests 64 \
   --asr.engine.cuda_graph_max_bs 64 \
   --asr.factory.enable_encoder_cuda_graph true \
+  --asr.factory.enable_pre_lm_encoder false \
   >"${EVIDENCE}/server.log" 2>&1 &
 SERVER_PID=$!
 ```
@@ -164,10 +166,11 @@ Record corpus WER but do not use it as a performance threshold.
 Scan the server log and require:
 
 - the prerequisite all-graph gate has proved encoder bucket replay; this run
-  has at least one encoder capture and zero fallback or update failure;
+  has at least one encoder capture and zero capture, host-input update, or replay
+  failure;
 - positive prefill capture and replay evidence;
 - positive decode replay evidence;
-- zero encoder fallback or host-input update failure for this bounded workload;
+- zero encoder host-input update or replay failure for this bounded workload;
 - zero Torch Compile markers;
 - zero ACL, ATB, allocator, stream, device, graph-capture, or
   `PagedAttentionOperation` errors.
@@ -187,7 +190,7 @@ Stop at the first:
 - service start or graph-capture failure;
 - protocol-violation event or missing terminal event;
 - empty or garbled transcript;
-- encoder graph capacity fallback;
+- encoder capture, host-input update, or replay failure;
 - forbidden compile, ACL, ATB, allocator, stream, device, OOM, or
   `PagedAttentionOperation` marker;
 - timeout, hang, or cleanup failure.
@@ -216,7 +219,7 @@ Focused test result:
 Qwen3-ASR unit suite result:
 Manual mode: completed / failed / violations / empty / max per-sample WER:
 Server VAD mode: completed / failed / violations / empty / max per-sample WER:
-Encoder graph capture / replay / fallback:
+Encoder graph capture / update / replay / failure:
 Prefill graph capture / replay / eager:
 Decode graph replay / eager:
 Shutdown and cleanup state:

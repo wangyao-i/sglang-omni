@@ -12,7 +12,7 @@ export SGLANG_REPO=/server/local/sglang
 export OMNI_REPO=/server/local/sglang-omni
 export EXPECTED_SGLANG_HEAD=0bcd822377da7b5718e674eaf9c870d349424dd1
 export EXPECTED_OMNI_BASE_HEAD=18c8cfd2eeeb495569426875a2e2bf4114133caf
-export EXPECTED_OMNI_CODE_HEAD=3b1fee2269cdcee9a3a957d5a456e2477b39f05e
+export EXPECTED_OMNI_CODE_HEAD=63bc33e05de798d754e9953ebfcee9abd08a11ca
 export EXPECTED_PR2160_SOURCE_HEAD=302cf932fcf17ce2f1e836b44a06a6a8d9979451
 export MODEL_PATH=/server/local/Qwen3-ASR-1.7B
 export ASCEND_RT_VISIBLE_DEVICES=14
@@ -127,6 +127,7 @@ sgl-omni config resolve \
   --asr.engine.max_running_requests 64 \
   --asr.engine.cuda_graph_max_bs 64 \
   --asr.factory.enable_encoder_cuda_graph true \
+  --asr.factory.enable_pre_lm_encoder false \
   >"${EVIDENCE}/resolved-config.yaml"
 ```
 
@@ -136,7 +137,8 @@ Require the resolved configuration to show:
 - prefill backend `breakable`;
 - decode backend `full`;
 - `disable_cuda_graph: false`;
-- encoder graph enabled.
+- encoder graph enabled;
+- pre-LM encoder worker disabled.
 
 ## Gate 1: Functional Cold Concurrency-8 Run
 
@@ -156,6 +158,7 @@ sgl-omni serve \
   --asr.engine.cuda_graph_max_bs 64 \
   --asr.engine.decode_log_interval 1 \
   --asr.factory.enable_encoder_cuda_graph true \
+  --asr.factory.enable_pre_lm_encoder false \
   >"${EVIDENCE}/server.log" 2>&1 &
 SERVER_PID=$!
 ```
@@ -184,8 +187,8 @@ Require:
 - no ACL, allocator, stream, device, ATB, or `PagedAttentionOperation` error;
 - no Torch Compile marker;
 - the focused mechanism test proves encoder replay across two layouts in one
-  bucket; the service has at least one encoder capture and zero encoder graph
-  fallback or host-input update failure markers;
+  bucket; the service has at least one encoder capture and zero encoder capture,
+  host-input update, or replay failure markers;
 - prefill and decode graph paths have positive capture/replay evidence.
 
 Stop at the first failure.
@@ -207,7 +210,7 @@ Stop at the first occurrence of:
 - startup or graph-capture failure;
 - `PagedAttentionOperation`, ATB, ACL, allocator, stream, device, or OOM error;
 - timeout, hang, missing or duplicate request result, or empty transcript;
-- any `encoder graph eager fallback reason=` line;
+- any encoder graph capture, host-input update, or replay failure line;
 - garbled-output or request-accounting failure;
 - a Torch Compile marker;
 - cleanup failure.
@@ -237,7 +240,7 @@ Focused test result:
 Full Qwen3-ASR test result:
 Gate 1 evaluated / total / skipped / failures / timeouts:
 Gate 1 wall clock:
-Gate 1 encoder capture/fallback/update-error markers and focused replay result:
+Gate 1 encoder capture/update/replay-error markers and focused replay result:
 Gate 1 prefill capture/replay/eager markers:
 Gate 1 decode capture/replay/eager markers:
 Shutdown and cleanup state:

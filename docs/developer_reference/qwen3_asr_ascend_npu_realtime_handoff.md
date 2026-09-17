@@ -10,7 +10,7 @@ used by the offline Qwen3-ASR path:
 
 - SGLang `v0.5.19`;
 - SGLang-Omni PR #2016 base `18c8cfd2` plus the integration code candidate
-  `3b1fee22`;
+  `63bc33e0`;
 - encoder graph, breakable prefill graph, and full decode graph enabled;
 - `enable_torch_compile=false`;
 - `/v1/realtime?intent=transcription` with manual commit and server VAD;
@@ -26,7 +26,7 @@ This workstream does not add a second realtime implementation for NPU.
 | SGLang-Omni PR #2016 base | `18c8cfd2eeeb495569426875a2e2bf4114133caf` | Exact branch currently used by the server; contains the realtime work under review and merged #2084 |
 | SGLang-Omni PR #2160 | `302cf932fcf17ce2f1e836b44a06a6a8d9979451` | Validated bucket-key code candidate |
 | SGLang-Omni all-graph integration base | `cb0ea08c5f852de6e152945a7e71808959f81ee2` | PR #2016 + PR #2160 + NPU graph-only profile |
-| SGLang-Omni validation code candidate | `3b1fee2269cdcee9a3a957d5a456e2477b39f05e` | Adds the validated NPU bucket-key update path after the Qwen3-ASR final-prefix and stability-gate changes; docs-only descendants are allowed |
+| SGLang-Omni validation code candidate | `63bc33e05de798d754e9953ebfcee9abd08a11ca` | Serializes NPU encoder graph update+replay on the model execution thread and disables the NPU pre-LM worker; docs-only descendants are allowed |
 
 The validation branch is based on PR #2016 and uses the same integrated code
 head as all-graph qualification. The first bounded Qwen3-ASR realtime change

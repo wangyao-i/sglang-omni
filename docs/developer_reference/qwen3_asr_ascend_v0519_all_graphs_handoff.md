@@ -1,6 +1,6 @@
 # Qwen3-ASR Ascend v0.5.19 all-graph handoff
 
-Status: the PR #2016-based integration code candidate is `3b1fee22`;
+Status: the PR #2016-based integration code candidate is `63bc33e0`;
 functional isolated-hardware revalidation is pending. Earlier runs remain
 historical evidence, not current-head qualification.
 
@@ -32,7 +32,7 @@ so the server does not need to switch branches between the two workstreams.
 | SGLang-Omni PR #2016 base | `18c8cfd2eeeb495569426875a2e2bf4114133caf` | Exact server-validation base; must be an ancestor of the observed HEAD |
 | SGLang-Omni PR #2160 candidate | `302cf932fcf17ce2f1e836b44a06a6a8d9979451` | Bucket-key encoder graph code and tests; source-equivalent commits are applied to this integration branch |
 | SGLang-Omni all-graph integration base | `cb0ea08c5f852de6e152945a7e71808959f81ee2` | PR #2016 + PR #2160 + NPU graph-only profile |
-| SGLang-Omni validation code candidate | `3b1fee2269cdcee9a3a957d5a456e2477b39f05e` | Adds the validated NPU bucket-key update path after the existing Qwen3-ASR realtime and graph-only integration; docs-only descendants are allowed by Gate 0 |
+| SGLang-Omni validation code candidate | `63bc33e05de798d754e9953ebfcee9abd08a11ca` | Serializes NPU encoder graph update+replay on the model execution thread and disables the NPU pre-LM worker; docs-only descendants are allowed by Gate 0 |
 
 The Omni checkout must not contain zero-diff assumptions for the SGLang side:
 verify the imported SGLang module points at the exact clean `v0.5.19` checkout.
@@ -48,8 +48,13 @@ graph runner for NPU:
 - Cumulative window boundaries remain host-resident on NPU.
 - Capture enables torch_npu host-input dispatch. Before replay,
   `actual_seq_lengths` and `actual_seq_lengths_kv` are updated through
-  `NPUGraph.update()` using the backend-required concurrent update/replay
-  sequence.
+  `NPUGraph.update()` and the graph is replayed on the same caller thread. The
+  backend must not create a background update thread or a second host
+  submitter.
+- When encoder graphs are enabled on NPU, the engine builder disables the
+  pre-LM encoder worker so encoder `update + replay` remains on the model
+  execution thread. This intentionally trades the worker's overlap and
+  embedding-cache path for graph-call ordering.
 - Different real window layouts in one token bucket reuse the same graph. The
   graph registry is bounded by the finite configured token buckets, so the old
   request-layout key, global 32-graph policy, and capacity fallback are removed.
@@ -88,23 +93,23 @@ Required positive evidence:
 
 - startup contains the NPU encoder capture deferral marker;
 - the focused mechanism test proves two layouts replay one encoder bucket graph;
-- the service logs at least one encoder capture and zero encoder fallback or
-  host-input update failures;
+- the service logs at least one encoder capture and zero encoder capture,
+  host-input update, or replay failures;
 - prefill startup capture and positive replay count;
 - positive decode graph replay;
-- zero encoder graph fallback log lines;
 - zero forbidden ACL, ATB, PagedAttention, allocator, stream, device, or capture
   failures.
 
 ## Open Questions
 
 1. Does current `v0.5.19` still capture the breakable prefill graph on NPU with
-   the encoder private stream active?
+   encoder graphs enabled and the pre-LM worker disabled?
 2. Does the first real NPU encoder signature capture without `aclrtMemcpy`
    `107030` or another captured-stream synchronization failure?
 3. Does the 140-request functional-correctness workload keep all three graph
    paths active while request layouts reuse the finite bucket registry without
-   host-input update failure or eager fallback?
+   host-input update or replay failure, now that update and replay use one
+   caller thread?
 4. Does graceful shutdown leave no process, port, graph handle, or target-card
    HBM holder behind?
 

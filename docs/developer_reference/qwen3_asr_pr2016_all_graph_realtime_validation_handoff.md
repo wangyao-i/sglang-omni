@@ -25,7 +25,7 @@ PR #2016 or PR #2160, and it must not be submitted upstream as one combined PR.
 | Integration merge | `4afce5fb` | Records both PR histories without rewriting either one |
 | All-graph integration base | `cb0ea08c5f852de6e152945a7e71808959f81ee2` | Adds the NPU graph-only profile |
 | Qwen3-ASR realtime code | `b8a37792829ef402edf7b5c83136ab5c804cf5af` | Adds the bounded Qwen3-ASR final-prefix realtime change |
-| Validation code | `3b1fee2269cdcee9a3a957d5a456e2477b39f05e` | Applies the validated NPU bucket-key update path after the PR #2016 graph-only and realtime integration |
+| Validation code | `63bc33e05de798d754e9953ebfcee9abd08a11ca` | Serializes NPU encoder graph update+replay on the model execution thread and disables the NPU pre-LM worker |
 | SGLang runtime | `0bcd822377da7b5718e674eaf9c870d349424dd1` | Clean `v0.5.19`; no fused-op patch |
 
 Local branch:
