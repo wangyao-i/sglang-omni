@@ -8,8 +8,10 @@ import torch
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 
 from sglang_omni.models.qwen3_asr import sglang_model
+from sglang_omni.models.qwen3_asr.audio_lengths import qwen3_asr_num_audio_tokens
 from sglang_omni.models.qwen3_asr.encoder_cuda_graph import (
     Qwen3ASREncoderLayerStackGraphRunner,
+    _build_eager_chunk_plan,
     _NpuGraphCaptureState,
     _NpuGraphUpdateTask,
     _NpuUpdatableAttentionBackend,
@@ -22,6 +24,27 @@ from sglang_omni.platforms import current_platform
 def test_build_buckets_rejects_bad_limits():
     with pytest.raises(ValueError):
         build_buckets(0, 780)
+
+
+@pytest.mark.parametrize(
+    "feature_lengths,expected_chunks",
+    [
+        ([100], [100]),
+        ([101], [100, 1]),
+        ([200, 50], [100, 100, 50]),
+        ([500, 450, 120], [100] * 9 + [50, 100, 20]),
+    ],
+)
+def test_build_eager_chunk_plan(feature_lengths, expected_chunks):
+    chunks, after_cnn = _build_eager_chunk_plan(feature_lengths, 100)
+    assert chunks == expected_chunks
+    assert after_cnn == [qwen3_asr_num_audio_tokens(chunk) for chunk in chunks]
+
+
+@pytest.mark.parametrize("feature_lengths", [[], [0], [100, 0], [-1]])
+def test_build_eager_chunk_plan_rejects_non_positive_lengths(feature_lengths):
+    with pytest.raises(ValueError, match="must all be positive"):
+        _build_eager_chunk_plan(feature_lengths, 100)
 
 
 def _plan_only_runner(max_batch=8, max_tokens_per_clip=780):

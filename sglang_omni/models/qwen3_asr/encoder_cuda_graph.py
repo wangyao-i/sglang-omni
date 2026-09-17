@@ -695,6 +695,30 @@ def _get_feat_extract_output_lengths_int(frames: int) -> int:
     return int(qwen3_asr_num_audio_tokens(frames))
 
 
+def _build_eager_chunk_plan(
+    feature_lengths: list[int], chunk_width: int
+) -> tuple[list[int], list[int]]:
+    """Build the convolution chunk plan without device-side indexed writes."""
+    if chunk_width <= 0:
+        raise ValueError(f"chunk_width must be positive, got {chunk_width}")
+    if not feature_lengths or any(length <= 0 for length in feature_lengths):
+        raise ValueError(
+            f"Qwen3-ASR feature lengths must all be positive, got {feature_lengths}"
+        )
+
+    chunk_lengths: list[int] = []
+    after_cnn_lengths: list[int] = []
+    for length in feature_lengths:
+        chunk_count = (length + chunk_width - 1) // chunk_width
+        tail = length % chunk_width or chunk_width
+        chunks = [chunk_width] * (chunk_count - 1) + [tail]
+        chunk_lengths.extend(chunks)
+        after_cnn_lengths.extend(
+            _get_feat_extract_output_lengths_int(chunk) for chunk in chunks
+        )
+    return chunk_lengths, after_cnn_lengths
+
+
 def eager_preamble(
     tower: Any, input_features: torch.Tensor, feature_lens: torch.Tensor
 ) -> torch.Tensor:
@@ -702,26 +726,21 @@ def eager_preamble(
     import torch.nn.functional as F
 
     chunk_width = tower.n_window * 2
-    chunk_num = torch.ceil(feature_lens / chunk_width).long()
-    chunk_lengths = torch.tensor(
-        [chunk_width] * chunk_num.sum(),
-        dtype=torch.long,
-        device=feature_lens.device,
+    feature_lengths = [int(length) for length in feature_lens.detach().cpu().tolist()]
+    chunk_lengths, after_cnn_lengths = _build_eager_chunk_plan(
+        feature_lengths, chunk_width
     )
-    tail_chunk_index = F.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
-    chunk_lengths[tail_chunk_index] = feature_lens % chunk_width
-    chunk_lengths[chunk_lengths == 0] = chunk_width
 
-    chunk_list = input_features.T.split(chunk_lengths.tolist(), dim=0)
+    chunk_list = input_features.T.split(chunk_lengths, dim=0)
     padded_feature = torch.nn.utils.rnn.pad_sequence(
         chunk_list, batch_first=True
     ).transpose(1, 2)
 
-    feature_lens_after_cnn = _get_feat_extract_output_lengths_tensor(chunk_lengths)
-    max_len_after_cnn = (
-        int(feature_lens_after_cnn.max().item())
-        if feature_lens_after_cnn.numel()
-        else 0
+    max_len_after_cnn = max(after_cnn_lengths)
+    feature_lens_after_cnn = torch.tensor(
+        after_cnn_lengths,
+        dtype=torch.long,
+        device=padded_feature.device,
     )
     idx = torch.arange(max_len_after_cnn, device=padded_feature.device)
     padded_mask_after_cnn = idx.unsqueeze(0) < feature_lens_after_cnn.unsqueeze(1)
@@ -751,14 +770,6 @@ def eager_preamble(
     )
     padded_embed = padded_embed + positional_embedding
     return padded_embed[padded_mask_after_cnn]
-
-
-def _get_feat_extract_output_lengths_tensor(
-    input_lengths: torch.Tensor,
-) -> torch.Tensor:
-    leave = input_lengths % 100
-    feat = (leave - 1) // 2 + 1
-    return ((feat - 1) // 2 + 1 - 1) // 2 + 1 + (input_lengths // 100) * 13
 
 
 def window_lens_from_token_counts(
