@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import torch
+from sglang.srt.hardware_backend.npu.graph_runner.npu_graph_trace import (
+    dump_graph_trace,
+    trace_graph_event,
+)
 from sglang.srt.layers.attention.vision import VisionAttentionMetadata
 
 from sglang_omni.platforms import current_platform
@@ -83,14 +87,85 @@ class _NpuGraphUpdateTask:
         update_stream: Any,
         cumulative_window_lens: list[int],
     ) -> None:
-        device_module.graph_task_update_begin(update_stream, self.handle)
-        self.operation(
-            **self.kwargs,
-            actual_seq_lengths=cumulative_window_lens,
-            actual_seq_lengths_kv=cumulative_window_lens,
+        trace_graph_event(
+            "encoder_update_task_enter",
+            task=self,
+            handle=self.handle,
+            event_object=self.event,
+            update_stream=update_stream,
+            window_count=len(cumulative_window_lens),
         )
-        device_module.graph_task_update_end(update_stream)
-        self.event.record(update_stream)
+        try:
+            trace_graph_event(
+                "encoder_update_begin_enter",
+                task=self,
+                handle=self.handle,
+                update_stream=update_stream,
+            )
+            device_module.graph_task_update_begin(update_stream, self.handle)
+            trace_graph_event(
+                "encoder_update_begin_return",
+                task=self,
+                handle=self.handle,
+                update_stream=update_stream,
+            )
+            trace_graph_event(
+                "encoder_update_operation_enter",
+                task=self,
+                handle=self.handle,
+                update_stream=update_stream,
+            )
+            self.operation(
+                **self.kwargs,
+                actual_seq_lengths=cumulative_window_lens,
+                actual_seq_lengths_kv=cumulative_window_lens,
+            )
+            trace_graph_event(
+                "encoder_update_operation_return",
+                task=self,
+                handle=self.handle,
+                update_stream=update_stream,
+            )
+            trace_graph_event(
+                "encoder_update_end_enter",
+                task=self,
+                handle=self.handle,
+                update_stream=update_stream,
+            )
+            device_module.graph_task_update_end(update_stream)
+            trace_graph_event(
+                "encoder_update_end_return",
+                task=self,
+                handle=self.handle,
+                update_stream=update_stream,
+            )
+            trace_graph_event(
+                "encoder_update_event_record_enter",
+                task=self,
+                handle=self.handle,
+                event_object=self.event,
+                update_stream=update_stream,
+            )
+            self.event.record(update_stream)
+            trace_graph_event(
+                "encoder_update_event_record_return",
+                task=self,
+                handle=self.handle,
+                event_object=self.event,
+                update_stream=update_stream,
+            )
+        except BaseException as error:
+            trace_graph_event(
+                "encoder_update_task_error",
+                task=self,
+                handle=self.handle,
+                event_object=self.event,
+                update_stream=update_stream,
+                error_type=type(error).__qualname__,
+                error=str(error),
+            )
+            dump_graph_trace("encoder-update-error", error=error)
+            raise
 
 
 @dataclass
@@ -174,15 +249,76 @@ class _NpuUpdatableAttentionBackend(torch.nn.Module):
         device_module = self._device_module
         stream = device_module.current_stream()
         event = device_module.ExternalEvent()
+        trace_graph_event(
+            "encoder_capture_event_wait_enter",
+            capture_state=state,
+            event_object=event,
+            capture_stream=stream,
+        )
         event.wait(stream)
+        trace_graph_event(
+            "encoder_capture_event_wait_return",
+            capture_state=state,
+            event_object=event,
+            capture_stream=stream,
+        )
+        trace_graph_event(
+            "encoder_capture_event_reset_enter",
+            capture_state=state,
+            event_object=event,
+            capture_stream=stream,
+        )
         event.reset(stream)
+        trace_graph_event(
+            "encoder_capture_event_reset_return",
+            capture_state=state,
+            event_object=event,
+            capture_stream=stream,
+        )
+        trace_graph_event(
+            "encoder_capture_group_begin_enter",
+            capture_state=state,
+            event_object=event,
+            capture_stream=stream,
+        )
         device_module.graph_task_group_begin(stream)
+        trace_graph_event(
+            "encoder_capture_group_begin_return",
+            capture_state=state,
+            event_object=event,
+            capture_stream=stream,
+        )
+        trace_graph_event(
+            "encoder_capture_operation_enter",
+            capture_state=state,
+            event_object=event,
+            capture_stream=stream,
+        )
         operation(
             **operation_kwargs,
             actual_seq_lengths=cumulative_window_lens,
             actual_seq_lengths_kv=cumulative_window_lens,
         )
+        trace_graph_event(
+            "encoder_capture_operation_return",
+            capture_state=state,
+            event_object=event,
+            capture_stream=stream,
+        )
+        trace_graph_event(
+            "encoder_capture_group_end_enter",
+            capture_state=state,
+            event_object=event,
+            capture_stream=stream,
+        )
         handle = device_module.graph_task_group_end(stream)
+        trace_graph_event(
+            "encoder_capture_group_end_return",
+            capture_state=state,
+            event_object=event,
+            capture_stream=stream,
+            handle=handle,
+        )
         state.tasks.append(
             _NpuGraphUpdateTask(
                 operation=operation,
@@ -480,9 +616,47 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 entry.attention_metadata.seq_lens.copy_(
                     cu[1:] - cu[:-1], non_blocking=True
                 )
-        self._graph_backend.replay(entry.graph)
-        if self._is_npu:
-            self._update_npu_attention_tasks(entry, cumulative_window_lens)
+        trace_graph_event(
+            "encoder_replay_enter",
+            graph=entry.graph,
+            graph_key=graph_key,
+            update_stream=self._npu_update_stream,
+        )
+        try:
+            self._graph_backend.replay(entry.graph)
+            trace_graph_event(
+                "encoder_replay_return",
+                graph=entry.graph,
+                graph_key=graph_key,
+                update_stream=self._npu_update_stream,
+            )
+            if self._is_npu:
+                trace_graph_event(
+                    "encoder_update_all_enter",
+                    graph=entry.graph,
+                    graph_key=graph_key,
+                    task_count=len(entry.npu_update_tasks),
+                    update_stream=self._npu_update_stream,
+                )
+                self._update_npu_attention_tasks(entry, cumulative_window_lens)
+                trace_graph_event(
+                    "encoder_update_all_return",
+                    graph=entry.graph,
+                    graph_key=graph_key,
+                    task_count=len(entry.npu_update_tasks),
+                    update_stream=self._npu_update_stream,
+                )
+        except BaseException as error:
+            trace_graph_event(
+                "encoder_run_error",
+                graph=entry.graph,
+                graph_key=graph_key,
+                update_stream=self._npu_update_stream,
+                error_type=type(error).__qualname__,
+                error=str(error),
+            )
+            dump_graph_trace("encoder-run-error", error=error)
+            raise
         out = entry.output
         if out.dim() == 3:  # attention backends emit [1, tokens, dim]
             out = out.squeeze(0)
