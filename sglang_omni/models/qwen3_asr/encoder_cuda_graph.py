@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 from sglang.srt.hardware_backend.npu.graph_runner.npu_graph_trace import (
     dump_graph_trace,
+    graph_task_update_transaction,
     trace_graph_event,
 )
 from sglang.srt.layers.attention.vision import VisionAttentionMetadata
@@ -96,49 +97,52 @@ class _NpuGraphUpdateTask:
             window_count=len(cumulative_window_lens),
         )
         try:
-            trace_graph_event(
-                "encoder_update_begin_enter",
-                task=self,
-                handle=self.handle,
-                update_stream=update_stream,
-            )
-            device_module.graph_task_update_begin(update_stream, self.handle)
-            trace_graph_event(
-                "encoder_update_begin_return",
-                task=self,
-                handle=self.handle,
-                update_stream=update_stream,
-            )
-            trace_graph_event(
-                "encoder_update_operation_enter",
-                task=self,
-                handle=self.handle,
-                update_stream=update_stream,
-            )
-            self.operation(
-                **self.kwargs,
-                actual_seq_lengths=cumulative_window_lens,
-                actual_seq_lengths_kv=cumulative_window_lens,
-            )
-            trace_graph_event(
-                "encoder_update_operation_return",
-                task=self,
-                handle=self.handle,
-                update_stream=update_stream,
-            )
-            trace_graph_event(
-                "encoder_update_end_enter",
-                task=self,
-                handle=self.handle,
-                update_stream=update_stream,
-            )
-            device_module.graph_task_update_end(update_stream)
-            trace_graph_event(
-                "encoder_update_end_return",
-                task=self,
-                handle=self.handle,
-                update_stream=update_stream,
-            )
+            with graph_task_update_transaction(
+                "encoder", task=self, handle=self.handle, update_stream=update_stream
+            ):
+                trace_graph_event(
+                    "encoder_update_begin_enter",
+                    task=self,
+                    handle=self.handle,
+                    update_stream=update_stream,
+                )
+                device_module.graph_task_update_begin(update_stream, self.handle)
+                trace_graph_event(
+                    "encoder_update_begin_return",
+                    task=self,
+                    handle=self.handle,
+                    update_stream=update_stream,
+                )
+                trace_graph_event(
+                    "encoder_update_operation_enter",
+                    task=self,
+                    handle=self.handle,
+                    update_stream=update_stream,
+                )
+                self.operation(
+                    **self.kwargs,
+                    actual_seq_lengths=cumulative_window_lens,
+                    actual_seq_lengths_kv=cumulative_window_lens,
+                )
+                trace_graph_event(
+                    "encoder_update_operation_return",
+                    task=self,
+                    handle=self.handle,
+                    update_stream=update_stream,
+                )
+                trace_graph_event(
+                    "encoder_update_end_enter",
+                    task=self,
+                    handle=self.handle,
+                    update_stream=update_stream,
+                )
+                device_module.graph_task_update_end(update_stream)
+                trace_graph_event(
+                    "encoder_update_end_return",
+                    task=self,
+                    handle=self.handle,
+                    update_stream=update_stream,
+                )
             trace_graph_event(
                 "encoder_update_event_record_enter",
                 task=self,
