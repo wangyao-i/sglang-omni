@@ -480,9 +480,9 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 entry.attention_metadata.seq_lens.copy_(
                     cu[1:] - cu[:-1], non_blocking=True
                 )
-        self._graph_backend.replay(entry.graph)
         if self._is_npu:
             self._update_npu_attention_tasks(entry, cumulative_window_lens)
+        self._graph_backend.replay(entry.graph)
         out = entry.output
         if out.dim() == 3:  # attention backends emit [1, tokens, dim]
             out = out.squeeze(0)

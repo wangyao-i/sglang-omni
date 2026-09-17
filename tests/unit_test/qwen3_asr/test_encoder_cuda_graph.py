@@ -159,7 +159,7 @@ def test_npu_capture_materializes_sequence_boundaries_on_host():
     assert cu_seqlens.tolist() == [0, 4, 7, 8]
 
 
-def test_npu_replay_updates_window_boundaries_for_bucket_graph():
+def test_npu_updates_window_boundaries_before_bucket_graph_replay():
     captured = []
     operations = []
     runner = _npu_runner()
@@ -193,14 +193,40 @@ def test_npu_replay_updates_window_boundaries_for_bucket_graph():
     assert runner.run(torch.ones(3, 2), [3]) is not None
     assert captured == [(8, (4, 4))]
     assert operations == [
-        ("replay", 8),
         ("update", [4, 8]),
         ("replay", 8),
         ("update", [4, 8]),
         ("replay", 8),
         ("update", [3, 8]),
+        ("replay", 8),
     ]
     assert runner._failed == set()
+
+
+def test_npu_update_failure_prevents_bucket_graph_replay():
+    runner = _npu_runner()
+    runner._plan = lambda total, windows: (8, [8 - total])
+    operations = []
+
+    def fail_update(device_module, update_stream, boundaries):
+        operations.append(("update", boundaries))
+        raise RuntimeError("simulated update failure")
+
+    runner._capture = lambda bucket_size, *, window_lens=None: SimpleNamespace(
+        hidden_states=torch.zeros(bucket_size, 2),
+        cu_seqlens=torch.tensor([0, 4, 8], dtype=torch.int32),
+        attention_metadata=None,
+        graph=SimpleNamespace(
+            replay=lambda: operations.append(("replay", bucket_size))
+        ),
+        output=torch.zeros(bucket_size, 2),
+        npu_update_tasks=(SimpleNamespace(apply=fail_update),),
+    )
+
+    with pytest.raises(RuntimeError, match="simulated update failure"):
+        runner.run(torch.ones(4, 2), [4])
+
+    assert operations == [("update", [4, 8])]
 
 
 def test_npu_graph_update_task_rebinds_fia_lengths_on_runner_stream():
