@@ -338,6 +338,18 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
             # shared multimodal routine still requires its cache singleton.
             init_mm_embedding_cache(self.mm_embedding_cache_size_bytes)
             return
+        if (
+            self.enable_encoder_cuda_graph
+            and self.enable_pre_lm_encoder
+            and self._uses_npu()
+        ):
+            # Ascend graph update and replay must stay on the model execution
+            # thread. The pre-LM worker would become a second host submitter.
+            logger.warning(
+                "Disabling the Qwen3-ASR pre-LM encoder worker on NPU because "
+                "encoder graph updates must run on the model execution thread"
+            )
+            self.enable_pre_lm_encoder = False
         del generation_cuda_graph_enabled
         self._log_memory_checkpoint("post_cuda_graph_capture")
         if self.enable_encoder_cuda_graph:

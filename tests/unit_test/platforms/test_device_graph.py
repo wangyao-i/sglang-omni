@@ -4,8 +4,7 @@
 from __future__ import annotations
 
 import inspect
-import sys
-import types
+import threading
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -16,7 +15,6 @@ from sglang_omni.platforms.device_graph import (
     CudaDeviceGraphBackend,
     NpuDeviceGraphBackend,
     XpuDeviceGraphBackend,
-    get_npu_graph_update_stream,
 )
 
 
@@ -113,30 +111,80 @@ def test_npu_backend_records_into_an_npu_graph(
     assert module.calls == [expected]
 
 
-def test_npu_graph_update_stream_is_shared(monkeypatch) -> None:
-    class GraphDispatchMode:
-        update_stream = None
+def test_npu_backend_enables_host_input_capture(monkeypatch) -> None:
+    module = _recording_module("NPUGraph")
+    monkeypatch.setattr(torch, "npu", module, raising=False)
 
-        def __new__(cls):
-            if cls.update_stream is None:
-                cls.update_stream = object()
-            return super().__new__(cls)
+    with NpuDeviceGraphBackend().capture(
+        allow_host_input_update=True
+    ) as graph:
+        pass
 
-    graphs = types.ModuleType("torch_npu.npu.graphs")
-    graphs._GraphDispatchMode = GraphDispatchMode
-    npu = types.ModuleType("torch_npu.npu")
-    npu.__path__ = []
-    torch_npu = types.ModuleType("torch_npu")
-    torch_npu.__path__ = []
-    monkeypatch.setitem(sys.modules, "torch_npu", torch_npu)
-    monkeypatch.setitem(sys.modules, "torch_npu.npu", npu)
-    monkeypatch.setitem(sys.modules, "torch_npu.npu.graphs", graphs)
+    assert module.calls[-1] == {
+        "npu_graph": graph,
+        "auto_dispatch_capture": True,
+    }
 
-    first = get_npu_graph_update_stream()
-    second = get_npu_graph_update_stream()
 
-    assert first is GraphDispatchMode.update_stream
-    assert second is first
+def test_npu_backend_applies_host_updates_before_replay_on_caller_thread(
+    monkeypatch,
+) -> None:
+    events = []
+    thread_ids = []
+    updates = [
+        {
+            "actual_seq_lengths": [4, 8],
+            "actual_seq_lengths_kv": [4, 8],
+        }
+    ]
+
+    class Graph:
+        def update(self, *, cpu_update_input):
+            thread_ids.append(threading.get_ident())
+            events.append(("update", cpu_update_input))
+
+        def replay(self):
+            thread_ids.append(threading.get_ident())
+            events.append(("replay",))
+
+    module = SimpleNamespace(
+        set_device=lambda device: events.append(("set_device", device))
+    )
+    monkeypatch.setattr(torch, "npu", module, raising=False)
+
+    NpuDeviceGraphBackend().replay(
+        Graph(),
+        host_input_updates=updates,
+        device="npu:0",
+    )
+
+    assert events == [
+        ("set_device", "npu:0"),
+        ("update", updates),
+        ("replay",),
+    ]
+    assert len(set(thread_ids)) == 1
+
+
+@pytest.mark.parametrize(
+    "backend",
+    [CudaDeviceGraphBackend(), XpuDeviceGraphBackend()],
+)
+def test_non_npu_backends_reject_host_input_capture(backend) -> None:
+    with (
+        pytest.raises(ValueError, match="host input updates"),
+        backend.capture(allow_host_input_update=True),
+    ):
+        pass
+
+
+@pytest.mark.parametrize(
+    "backend",
+    [CudaDeviceGraphBackend(), XpuDeviceGraphBackend()],
+)
+def test_non_npu_backends_reject_host_input_updates(backend) -> None:
+    with pytest.raises(ValueError, match="host input updates"):
+        backend.replay(object(), host_input_updates=[{"x": [1]}], device="x")
 
 
 def test_cuda_graph_context_declares_the_expected_keywords() -> None:

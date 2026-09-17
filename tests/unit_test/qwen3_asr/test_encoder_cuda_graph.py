@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-import sys
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -10,9 +9,6 @@ from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 from sglang_omni.models.qwen3_asr import sglang_model
 from sglang_omni.models.qwen3_asr.encoder_cuda_graph import (
     Qwen3ASREncoderLayerStackGraphRunner,
-    _NpuGraphCaptureState,
-    _NpuGraphUpdateTask,
-    _NpuUpdatableAttentionBackend,
     build_buckets,
     window_lens_from_token_counts,
 )
@@ -37,12 +33,17 @@ def _npu_runner():
     runner_device = SimpleNamespace(type="npu", index=0)
 
     class Backend:
-        def replay(self, graph):
+        def __init__(self):
+            self.updates = []
+            self.devices = []
+
+        def replay(self, graph, *, host_input_updates=None, device=None):
+            self.updates.append(host_input_updates)
+            self.devices.append(device)
             graph.replay()
 
     class DeviceModule:
-        def stream(self, stream):
-            return nullcontext()
+        pass
 
     r = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
     r._is_npu = True
@@ -54,7 +55,6 @@ def _npu_runner():
     r._device = runner_device
     r._graph_backend = Backend()
     r._device_module = DeviceModule()
-    r._npu_update_stream = object()
     return r
 
 
@@ -167,11 +167,6 @@ def test_npu_replay_updates_window_boundaries_for_bucket_graph():
 
     def capture(bucket_size, *, window_lens=None):
         captured.append((bucket_size, window_lens))
-        task = SimpleNamespace(
-            apply=lambda device_module, update_stream, boundaries: operations.append(
-                ("update", boundaries)
-            )
-        )
         return SimpleNamespace(
             hidden_states=torch.zeros(bucket_size, 2),
             cu_seqlens=torch.tensor([0, 4, 8], dtype=torch.int32),
@@ -180,7 +175,6 @@ def test_npu_replay_updates_window_boundaries_for_bucket_graph():
                 replay=lambda: operations.append(("replay", bucket_size))
             ),
             output=torch.zeros(bucket_size, 2),
-            npu_update_tasks=(task,),
         )
 
     runner._capture = capture
@@ -194,120 +188,31 @@ def test_npu_replay_updates_window_boundaries_for_bucket_graph():
     assert captured == [(8, (4, 4))]
     assert operations == [
         ("replay", 8),
-        ("update", [4, 8]),
         ("replay", 8),
-        ("update", [4, 8]),
         ("replay", 8),
-        ("update", [3, 8]),
     ]
     assert runner._failed == set()
-
-
-def test_npu_graph_update_task_rebinds_fia_lengths_on_runner_stream():
-    calls = []
-
-    class DeviceModule:
-        def graph_task_update_begin(self, stream, handle):
-            calls.append(("begin", stream, handle))
-
-        def graph_task_update_end(self, stream):
-            calls.append(("end", stream))
-
-    event = SimpleNamespace(record=lambda stream: calls.append(("event", stream)))
-    operation = lambda **kwargs: calls.append(("operation", kwargs))
-    task = _NpuGraphUpdateTask(
-        operation=operation,
-        kwargs={"query": "static-query"},
-        handle="fia-handle",
-        event=event,
-    )
-
-    task.apply(DeviceModule(), "update-stream", [3, 8])
-
-    assert calls[0] == ("begin", "update-stream", "fia-handle")
-    assert calls[1] == (
-        "operation",
-        {
-            "query": "static-query",
-            "actual_seq_lengths": [3, 8],
-            "actual_seq_lengths_kv": [3, 8],
-        },
-    )
-    assert calls[2:] == [("end", "update-stream"), ("event", "update-stream")]
-
-
-def test_npu_attention_backend_captures_one_explicit_fia_task(
-    monkeypatch,
-):
-    calls = []
-
-    def operation(**kwargs):
-        calls.append(kwargs)
-
-    fake_torch_npu = SimpleNamespace(
-        _npu_fused_infer_attention_score_get_max_workspace=lambda **kwargs: torch.empty(
-            16
-        ),
-        npu_fused_infer_attention_score=SimpleNamespace(out=operation),
-    )
-    monkeypatch.setitem(sys.modules, "torch_npu", fake_torch_npu)
-
-    class Event:
-        def wait(self, stream):
-            calls.append(("wait", stream))
-
-        def reset(self, stream):
-            calls.append(("reset", stream))
-
-        def record(self, stream):
-            calls.append(("record", stream))
-
-    class DeviceModule:
-        def current_stream(self):
-            return "capture-stream"
-
-        def ExternalEvent(self):
-            return Event()
-
-        def graph_task_group_begin(self, stream):
-            calls.append(("begin", stream))
-
-        def graph_task_group_end(self, stream):
-            calls.append(("end", stream))
-            return "fia-handle"
-
-    state = _NpuGraphCaptureState(tasks=[])
-    backend = _NpuUpdatableAttentionBackend(state, DeviceModule())
-    metadata = SimpleNamespace(cu_seqlens=torch.tensor([0, 3, 8], dtype=torch.int32))
-
-    output = backend(
-        torch.zeros(8, 2, 4),
-        torch.zeros(8, 2, 4),
-        torch.zeros(8, 2, 4),
-        forward_metadata=metadata,
-    )
-
-    assert output.shape == (8, 2, 4)
-    assert len(state.tasks) == 1
-    assert state.tasks[0].handle == "fia-handle"
-    assert calls[-2]["actual_seq_lengths"] == [3, 8]
-    assert calls[-2]["actual_seq_lengths_kv"] == [3, 8]
-
-
-def test_npu_attention_capture_restores_sglang_backends():
-    original = torch.nn.Identity()
-    attention = torch.nn.Module()
-    attention.qkv_backend_name = "ascend_attn"
-    attention.qkv_backend = original
-    runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
-    runner._tower = SimpleNamespace(layers=[SimpleNamespace(self_attn=attention)])
-    runner._device_module = object()
-    state = _NpuGraphCaptureState(tasks=[])
-
-    with runner._capture_npu_attention_tasks(state):
-        assert isinstance(attention.qkv_backend, _NpuUpdatableAttentionBackend)
-
-    assert attention.qkv_backend is original
+    assert runner._graph_backend.updates == [
+        [
+            {
+                "actual_seq_lengths": [4, 8],
+                "actual_seq_lengths_kv": [4, 8],
+            }
+        ],
+        [
+            {
+                "actual_seq_lengths": [4, 8],
+                "actual_seq_lengths_kv": [4, 8],
+            }
+        ],
+        [
+            {
+                "actual_seq_lengths": [3, 8],
+                "actual_seq_lengths_kv": [3, 8],
+            }
+        ],
+    ]
+    assert runner._graph_backend.devices == [runner._device] * 3
 
 
 def test_npu_capture_failure_is_terminal():
@@ -318,13 +223,12 @@ def test_npu_capture_failure_is_terminal():
         raise RuntimeError("simulated capture failure")
 
     runner._capture = capture
-    hidden_states = torch.ones(4, 2)
 
     with pytest.raises(RuntimeError, match="restart the encoder process"):
-        runner.run(hidden_states, [4])
+        runner.run(torch.ones(4, 2), [4])
     assert runner._capture_failed is True
     with pytest.raises(RuntimeError, match="previously failed"):
-        runner.run(hidden_states, [4])
+        runner.run(torch.ones(4, 2), [4])
 
 
 def test_npu_captures_share_one_graph_pool():
@@ -336,7 +240,9 @@ def test_npu_captures_share_one_graph_pool():
             *,
             pool=None,
             thread_local_errors=False,
+            allow_host_input_update=False,
         ):
+            assert allow_host_input_update is True
             pools.append(pool)
             return nullcontext(SimpleNamespace())
 
@@ -385,8 +291,6 @@ def test_npu_captures_share_one_graph_pool():
     runner._max_seqlen = 8
     runner._graph_backend = Backend()
     runner._graph_pool = None
-    runner._capture_failed = False
-    runner._npu_update_stream = object()
 
     runner._capture(8, window_lens=(4, 4))
     runner._capture(8, window_lens=(2, 2, 4))

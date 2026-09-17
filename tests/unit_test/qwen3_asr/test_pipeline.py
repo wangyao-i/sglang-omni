@@ -405,6 +405,41 @@ def test_qwen3_asr_stage_rejects_invalid_pre_lm_batch_knobs(
         )
 
 
+def test_npu_encoder_graph_keeps_pre_lm_worker_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builder = _make_engine_builder()
+    builder.enable_pre_lm_encoder = True
+    builder.enable_encoder_cuda_graph = True
+    builder._log_memory_checkpoint = lambda checkpoint: None
+
+    encoder_graphs = []
+    monkeypatch.setattr(
+        qwen3_asr_builder.current_platform,
+        "is_npu",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        qwen3_asr_builder,
+        "init_mm_embedding_cache",
+        lambda size_bytes: None,
+    )
+
+    builder.setup_model_resources(
+        SimpleNamespace(
+            init_encoder_graphs=lambda **kwargs: encoder_graphs.append(kwargs)
+        ),
+        SimpleNamespace(mm_attention_backend="ascend_attn"),
+        generation_cuda_graph_enabled=True,
+    )
+
+    assert builder.enable_pre_lm_encoder is False
+    assert builder.audio_encoder_service is None
+    assert len(encoder_graphs) == 1
+    assert encoder_graphs[0]["max_batch_size"] == 8
+    assert encoder_graphs[0]["max_tokens_per_clip"] > 0
+
+
 def test_qwen3_asr_stage_default_uses_auto_static_kv_budget() -> None:
     signature = inspect.signature(create_sglang_qwen3_asr_executor)
 
