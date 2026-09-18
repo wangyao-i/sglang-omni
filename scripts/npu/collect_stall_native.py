@@ -14,6 +14,29 @@ import time
 from pathlib import Path
 
 
+def wait_for_blocked_trace(pid, directory, timeout=600):
+    """Observe metadata files only; start AFTER service readiness."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not Path(f"/proc/{pid}").exists():
+            raise RuntimeError("service exited before snapshot trigger")
+        for path in directory.glob(f"{pid}-*.jsonl"):
+            # Per-thread bounded diagnosis logs are small; tolerate a partial row.
+            lines = path.read_bytes().splitlines()
+            for line in reversed(lines):
+                try:
+                    row = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if row["phase"].endswith(".enter"):
+                    age = (time.monotonic_ns() - row["ns"]) / 1e9
+                    if age >= 20:
+                        return row
+                break
+        time.sleep(1)
+    raise TimeoutError("no blocked instrumented call observed within 600 seconds")
+
+
 def collect(pid, out):
     proc = Path(f"/proc/{pid}")
     if pid <= 1 or not proc.is_dir():
@@ -98,12 +121,15 @@ def main():
     mode.add_argument("--pid", type=int)
     mode.add_argument("--preflight", action="store_true")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--watch-trace", type=Path)
     args = parser.parse_args()
     if sys.platform != "linux":
         parser.error("Linux /proc required")
     for tool in ("gdb", "py-spy"):
         if shutil.which(tool) is None:
             parser.error(f"missing {tool}; arrange tools before the hardware run")
+    if args.watch_trace and args.preflight:
+        parser.error("--watch-trace requires --pid")
     if args.preflight:
         # Disposable CPU-only Python process owned by this script.
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"])
@@ -118,7 +144,12 @@ def main():
                 child.kill()
                 child.wait(timeout=3)
     else:
+        trigger = None
+        if args.watch_trace:
+            trigger = wait_for_blocked_trace(args.pid, args.watch_trace)
         ok = collect(args.pid, args.out)
+        if trigger is not None:
+            (args.out / "trigger.json").write_text(json.dumps(trigger, indent=2))
     raise SystemExit(0 if ok else 1)
 
 
