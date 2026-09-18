@@ -123,6 +123,22 @@ class TraceTests(unittest.TestCase):
                 self.fail("transfer must not execute")
         self.assertEqual(self.rows()[-1]["phase"], "attach.stream_query.enter")
 
+    def test_watcher_detects_unreturned_phase_and_partial_row(self):
+        source = Path(__file__).with_name("collect_stall_native.py")
+        spec = importlib.util.spec_from_file_location("collector_test", source)
+        collector = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(collector)
+        row = {"phase": "task_end.enter", "ns": 1, "tid": 123}
+        path = Path(self.temp.name) / "123-123.jsonl"
+        path.write_text(json.dumps(row) + '\n{"partial":')
+        with (
+            patch.object(collector.Path, "exists", return_value=True),
+            patch.object(collector.time, "monotonic_ns", return_value=21_000_000_001),
+        ):
+            self.assertEqual(
+                collector.wait_for_blocked_trace(123, Path(self.temp.name)), row
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
