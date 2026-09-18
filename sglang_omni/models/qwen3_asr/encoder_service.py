@@ -152,6 +152,11 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
         self._queue_wait_max_s = 0.0
         self._encoder_time_s = 0.0
         super().__init__(worker_name="qwen3-asr-audio-encode")
+        
+    def graph_stats(self) -> dict[str, int] | None:
+        """Read-only encoder graph counters; None when graphs are disabled."""
+        runner = self._model._encoder_graph_runner
+        return None if runner is None else runner.stats()
 
     def close(self) -> None:
         """Stop the encoder worker after all queued requests finish."""
@@ -161,7 +166,8 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
             self._closed = True
             self._queue.put(_SHUTDOWN)
         self._thread.join(timeout=5)
-
+        logger.info("Qwen3-ASR encoder graph stats: %s", self.graph_stats())
+        
     def _enqueue(
         self,
         item: Any,
@@ -585,6 +591,7 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
                 f"{item_count} items (avg "
                 f"{item_count / batch_count:.2f} items/batch, "
                 f"last batch: {len(batch)}), cache: {self.stats()}"
+                f"graphs: {self.graph_stats()}"
             )
 
 
