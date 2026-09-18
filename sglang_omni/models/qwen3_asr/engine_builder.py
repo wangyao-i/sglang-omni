@@ -106,6 +106,9 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
         self.feature_extractor: Any = None
         self.context_length = 0
         self.device: str | None = None
+        # build() resolves the concrete device before generation_defaults().
+        # Tests and other pre-build inspection may legitimately leave it unknown.
+        self.gpu_id: int | None = None
         self.model_path: str | None = None
         self.audio_encoder_service: Any = None
         self._torch_mps_model_runner: Any = None
@@ -206,7 +209,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
             defaults["prefill_attention_backend"] = "triton"
         if self.mm_attention_backend is not None:
             defaults["mm_attention_backend"] = self.mm_attention_backend
-        else:
+        elif self.gpu_id is not None:
             sm_version = get_visible_gpu_sm_version(self.gpu_id)
             if sm_version is not None and sm_version >= 100:
                 defaults["mm_attention_backend"] = "triton_attn"

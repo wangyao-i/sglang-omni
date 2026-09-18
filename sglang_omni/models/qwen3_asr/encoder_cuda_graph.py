@@ -122,7 +122,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
     @property
     def tokens_per_window(self) -> int:
         return self._max_seqlen
-        
+
     def stats(self) -> dict[str, int]:
         """Read-only encoder graph counters."""
         return {
@@ -331,8 +331,8 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 entry.attention_metadata.seq_lens.copy_(
                     cu[1:] - cu[:-1], non_blocking=True
                 )
-        self._replay_count += 
         entry.graph.replay()
+        self._replay_count += 1
         out = entry.output
         if out.dim() == 3:  # attention backends emit [1, tokens, dim]
             out = out.squeeze(0)

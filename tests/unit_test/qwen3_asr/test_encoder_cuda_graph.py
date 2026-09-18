@@ -193,6 +193,13 @@ def test_npu_replay_uses_the_exact_window_layout_as_graph_key():
     assert captured == [(8, (4, 4)), (8, (2, 2, 4))]
     assert len(replayed) == 3
     assert runner._failed == set()
+    assert runner.stats() == {
+        "capture_count": 0,
+        "replay_count": 3,
+        "capacity_fallback_count": 0,
+        "graphs": 2,
+        "max_graphs": 32,
+    }
 
 
 def test_npu_graph_capacity_returns_none_for_new_layouts():
@@ -218,6 +225,8 @@ def test_npu_graph_capacity_returns_none_for_new_layouts():
     assert runner.run(hidden_states, [2, 2]) is None
     assert captured == [(8, (4, 4))]
     assert len(runner._graphs) == 1
+    assert runner.stats()["replay_count"] == 2
+    assert runner.stats()["capacity_fallback_count"] == 1
 
 
 def test_npu_capture_failure_is_terminal():
@@ -300,6 +309,7 @@ def test_npu_captures_share_one_graph_pool():
 
     assert runner._device_module.graph_pool_handle_calls == 1
     assert pools == [runner._device_module.pool, runner._device_module.pool]
+    assert runner.stats()["capture_count"] == 2
 
 
 @pytest.fixture
