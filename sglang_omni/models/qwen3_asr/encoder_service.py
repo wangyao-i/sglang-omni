@@ -32,6 +32,8 @@ from sglang.srt.utils import create_device_stream, device_stream_context
 from sglang_omni.scheduling.pre_lm_encoder import PreLMEncoderService, QueueEntry
 from sglang_omni.scheduling.stage_cache import StageOutputCache
 
+from . import stall_trace
+
 logger = logging.getLogger(__name__)
 
 _CACHE_MAX_ENTRIES = 4096
@@ -120,6 +122,8 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
         self._model = model
         reference = next(model.audio_tower.parameters())
         self._device = reference.device
+        if self._device.type == "npu":
+            stall_trace.install()
         self._dtype = reference.dtype
         self._hidden_size = _text_hidden_size(model)
         # Keep encoder submissions off the generation lane on Ascend, where the
@@ -361,7 +365,13 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
         )
 
     def attach_embedding(self, item: Any, embedding: torch.Tensor) -> None:
-        embedding = embedding.to(self._device, non_blocking=True)
+        if stall_trace.TRACE_DIR and self._device.type == "npu":
+            with stall_trace.transfer(
+                embedding, self._device, torch.get_device_module(self._device)
+            ):
+                embedding = embedding.to(self._device, non_blocking=True)
+        else:
+            embedding = embedding.to(self._device, non_blocking=True)
         if self._stream is not None:
             # note (luojiaxuan): the batch path allocates on the private
             # stream while the LM consumes on the default stream; register
