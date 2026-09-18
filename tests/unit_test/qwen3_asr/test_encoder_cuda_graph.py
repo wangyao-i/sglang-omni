@@ -38,6 +38,9 @@ def _npu_runner(*, max_graphs=32):
     r._failed = set()
     r._graphs = {}
     r._capture_failed = False
+    r._capture_count = 0
+    r._replay_count = 0
+    r._capacity_fallback_count = 0
     return r
 
 
@@ -288,6 +291,9 @@ def test_npu_captures_share_one_graph_pool():
     runner._graph_backend = Backend()
     runner._graph_pool = None
     runner._capture_failed = False
+    runner._capture_count = 0
+    runner._replay_count = 0
+    runner._capacity_fallback_count = 0
 
     runner._capture(8, window_lens=(4, 4))
     runner._capture(8, window_lens=(2, 2, 4))
