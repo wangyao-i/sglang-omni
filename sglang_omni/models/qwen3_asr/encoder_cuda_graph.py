@@ -112,10 +112,26 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._max_graphs = max_graphs
         self._graph_pool: Any | None = None
         self._capture_failed = False
+        # Read-only counters: a capture is not evidence that the graph was
+        # ever replayed, and a request that misses the graph pool bounds is
+        # only visible through the fallback counter.
+        self._capture_count = 0
+        self._replay_count = 0
+        self._capacity_fallback_count = 0
 
     @property
     def tokens_per_window(self) -> int:
         return self._max_seqlen
+        
+    def stats(self) -> dict[str, int]:
+        """Read-only encoder graph counters."""
+        return {
+            "capture_count": self._capture_count,
+            "replay_count": self._replay_count,
+            "capacity_fallback_count": self._capacity_fallback_count,
+            "graphs": len(self._graphs),
+            "max_graphs": self._max_graphs,
+        }
 
     def capture_all(self) -> None:
         """Capture every bucket up front, except on NPU where capture is lazy."""
@@ -238,6 +254,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
             pool=self._capture_pool(), thread_local_errors=True
         ) as graph:
             static_out = run_once()
+        self._capture_count += 1
         logger.info(
             "[qwen3-asr] captured encoder layer-stack graph bucket=%d windows=%d out=%s",
             bucket_size,
@@ -283,6 +300,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         entry = self._graphs.get(graph_key)
         if entry is None:
             if self._is_npu and len(self._graphs) >= self._max_graphs:
+                self._capacity_fallback_count += 1
                 logger.warning(
                     "[qwen3-asr] encoder graph capacity reached (%d); "
                     "bucket=%d window layout stays eager",
@@ -313,6 +331,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 entry.attention_metadata.seq_lens.copy_(
                     cu[1:] - cu[:-1], non_blocking=True
                 )
+        self._replay_count += 
         entry.graph.replay()
         out = entry.output
         if out.dim() == 3:  # attention backends emit [1, tokens, dim]
