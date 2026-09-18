@@ -9,8 +9,9 @@ choice belongs on the platform rather than in a per-model branch.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
-from typing import Any, Iterator, Protocol
+from typing import Any, Protocol
 
 import torch
 
@@ -26,6 +27,13 @@ class DeviceGraphBackend(Protocol):
         thread_local_errors: bool = False,
     ) -> AbstractContextManager[Any]:
         """Open a capture and yield the graph it records into."""
+        ...
+
+    def replay(
+        self,
+        graph: Any,
+    ) -> None:
+        """Replay a recorded graph."""
         ...
 
 
@@ -51,6 +59,12 @@ class CudaDeviceGraphBackend:
         with torch.cuda.graph(cuda_graph=graph, **kwargs):
             yield graph
 
+    def replay(
+        self,
+        graph: Any,
+    ) -> None:
+        graph.replay()
+
 
 class NpuDeviceGraphBackend:
     """Ascend NPU."""
@@ -73,6 +87,26 @@ class NpuDeviceGraphBackend:
             kwargs["capture_error_mode"] = "thread_local"
         with torch.npu.graph(npu_graph=graph, **kwargs):
             yield graph
+
+    def replay(
+        self,
+        graph: Any,
+    ) -> None:
+        graph.replay()
+
+
+def get_npu_graph_update_stream() -> Any:
+    """Return torch_npu's process-wide NPUGraph update stream.
+
+    NPUGraph.update() records into one class-level stream shared by every
+    decoder graph in the process. A model-owned updatable graph must join that
+    same stream instead of creating a second graph-task update owner.
+    """
+    from torch_npu.npu.graphs import _GraphDispatchMode
+
+    if _GraphDispatchMode.update_stream is None:
+        _GraphDispatchMode()
+    return _GraphDispatchMode.update_stream
 
 
 class XpuDeviceGraphBackend:
@@ -98,10 +132,17 @@ class XpuDeviceGraphBackend:
         with torch.xpu.graph(xpu_graph=graph, **kwargs):
             yield graph
 
+    def replay(
+        self,
+        graph: Any,
+    ) -> None:
+        graph.replay()
+
 
 __all__ = [
     "CudaDeviceGraphBackend",
     "DeviceGraphBackend",
     "NpuDeviceGraphBackend",
+    "get_npu_graph_update_stream",
     "XpuDeviceGraphBackend",
 ]
