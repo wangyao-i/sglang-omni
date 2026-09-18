@@ -51,6 +51,9 @@ class _StubModel(torch.nn.Module):
             )
         )
         self.dtype = dtype
+        # Mirrors Qwen3ASRForConditionalGeneration, which declares the encoder
+        # graph runner as None until init_encoder_graphs() replaces it.
+        self._encoder_graph_runner = None
         self.encode_calls = 0
         self.encode_batch_sizes: list[int] = []
         self.fail = False
