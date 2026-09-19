@@ -1,18 +1,19 @@
-# Qwen3-ASR Omni-only repair — validation O1
+# Qwen3-ASR Omni-only repair — validation O1.1
 
 Status: candidate, not hardware qualified. This packet does not authorize
 dependency edits, installation, device reset, merge, or unattended NPU runs.
-The first requested return is the native CPU preflight. Obtain operator approval
-before proceeding to the separately bounded hardware gate below.
+Native CPU preflight has passed on the pinned pair below. Obtain operator
+approval before proceeding to the separately bounded hardware gate below.
 
 ## Fixed identities and hypothesis
 
 - Omni code: `555c6906dd38078d128267b7d4f9d34975c3d55c`, branch
   `qwen3-asr/omni-owned-graph-submission`. A later packet-only commit is allowed;
   record both HEAD and this production-code identity.
-- SGLang: upstream `db39b7f961b83f08b9280b5708af9abaa86b9e76`, clean,
+- SGLang: upstream v0.5.19 `0bcd822377da7b5718e674eaf9c870d349424dd1`, clean,
   **without #40059 or any local decoder/graph modifications**. This is the
-  initial pinned compatibility target, not a claim for every SGLang version.
+  corrected pinned target preserves the server's release lineage; O1's earlier
+  db39b7f961 main baseline is superseded, not an instruction to change versions.
 - Keep the existing reported environment: Python 3.11.10, torch 2.10.0,
   torch_npu 2.10.0.post2, CANN 9.0.1 and the same assigned Ascend hardware.
   If the baseline is unavailable or differs, report before changing anything.
@@ -26,7 +27,9 @@ retain evidence instead of automatically restoring #40059 and calling it fixed.
 
 ## CPU preflight — run first, no serving workload
 
-Use separate clean checkouts/environments; preserve existing working services.
+Use clean checkouts and preserve existing working services. A shared dependency
+environment is permitted without installs/edits if actual import resolution is
+verified and the launch environment is preserved; a separate venv is not required.
 Record Git HEAD/status, Python executable, actual imported package paths,
 torch/torch_npu/CANN/driver identities and SHA256 for the imported encoder runner,
 encoder service, request builder, graph backend, SGLang NPU graph runner/backend,
@@ -53,9 +56,32 @@ service cases and 4 cached-transfer cases must execute. Do not use the old
 or modify SGLang to make collection pass; return the first incompatibility.
 
 Local evidence: 17 source-isolated CPU cases and targeted pre-commit passed.
-Native local collection failed because sglang/torchaudio are unavailable.
+Native collection on the author's Windows host failed because sglang/torchaudio
+are unavailable; this is not a statement about the server environment.
 Source-isolated tests replace import boundaries and do not qualify native APIs,
 NPU synchronization, graph execution, or installed dependency compatibility.
+
+O1 server receipt: 562 passed, 1 XPU API skip, 2 accelerator deselections,
+14 warnings in 15.32 seconds; targeted repeat 14/14 passed. The six reported
+Omni/SGLang runner/backend file hashes independently match committed Git blobs.
+CPU results are operator-reported, not independently rerun on the server.
+No CPU rerun is needed solely for this packet-only correction.
+
+## Import-resolution guard for the hardware launcher
+
+The default editable install resolves to b950878e03, which contains the earlier
+SGLang async patch and is NOT an acceptable Omni-only baseline. O1 prepended
+the clean 0bcd8223 checkout's python directory to PYTHONPATH; retain that exact
+override and the remaining environment (including tbe paths) in the service
+launcher and inherited worker environment. Do not replace the entire PYTHONPATH
+or reinstall packages. Checking a different interactive shell is insufficient.
+
+Before client load, verify from the actual model-worker context (existing
+startup diagnostics/debug facility, not a production monkeypatch) the imported
+SGLang and Omni roots and critical source digests. If that evidence cannot be
+obtained with existing facilities, stop before load and report the precise gap;
+do not silently substitute the successful pytest process's import identity.
+Retain the full launch command/environment mapping in server-owned evidence.
 
 ## Hardware gate — only after CPU preflight and operator approval
 
