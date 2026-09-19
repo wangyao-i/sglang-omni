@@ -59,6 +59,23 @@ dependency patch, service launch, push or device reset is included here.
 
 ## Local tests actually run
 
-`python scripts/npu/test_queue_snapshot_gdb.py`: 4 passed. Tests cover ordering,
-fresh positive ID validation, library identity guard and selected-field decoding
-with mocks. They do not execute GDB or prove debugger compatibility.
+`python scripts/npu/test_queue_snapshot_gdb.py`: 5 passed. Tests cover ordering,
+fresh positive ID validation, library identity guard, selected-field decoding
+with mocks, and maps persistence before a failed library inspection. They do not
+execute GDB or prove debugger compatibility.
+
+## Reported post-Q1 CPU delta preflight
+
+Operator reports 66/66 checks on helper SHA256
+b11568b91b954b25801c6c09fe0370c6550bdcc68c4e0cf377a73cb8dcf6ef9e,
+including maps-before-identity, frame-to-library consistency and repeated
+timeout/detach checks. New artifacts are in post-q1-delta/ on the server.
+These are reported results; raw artifacts were not independently inspected here.
+Real GDB library-inspection failure injection and NPU decoding remain untested
+by this CPU preflight. Do not infer Q1 rerun authorization.
+
+The operator reports overwriting the OLD 49-check preflight's raw artifacts;
+only its report survives. Keep that loss explicit, not a reproducible historical
+raw-evidence claim. The newer tests do not reconstruct the lost old artifacts.
+Future runs must create a new evidence directory exclusively and stop if it
+already exists. Do not delete or reconstruct prior outputs to obtain a clean run.
