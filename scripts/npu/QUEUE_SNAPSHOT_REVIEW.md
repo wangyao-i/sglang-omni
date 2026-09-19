@@ -1,5 +1,14 @@
 # Targeted queue snapshot: preflight required
 
+Post-Q1 correction: Q1 used helper 7fdabe95, which read full maps but retained
+only the torch_npu mapping. The updated helper flushes a full maps JSONL row
+BEFORE library hashing, and records gdb.solib_name per frame where available.
+Keep the new raw mappings on-server. Q1 cannot be repaired retroactively and
+its frozen packet must not be silently rerun with this changed helper. Local
+policy tests now total 5, including retained mappings on library-inspection
+failure. The reported 49-check CPU preflight covers the OLD helper; a delta
+preflight of the new maps row/shared-library fields is still required.
+
 Diagnostic only. No production changes. This helper is NOT yet qualified for
 the next NPU run: real Linux GDB attach/unwinding/detach preflight is pending.
 Local WSL has Python but no GDB; no packages were installed.

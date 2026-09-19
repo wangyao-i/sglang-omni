@@ -86,6 +86,9 @@ def snapshot(gdb):
             destination.flush()
 
         maps = (proc / "maps").read_text()
+        # Preserve ALL mappings before hashing or unwinding can time out. Raw
+        # PCs without their contemporaneous mappings cannot be resolved later.
+        emit({"phase": "maps", "pid": inferior.pid, "text": maps})
         library = matching_library(maps)
         emit({"phase": "identity", "pid": inferior.pid, "library": library})
         env = {}
@@ -121,6 +124,10 @@ def snapshot(gdb):
                     if frame is None:
                         break
                     entry = {"pc": hex(frame.pc()), "name": frame.name()}
+                    try:
+                        entry["shared_library"] = gdb.solib_name(frame.pc())
+                    except Exception as exc:
+                        entry["shared_library_error"] = str(exc)
                     try:
                         entry["repository"] = repository_state(frame, inferior, library)
                     except Exception as exc:
