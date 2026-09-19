@@ -153,6 +153,66 @@ def stop_owned(proc):
         return "killed"
 
 
+def snapshot_command(pid, helper):
+    # -ex is a GDB command, not shell syntax. Python parses the path literal;
+    # run_name preserves the helper's __main__ entry point and finally-detach.
+    load = f"python import runpy; runpy.run_path({str(helper)!r}, run_name='__main__')"
+    return ["gdb", "-nx", "-nh", "-batch", "-iex", "set auto-load off",
+            "-ex", "set pagination off", "-ex", f"attach {pid}", "-ex", load]
+
+
+def collect_snapshot(pid, tids, out):
+    env = dict(os.environ, WF_QUEUE_SNAPSHOT=str(out / "queue.jsonl"),
+               WF_QUEUE_TIDS=",".join(map(str, tids)), WF_QUEUE_SECONDS="15")
+    helper = Path(__file__).with_name("queue_snapshot_gdb.py").resolve()
+    command = snapshot_command(pid, helper)
+    (out / "gdb-command.json").write_text(json.dumps(command), encoding="utf-8")
+    rc = None
+    error = None
+    with (out / "gdb.txt").open("w", encoding="utf-8") as dbg:
+        try:
+            rc = subprocess.run(command, env=env, stdout=dbg,
+                                stderr=subprocess.STDOUT, timeout=25).returncode
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            error = type(exc).__name__
+    rows = []
+    try:
+        rows = [json.loads(line) for line in (out / "queue.jsonl").read_text().splitlines()]
+    except (OSError, json.JSONDecodeError) as exc:
+        error = f"snapshot: {type(exc).__name__}"
+    phases = {row.get("phase") for row in rows}
+    status = Path(f"/proc/{pid}/status").read_text()
+    (out / "status-after").write_text(status, encoding="utf-8")
+    detached = "TracerPid:\t0" in status and not any(
+        line.startswith("State:") and line.split()[1] in ("T", "t")
+        for line in status.splitlines())
+    required = {"maps", "identity", "inventory", "stack", "coverage"}
+    captured = {row["tid"] for row in rows if row.get("phase") == "stack"
+                and row.get("frames") and not row.get("error")}
+    missing_requested = sorted(set(tids) - captured)
+    ok = (rc == 0 and error is None and required <= phases
+          and detached and not missing_requested)
+    result = dict(ok=ok, rc=rc, error=error, phases=sorted(phases), detached=detached,
+                  missing_requested=missing_requested)
+    (out / "collector.json").write_text(json.dumps(result), encoding="utf-8")
+    emit("collector.result", **result)
+    return ok
+
+
+def preflight(out):
+    """Run the identical debugger invocation on an owned CPU-only child."""
+    out = out.resolve()
+    out.mkdir(parents=True, exist_ok=False)
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"])
+    try:
+        ok = collect_snapshot(proc.pid, [proc.pid], out)
+    finally:
+        cleanup = stop_owned(proc)
+        (out / "exit.json").write_text(json.dumps(dict(
+            rc=proc.returncode, cleanup=cleanup)), encoding="utf-8")
+    return 0 if ok else 1
+
+
 def supervise(args):
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -178,20 +238,7 @@ def supervise(args):
                 except json.JSONDecodeError:
                     pass  # Keep original stdout, including library banners.
             tids = sorted({row["tid"] for row in rows})
-            env = dict(os.environ, WF_QUEUE_SNAPSHOT=str(out / "queue.jsonl"),
-                       WF_QUEUE_TIDS=",".join(map(str, tids)), WF_QUEUE_SECONDS="15")
-            helper = Path(__file__).with_name("queue_snapshot_gdb.py").resolve()
-            gdb = ["gdb", "-nx", "-nh", "-batch", "-iex", "set auto-load off",
-                   "-ex", "set pagination off", "-ex", f"attach {proc.pid}",
-                   "-ex", f'source "{helper}"', "-ex", "detach"]
-            with (out / "gdb.txt").open("w", encoding="utf-8") as dbg:
-                try:
-                    result = subprocess.run(gdb, env=env, stdout=dbg,
-                                            stderr=subprocess.STDOUT, timeout=25)
-                    emit("collector.exit", rc=result.returncode)
-                except (OSError, subprocess.TimeoutExpired) as exc:
-                    emit("collector.error", error=type(exc).__name__)
-            (out / "status-after").write_bytes(Path(f"/proc/{proc.pid}/status").read_bytes())
+            collect_snapshot(proc.pid, tids, out)
         finally:
             cleanup = stop_owned(proc)
             (out / "exit.json").write_text(json.dumps(dict(
@@ -202,10 +249,17 @@ def supervise(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arm", choices=("gate", "pinned", "pageable"), required=True)
+    parser.add_argument("--arm", choices=("gate", "pinned", "pageable"))
+    parser.add_argument("--preflight", action="store_true", help="CPU-only real GDB attach check")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.preflight:
+        if args.arm or args.child or args.out is None or sys.platform != "linux":
+            parser.error("--preflight requires Linux, --out, and no --arm/--child")
+        return preflight(args.out)
+    if args.arm is None:
+        parser.error("--arm required for a workload")
     if args.child:
         try:
             child(args.arm)

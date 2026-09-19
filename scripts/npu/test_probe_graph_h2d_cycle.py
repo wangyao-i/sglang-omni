@@ -5,6 +5,8 @@ import threading
 import unittest
 import subprocess
 import sys
+import shutil
+import tempfile
 from unittest.mock import Mock
 
 spec = importlib.util.spec_from_file_location(
@@ -14,6 +16,28 @@ spec.loader.exec_module(probe)
 
 
 class CoordinationTests(unittest.TestCase):
+    def test_loader_preserves_path_and_main_entry(self):
+        with tempfile.TemporaryDirectory() as temp:
+            helper = Path(temp) / "helper with 'quote'.py"
+            helper.write_text("assert __name__ == '__main__'\nprint('LOADER_OK')\n", encoding="utf-8")
+            command = probe.snapshot_command(123, helper)
+            self.assertEqual(command.count("detach"), 0)  # Helper owns detach.
+            code = command[-1].removeprefix("python ")
+            result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("LOADER_OK", result.stdout)
+
+    @unittest.skipUnless(shutil.which("gdb"), "real GDB unavailable locally")
+    def test_real_gdb_executes_loader(self):
+        with tempfile.TemporaryDirectory() as temp:
+            helper = Path(temp) / "helper with 'quote'.py"
+            helper.write_text("assert __name__ == '__main__'\nprint('GDB_LOADER_OK')\n", encoding="utf-8")
+            load = probe.snapshot_command(123, helper)[-1]
+            result = subprocess.run(["gdb", "-nx", "-nh", "-batch", "-ex", load],
+                                    capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("GDB_LOADER_OK", result.stdout)
+
     def test_update_can_release_blocked_copy(self):
         released = threading.Event()
         phases = []
