@@ -19,6 +19,50 @@ def test_build_buckets_rejects_bad_limits():
         build_buckets(0, 780)
 
 
+@pytest.mark.parametrize("is_npu", [True, False])
+def test_runner_owns_update_stream_on_model_device(monkeypatch, is_npu):
+    created = []
+
+    def create_stream(*, device):
+        stream = object()
+        created.append((device, stream))
+        return stream
+
+    device_module = SimpleNamespace(Stream=create_stream)
+    devices = []
+
+    def get_device_module(device):
+        devices.append(device)
+        return device_module
+
+    monkeypatch.setattr(torch, "get_device_module", get_device_module)
+    runners = []
+    for device in (torch.device("meta", 0), torch.device("meta", 1)):
+        tower = SimpleNamespace(
+            parameters=lambda device=device: iter(
+                [SimpleNamespace(device=device, dtype=torch.float32)]
+            ),
+            config=SimpleNamespace(n_window=50, n_window_infer=100),
+        )
+        runners.append(
+            Qwen3ASREncoderLayerStackGraphRunner(
+                tower,
+                buckets=(128,),
+                max_batch_size=8,
+                graph_backend=SimpleNamespace(supports_graph_task_update=is_npu),
+            )
+        )
+    assert devices == [torch.device("meta", 0), torch.device("meta", 1)]
+    if is_npu:
+        assert [device for device, _ in created] == devices
+        assert runners[0]._npu_update_stream is created[0][1]
+        assert runners[1]._npu_update_stream is created[1][1]
+        assert runners[0]._npu_update_stream is not runners[1]._npu_update_stream
+    else:
+        assert created == []
+        assert all(runner._npu_update_stream is None for runner in runners)
+
+
 def _plan_only_runner(max_batch=8, max_tokens_per_clip=780):
     r = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
     r._max_seqlen = 104
@@ -98,9 +142,8 @@ def test_layer_stack_forwards_precomputed_attention_metadata():
     hidden_states = torch.zeros(8, 4)
     cu_seqlens = torch.tensor([0, 4, 8], dtype=torch.int32)
     attention_metadata = object()
-    runner._capture_attention_metadata = attention_metadata
 
-    output = runner.layer_stack(hidden_states, cu_seqlens)
+    output = runner.layer_stack(hidden_states, cu_seqlens, attention_metadata)
 
     assert torch.equal(output, hidden_states)
     assert seen["cu_seqlens"] is cu_seqlens
@@ -108,11 +151,41 @@ def test_layer_stack_forwards_precomputed_attention_metadata():
     assert seen["forward_metadata"] is attention_metadata
 
 
+def test_non_npu_lazy_capture_failure_leaves_bucket_eager():
+    runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
+    runner._graph_backend = SimpleNamespace(supports_graph_task_update=False)
+    runner._max_seqlen = 8
+    runner._buckets = (8,)
+    runner._failed = set()
+    runner._graphs = {}
+    runner._capture_failed = False
+    runner.plan = lambda total, windows: (8, [8 - total])
+    capture_calls = []
+
+    def capture(bucket_size, *, window_lens=None):
+        capture_calls.append((bucket_size, window_lens))
+        raise RuntimeError("simulated lazy capture failure")
+
+    runner.capture = capture
+    hidden_states = torch.ones(4, 2)
+
+    assert runner.run(hidden_states, [4]) is None
+    assert runner.run(hidden_states, [4]) is None
+    assert capture_calls == [(8, None)]
+    assert runner._failed == {8}
+    assert runner._capture_failed is False
+
+
 @pytest.fixture
 def asr_server_args():
     from sglang.srt.runtime_context import get_context
 
-    mm_attention_backend = "aiter_attn" if current_platform.is_rocm() else "triton_attn"
+    if current_platform.is_rocm():
+        mm_attention_backend = "aiter_attn"
+    elif current_platform.is_npu():
+        mm_attention_backend = "ascend_attn"
+    else:
+        mm_attention_backend = "triton_attn"
     with get_context().override_server_args(
         model_path="Qwen/Qwen3-ASR-1.7B", mm_attention_backend=mm_attention_backend
     ):
@@ -182,9 +255,10 @@ def test_graph_matches_eager_tower(asr_server_args):
         graph_backend=current_platform.get_device_graph_backend(tower_device),
     )
     runner.capture_all()
-    assert runner._graphs and not runner._failed
-    pools = [entry.graph.pool() for entry in runner._graphs.values()]
-    assert len(set(pools)) == len(pools)
+    if not runner._graph_backend.supports_graph_task_update:
+        assert runner._graphs and not runner._failed
+        pools = [entry.graph.pool() for entry in runner._graphs.values()]
+        assert len(set(pools)) == len(pools)
 
     def check(frame_lens):
         feats = (torch.randn(128, sum(frame_lens), device=device) * 0.05).to(
@@ -198,6 +272,7 @@ def test_graph_matches_eager_tower(asr_server_args):
             tokens_per_window=runner.tokens_per_window,
         )
         out = runner.run(eager_preamble(tower, feats, lens), wl)
+        assert out is not None
         diff = (out.float() - ref.float()).abs().max().item()
         assert diff < 3e-2, f"{frame_lens}: max|diff|={diff}"
 
@@ -206,10 +281,15 @@ def test_graph_matches_eager_tower(asr_server_args):
     # is the order a long clip followed by a short one produces, which no shared
     # graph memory may assume away.
     sequence = ([500], [450], [300, 500, 120], [800, 800, 800, 800])
-    for frame_lens in sequence:
+    check(sequence[0])
+    graph_count = len(runner._graphs)
+    check(sequence[1])
+    assert len(runner._graphs) == graph_count
+    for frame_lens in sequence[2:]:
         check(frame_lens)
     for frame_lens in reversed(sequence):
         check(frame_lens)
+    assert runner._graphs and not runner._failed
 
     assert (
         runner.run(
