@@ -2,6 +2,7 @@
 
 import logging
 import threading
+from contextlib import nullcontext
 from types import MethodType
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -174,7 +175,11 @@ class Qwen3ASRForConditionalGeneration(nn.Module):
         graph_backend = current_platform.get_device_graph_backend(device)
         if graph_backend is None:
             return
-        capture_lock = threading.Lock()
+        capture_lock = (
+            threading.Lock()
+            if runner_count > 1 and graph_backend.supports_graph_task_update
+            else None
+        )
         runners = tuple(
             Qwen3ASREncoderLayerStackGraphRunner(
                 self.audio_tower,
@@ -289,10 +294,14 @@ class Qwen3ASRForConditionalGeneration(nn.Module):
                 if graphed is not None:
                     return graphed.unsqueeze(0)
 
-        audio_outputs = self.audio_tower(
-            input_features,
-            feature_lens=audio_feature_lengths,
+        attention_guard = (
+            runner.attention_backend_guard() if runner is not None else nullcontext()
         )
+        with attention_guard:
+            audio_outputs = self.audio_tower(
+                input_features,
+                feature_lens=audio_feature_lengths,
+            )
         return audio_outputs.last_hidden_state
 
     def forward(

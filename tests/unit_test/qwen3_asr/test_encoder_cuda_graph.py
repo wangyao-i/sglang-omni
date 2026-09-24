@@ -349,7 +349,7 @@ def test_init_encoder_graphs_builds_one_runner_per_worker_with_shared_capture_lo
     monkeypatch.setattr(
         sglang_model.current_platform,
         "get_device_graph_backend",
-        lambda _device: object(),
+        lambda _device: SimpleNamespace(supports_graph_task_update=True),
     )
     monkeypatch.setattr(
         sglang_model,

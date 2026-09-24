@@ -1,3 +1,4 @@
+import concurrent.futures
 import threading
 from types import SimpleNamespace
 
@@ -6,6 +7,9 @@ import torch
 from torch import nn
 
 from sglang_omni.models.qwen3_asr import sglang_model
+from sglang_omni.models.qwen3_asr.encoder_cuda_graph import (
+    Qwen3ASREncoderLayerStackGraphRunner,
+)
 from sglang_omni.models.qwen3_asr.sglang_model import Qwen3ASRForConditionalGeneration
 
 
@@ -230,6 +234,64 @@ def test_get_audio_feature_rejects_mismatched_mask_shape() -> None:
 
     with pytest.raises(ValueError, match="feature_attention_mask shape"):
         Qwen3ASRForConditionalGeneration.get_audio_feature(model, items)
+
+
+def test_eager_fallback_waits_for_shared_attention_backend_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _AttentionTower(_RecordingAudioTower):
+        def __init__(self) -> None:
+            super().__init__()
+            self.backend = "eager"
+            self.entered = threading.Event()
+
+        def forward(self, input_features, *, feature_lens):
+            self.entered.set()
+            if self.backend != "eager":
+                raise RuntimeError("eager path used capture-only attention")
+            return super().forward(input_features, feature_lens=feature_lens)
+
+    capture_lock = threading.Lock()
+    run_entered = threading.Event()
+    tower = _AttentionTower()
+
+    runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
+    runner._max_seqlen = 1
+    runner._capture_lock = capture_lock
+
+    def eager_fallback(_hidden_states, _window_lens):
+        run_entered.set()
+        return None
+
+    runner.run = eager_fallback
+
+    model = SimpleNamespace(
+        _encoder_graph_runners=(runner,),
+        _encoder_worker_local=threading.local(),
+        audio_tower=tower,
+    )
+    item = SimpleNamespace(
+        feature=torch.ones((1, 2, 4)),
+        feature_attention_mask=None,
+        model_specific_data={"num_audio_tokens": 1},
+    )
+    monkeypatch.setattr(
+        sglang_model, "eager_preamble", lambda *_args: torch.zeros((1, 2))
+    )
+
+    capture_lock.acquire()
+    tower.backend = "capture"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            result = executor.submit(
+                Qwen3ASRForConditionalGeneration.get_audio_feature, model, [item]
+            )
+            assert run_entered.wait(timeout=2)
+            assert not tower.entered.wait(timeout=0.2)
+        finally:
+            tower.backend = "eager"
+            capture_lock.release()
+        assert torch.equal(result.result(timeout=2), torch.ones((4, 2)))
 
 
 @pytest.mark.accelerator

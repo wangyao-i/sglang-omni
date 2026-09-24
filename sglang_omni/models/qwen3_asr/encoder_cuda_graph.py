@@ -319,6 +319,10 @@ class Qwen3ASREncoderLayerStackGraphRunner:
             self._graph_pool = self._device_module.graph_pool_handle()
         return self._graph_pool
 
+    def attention_backend_guard(self) -> Any:
+        """Exclude eager attention while capture temporarily replaces its backend."""
+        return self._capture_lock if self._capture_lock is not None else nullcontext()
+
     @contextmanager
     def capture_npu_attention_tasks(
         self, context: NpuGraphCaptureContext
@@ -495,8 +499,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
 
         entry = self._graphs.get(graph_key)
         if entry is None:
-            capture_guard = self._capture_lock or nullcontext()
-            with capture_guard:
+            with self.attention_backend_guard():
                 entry = self._graphs.get(graph_key)
                 if entry is None:
                     try:
