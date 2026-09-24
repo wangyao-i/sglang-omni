@@ -215,9 +215,13 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         buckets: tuple[int, ...],
         max_batch_size: int,
         graph_backend: DeviceGraphBackend,
+        capture_lock: Any | None = None,
+        runner_id: int = 0,
     ) -> None:
         self._tower = audio_tower
         self._graph_backend = graph_backend
+        self._capture_lock = capture_lock
+        self._runner_id = runner_id
         param = next(audio_tower.parameters())
         self._device = param.device
         self._dtype = param.dtype
@@ -236,6 +240,7 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         self._graph_pool: Any | None = None
         self._capture_failed = False
         self._graph_submission_unrecoverable = False
+        self._replay_count = 0
         # Keep encoder task updates on a stream owned by this runner and device.
         self._npu_update_stream = (
             self._device_module.Stream(device=self._device)
@@ -490,26 +495,30 @@ class Qwen3ASREncoderLayerStackGraphRunner:
 
         entry = self._graphs.get(graph_key)
         if entry is None:
-            try:
-                entry = self.capture(
-                    bucket_size,
-                    window_lens=(
-                        effective_window_lens
-                        if self._graph_backend.supports_graph_task_update
-                        else None
-                    ),
-                )
-            except EncoderGraphUnrecoverableError:
-                self._capture_failed = True
-                raise
-            except Exception as exc:
-                logger.warning(
-                    f"[qwen3-asr] encoder graph preparation failed for bucket "
-                    f"{graph_key}; leaving this bucket on the eager path: {exc}"
-                )
-                self._failed.add(graph_key)
-                return None
-            self._graphs[graph_key] = entry
+            capture_guard = self._capture_lock or nullcontext()
+            with capture_guard:
+                entry = self._graphs.get(graph_key)
+                if entry is None:
+                    try:
+                        entry = self.capture(
+                            bucket_size,
+                            window_lens=(
+                                effective_window_lens
+                                if self._graph_backend.supports_graph_task_update
+                                else None
+                            ),
+                        )
+                    except EncoderGraphUnrecoverableError:
+                        self._capture_failed = True
+                        raise
+                    except Exception as exc:
+                        logger.warning(
+                            f"[qwen3-asr] encoder graph preparation failed for bucket "
+                            f"{graph_key}; leaving this bucket on the eager path: {exc}"
+                        )
+                        self._failed.add(graph_key)
+                        return None
+                    self._graphs[graph_key] = entry
 
         entry.hidden_states[:total].copy_(hidden_states)
         cu = self.create_cu_seqlens(effective_window_lens, device="cpu")
@@ -522,8 +531,8 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                     cu[1:] - cu[:-1], non_blocking=True
                 )
         if self._graph_backend.supports_graph_task_update:
-            # This runner is owned by the single encoder worker. Its update
-            # stream is private, so no decoder submission lock is required.
+            # This runner is owned by one encoder worker. Its update stream is
+            # private, so no decoder submission lock is required.
             # Insert the dependency before replay: replay awaits these updates.
             self._npu_update_stream.wait_stream(self._device_module.current_stream())
             try:
@@ -540,10 +549,18 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                 ) from exc
         else:
             self._graph_backend.replay(entry.graph)
+        self._replay_count += 1
         out = entry.output
         if out.dim() == 3:  # attention backends emit [1, tokens, dim]
             out = out.squeeze(0)
         return out[:total].clone()
+
+    def stats(self) -> dict[str, int]:
+        return {
+            "runner_id": self._runner_id,
+            "captured_graphs": len(self._graphs),
+            "replays": self._replay_count,
+        }
 
     def plan(self, total: int, real_windows: int) -> tuple[int, list[int]] | None:
         """Pick a bucket and the dummy-window sizes that absorb its padding."""

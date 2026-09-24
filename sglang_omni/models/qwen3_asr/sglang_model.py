@@ -1,6 +1,7 @@
 """Qwen3-ASR model compatible with HuggingFace weights"""
 
 import logging
+import threading
 from types import MethodType
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -155,23 +156,53 @@ class Qwen3ASRForConditionalGeneration(nn.Module):
         )
         enable_fused_asr_qk_norm_rope(self.language_model)
         self.pattern = MultiModalityDataPaddingPatternMultimodalTokens()
-        self._encoder_graph_runner: Qwen3ASREncoderLayerStackGraphRunner | None = None
+        self._encoder_graph_runners: tuple[
+            Qwen3ASREncoderLayerStackGraphRunner, ...
+        ] = ()
+        self._encoder_worker_local = threading.local()
 
     def init_encoder_graphs(
-        self, *, max_batch_size: int, max_tokens_per_clip: int
+        self,
+        *,
+        max_batch_size: int,
+        max_tokens_per_clip: int,
+        runner_count: int = 1,
     ) -> None:
+        if runner_count < 1:
+            raise ValueError(f"runner_count must be >= 1, got {runner_count}")
         device = next(self.audio_tower.parameters()).device
         graph_backend = current_platform.get_device_graph_backend(device)
         if graph_backend is None:
             return
-        runner = Qwen3ASREncoderLayerStackGraphRunner(
-            self.audio_tower,
-            buckets=build_buckets(max_batch_size, max_tokens_per_clip),
-            max_batch_size=max_batch_size,
-            graph_backend=graph_backend,
+        capture_lock = threading.Lock()
+        runners = tuple(
+            Qwen3ASREncoderLayerStackGraphRunner(
+                self.audio_tower,
+                buckets=build_buckets(max_batch_size, max_tokens_per_clip),
+                max_batch_size=max_batch_size,
+                graph_backend=graph_backend,
+                capture_lock=capture_lock,
+                runner_id=runner_id,
+            )
+            for runner_id in range(runner_count)
         )
-        runner.capture_all()
-        self._encoder_graph_runner = runner
+        for runner in runners:
+            runner.capture_all()
+        self._encoder_graph_runners = runners
+
+    def bind_encoder_worker(self, worker_index: int) -> None:
+        """Select the graph runner owned by the current encoder worker."""
+        if self._encoder_graph_runners and not 0 <= worker_index < len(
+            self._encoder_graph_runners
+        ):
+            raise ValueError(
+                f"encoder worker index {worker_index} is outside "
+                f"[0, {len(self._encoder_graph_runners)})"
+            )
+        self._encoder_worker_local.index = worker_index
+
+    def encoder_graph_stats(self) -> tuple[dict[str, int], ...]:
+        return tuple(runner.stats() for runner in self._encoder_graph_runners)
 
     def pad_input_ids(self, input_ids: List[int], mm_inputs: MultimodalInputs):
         return self.pattern.pad_input_tokens(input_ids, mm_inputs)
@@ -238,7 +269,10 @@ class Qwen3ASRForConditionalGeneration(nn.Module):
                 -1, input_features.shape[1]
             )
 
-        runner = self._encoder_graph_runner
+        runner = None
+        if self._encoder_graph_runners:
+            worker_index = getattr(self._encoder_worker_local, "index", 0)
+            runner = self._encoder_graph_runners[worker_index]
         if runner is not None:
             token_counts = [
                 (item.model_specific_data or {}).get("num_audio_tokens")

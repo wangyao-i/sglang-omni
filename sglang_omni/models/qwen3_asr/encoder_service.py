@@ -126,7 +126,10 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
         cache_max_bytes: int = _CACHE_MAX_BYTES,
         max_batch_size: int = 8,
         max_batch_wait_ms: int = 0,
+        worker_count: int = 1,
     ) -> None:
+        if worker_count < 1:
+            raise ValueError(f"worker_count must be >= 1, got {worker_count}")
         self._model = model
         reference = next(model.audio_tower.parameters())
         self._device = reference.device
@@ -135,11 +138,16 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
         self._hidden_size = text_hidden_size(model)
         # Keep encoder submissions off the generation lane on Ascend, where the
         # decode graph replay and update threads can otherwise stall behind it.
-        self._stream = (
+        self._worker_count = worker_count
+        self._worker_local = threading.local()
+        self._worker_index_lock = threading.Lock()
+        self._next_worker_index = 0
+        self._streams = [
             create_device_stream(self._device)
+            for _ in range(worker_count)
             if self._device.type in {"cuda", "npu"}
-            else None
-        )
+        ]
+        self._stream = self._streams[0] if self._streams else None
         self._cache = StageOutputCache(
             max_size=cache_max_entries,
             max_bytes=cache_max_bytes,
@@ -162,7 +170,55 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
         self._queue_wait_total_s = 0.0
         self._queue_wait_max_s = 0.0
         self._encoder_time_s = 0.0
-        super().__init__(worker_name="qwen3-asr-audio-encode")
+        self._worker_batch_counts = [0] * worker_count
+        self._worker_item_counts = [0] * worker_count
+        worker_name = (
+            "qwen3-asr-audio-encode"
+            if worker_count == 1
+            else "qwen3-asr-audio-encode-0"
+        )
+        super().__init__(worker_name=worker_name)
+        self._threads = [self._thread]
+        for worker_index in range(1, worker_count):
+            thread = threading.Thread(
+                target=self.worker,
+                name=f"qwen3-asr-audio-encode-{worker_index}",
+                daemon=True,
+            )
+            self._threads.append(thread)
+            thread.start()
+
+    def worker(self) -> None:
+        with self._worker_index_lock:
+            worker_index = self._next_worker_index
+            self._next_worker_index += 1
+        self._worker_local.index = worker_index
+        self._worker_local.stream = (
+            self._streams[worker_index] if self._streams else None
+        )
+        if self._worker_count > 1:
+            self._model.bind_encoder_worker(worker_index)
+        logger.info(
+            "Qwen3-ASR encoder worker ready: index=%d name=%s stream=%s",
+            worker_index,
+            threading.current_thread().name,
+            self._worker_local.stream,
+        )
+        super().worker()
+
+    def active_stream(self) -> Any | None:
+        """Return the stream owned by this worker, or the legacy single stream."""
+        worker_stream = getattr(self._worker_local, "stream", None)
+        return worker_stream if worker_stream is not None else self._stream
+
+    def fail_worker(
+        self,
+        exc: Exception,
+        current_batch: list[QueueEntry[Any]],
+    ) -> None:
+        super().fail_worker(exc, current_batch)
+        for _ in range(self._worker_count - 1):
+            self._queue.put(_SHUTDOWN)
 
     def close(self) -> None:
         """Stop the encoder worker after all queued requests finish."""
@@ -170,8 +226,20 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
             if self._closed:
                 return
             self._closed = True
-            self._queue.put(_SHUTDOWN)
-        self._thread.join(timeout=5)
+            for _ in self._threads:
+                self._queue.put(_SHUTDOWN)
+        for thread in self._threads:
+            thread.join(timeout=5)
+        logger.info(
+            "Qwen3-ASR encoder workers stopped: batches=%s items=%s",
+            self._worker_batch_counts,
+            self._worker_item_counts,
+        )
+        if self._worker_count > 1 and self._is_npu:
+            logger.info(
+                "Qwen3-ASR encoder graph runners stopped: %s",
+                self._model.encoder_graph_stats(),
+            )
 
     def enqueue(
         self,
@@ -389,7 +457,7 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
 
     def attach_embedding(self, item: Any, embedding: torch.Tensor) -> None:
         embedding = embedding.to(self._device, non_blocking=True)
-        if self._stream is not None:
+        if self.active_stream() is not None:
             # note (luojiaxuan): the batch path allocates on the private
             # stream while the LM consumes on the default stream; register
             # the consumer so the allocator cannot recycle the block for a
@@ -440,10 +508,11 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
     @contextlib.contextmanager
     def batch_context(self) -> Iterator[None]:
         with torch.inference_mode():
-            if self._stream is None:
+            active_stream = self.active_stream()
+            if active_stream is None:
                 yield
             else:
-                with device_stream_context(self._stream):
+                with device_stream_context(active_stream):
                     yield
 
     def encode_batch(self, items: list[Any]) -> torch.Tensor:
@@ -510,8 +579,9 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
         return [part.clone() for part in parts]
 
     def synchronize_batch(self) -> None:
-        if self._stream is not None:
-            self._stream.synchronize()
+        active_stream = self.active_stream()
+        if active_stream is not None:
+            active_stream.synchronize()
 
     def cache_embedding(
         self,
@@ -600,9 +670,10 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
     def recover_after_failure(self, exc: Exception) -> None:
         if not isinstance(exc, torch.OutOfMemoryError):
             return
-        if self._stream is not None:
+        active_stream = self.active_stream()
+        if active_stream is not None:
             try:
-                self._stream.synchronize()
+                active_stream.synchronize()
             except Exception:
                 logger.warning(
                     "Qwen3-ASR encoder stream cleanup failed after OOM",
@@ -625,6 +696,9 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
             if entry.enqueued_at is not None
         ]
         with self._lock:
+            worker_index = getattr(self._worker_local, "index", 0)
+            self._worker_batch_counts[worker_index] += 1
+            self._worker_item_counts[worker_index] += len(batch)
             self._queue_wait_count += len(queue_waits)
             self._queue_wait_total_s += sum(queue_waits)
             self._queue_wait_max_s = max(

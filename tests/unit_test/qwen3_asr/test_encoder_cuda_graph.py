@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -99,14 +100,21 @@ def test_get_audio_feature_routing(monkeypatch):
     )
     get = sglang_model.Qwen3ASRForConditionalGeneration.get_audio_feature
 
-    model._encoder_graph_runner = SimpleNamespace(
+    first_runner = SimpleNamespace(
+        tokens_per_window=104, run=lambda h, w: torch.zeros(65, 8)
+    )
+    second_runner = SimpleNamespace(
         tokens_per_window=104, run=lambda h, w: torch.ones(65, 8)
     )
+    model._encoder_graph_runners = (first_runner, second_runner)
+    model._encoder_worker_local = threading.local()
+    model.bind_encoder_worker(1)
     assert torch.equal(get(model, [item]), torch.ones(1, 65, 8))
 
-    model._encoder_graph_runner = SimpleNamespace(
-        tokens_per_window=104, run=lambda h, w: None
+    model._encoder_graph_runners = (
+        SimpleNamespace(tokens_per_window=104, run=lambda h, w: None),
     )
+    model.bind_encoder_worker(0)
     assert torch.equal(get(model, [item]), torch.full((1, 65, 8), 7.0))
 
 
@@ -309,10 +317,53 @@ def test_init_encoder_graphs_declines_a_device_that_cannot_capture():
         sglang_model.Qwen3ASRForConditionalGeneration
     )
     model.audio_tower = SimpleNamespace(parameters=lambda: iter([torch.zeros(1)]))
-    model._encoder_graph_runner = "untouched"
+    model._encoder_graph_runners = ("untouched",)
 
     sglang_model.Qwen3ASRForConditionalGeneration.init_encoder_graphs(
         model, max_batch_size=4, max_tokens_per_clip=780
     )
 
-    assert model._encoder_graph_runner == "untouched"
+    assert model._encoder_graph_runners == ("untouched",)
+
+
+def test_init_encoder_graphs_builds_one_runner_per_worker_with_shared_capture_lock(
+    monkeypatch,
+):
+    model = sglang_model.Qwen3ASRForConditionalGeneration.__new__(
+        sglang_model.Qwen3ASRForConditionalGeneration
+    )
+    model.audio_tower = SimpleNamespace(parameters=lambda: iter([torch.zeros(1)]))
+    model._encoder_graph_runners = ()
+    created = []
+
+    class Runner:
+        def __init__(self, _tower, **kwargs):
+            self.capture_lock = kwargs["capture_lock"]
+            self.capture_calls = 0
+            created.append(self)
+
+        def capture_all(self):
+            self.capture_calls += 1
+
+    monkeypatch.setattr(
+        sglang_model.current_platform,
+        "get_device_graph_backend",
+        lambda _device: object(),
+    )
+    monkeypatch.setattr(
+        sglang_model,
+        "Qwen3ASREncoderLayerStackGraphRunner",
+        Runner,
+    )
+
+    model.init_encoder_graphs(
+        max_batch_size=4,
+        max_tokens_per_clip=780,
+        runner_count=2,
+    )
+
+    assert tuple(created) == model._encoder_graph_runners
+    assert len(created) == 2
+    assert created[0] is not created[1]
+    assert created[0].capture_lock is created[1].capture_lock
+    assert [runner.capture_calls for runner in created] == [1, 1]

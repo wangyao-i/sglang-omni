@@ -65,6 +65,10 @@ class _StubModel(torch.nn.Module):
         self.row_offset = 0
         self.encode_delay_s = 0.0
         self.grad_enabled_during_encode: bool | None = None
+        self.bound_workers: dict[str, int] = {}
+
+    def bind_encoder_worker(self, worker_index: int) -> None:
+        self.bound_workers[threading.current_thread().name] = worker_index
 
     def get_audio_feature(self, items):  # noqa: ANN001
         self.grad_enabled_during_encode = torch.is_grad_enabled()
@@ -103,6 +107,7 @@ def _make_service(
     cache_max_entries: int = 16,
     cache_max_bytes: int = 1 << 20,
     max_batch_size: int = 8,
+    worker_count: int = 1,
 ) -> Qwen3ASRPreLMEncoderService:
     service = Qwen3ASRPreLMEncoderService(
         model or _StubModel(),
@@ -110,6 +115,7 @@ def _make_service(
         cache_max_entries=cache_max_entries,
         cache_max_bytes=cache_max_bytes,
         max_batch_size=max_batch_size,
+        worker_count=worker_count,
     )
     _SERVICES.append(service)
     return service
@@ -381,6 +387,34 @@ def test_async_submissions_form_full_batch_without_blocked_callers() -> None:
     assert model.encode_batch_sizes == [1, 8]
 
 
+def test_multiple_workers_execute_independent_batches_concurrently(monkeypatch) -> None:
+    model = _StubModel()
+    service = _make_service(
+        model,
+        max_batch_size=1,
+        worker_count=2,
+    )
+    rendezvous = threading.Barrier(2)
+    worker_names = []
+    original = service.encode_batch
+
+    def encode(items):
+        worker_names.append(threading.current_thread().name)
+        rendezvous.wait(timeout=2)
+        return original(items)
+
+    monkeypatch.setattr(service, "encode_batch", encode)
+    futures = [service.submit_item(_item(audio_hash, 3)) for audio_hash in (1, 2)]
+
+    for future in futures:
+        future.result(timeout=3)
+
+    expected = {"qwen3-asr-audio-encode-0", "qwen3-asr-audio-encode-1"}
+    assert set(worker_names) == expected
+    assert set(model.bound_workers) == expected
+    assert set(model.bound_workers.values()) == {0, 1}
+
+
 def test_async_single_flight_completes_each_item_future() -> None:
     model = _StubModel()
     gate = threading.Event()
@@ -405,6 +439,14 @@ def test_close_stops_worker() -> None:
     service.close()
 
     assert not service._thread.is_alive()
+
+
+def test_close_stops_every_encoder_worker() -> None:
+    service = _make_service(worker_count=2)
+
+    service.close()
+
+    assert all(not thread.is_alive() for thread in service._threads)
 
 
 def test_batch_context_unwinds_inference_mode_when_stream_context_fails(

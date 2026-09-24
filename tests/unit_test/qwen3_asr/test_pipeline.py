@@ -432,6 +432,7 @@ def _patch_engine_dependencies(
         infra_kwargs=[],
         attest_calls=[],
         graph_init_calls=[],
+        encoder_graph_kwargs=[],
         encoder_service=SimpleNamespace(close=lambda: None),
         encoder_service_kwargs={},
         tokenizer=object(),
@@ -521,7 +522,11 @@ def _patch_engine_dependencies(
         model_worker = SimpleNamespace(
             gpu_id=gpu_id,
             model_runner=SimpleNamespace(
-                model=SimpleNamespace(init_encoder_graphs=lambda **kwargs: None)
+                model=SimpleNamespace(
+                    init_encoder_graphs=lambda **kwargs: recorded.encoder_graph_kwargs.append(
+                        kwargs
+                    )
+                )
             ),
         )
         return want_cuda_graph, (
@@ -623,6 +628,22 @@ def test_qwen3_asr_build_initializes_and_attests_prefill_graphs(monkeypatch) -> 
     assert recorded.infra_kwargs[-1]["enable_prefill_input_embeds"] is True
     assert len(recorded.graph_init_calls) == 1
     assert len(recorded.attest_calls) == 1
+
+
+def test_qwen3_asr_npu_uses_two_encoder_workers_with_two_graph_runners(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(qwen3_asr_builder.current_platform, "is_npu", lambda: True)
+    recorded = _patch_engine_dependencies(monkeypatch, want_cuda_graph=True)
+
+    qwen3_asr_stages.create_sglang_qwen3_asr_executor("dummy")
+
+    assert recorded.encoder_service_kwargs["worker_count"] == 2
+    assert len(recorded.encoder_graph_kwargs) == 1
+    graph_kwargs = recorded.encoder_graph_kwargs[0]
+    assert graph_kwargs["max_batch_size"] == 8
+    assert graph_kwargs["max_tokens_per_clip"] > 0
+    assert graph_kwargs["runner_count"] == 2
 
 
 @pytest.mark.parametrize("resolved_chunked_prefill_size", [2048, 8192])

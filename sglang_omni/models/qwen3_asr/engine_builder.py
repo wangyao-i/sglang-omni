@@ -30,6 +30,8 @@ from sglang_omni.utils.gpu_memory import format_bytes_gib, get_process_gpu_memor
 
 logger = logging.getLogger(__name__)
 
+_NPU_ENCODER_WORKER_COUNT = 2
+
 
 class Qwen3ASREngineBuilder(AsrEngineBuilder):
     model_name = "Qwen3-ASR"
@@ -334,6 +336,13 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
             return
         del generation_cuda_graph_enabled
         self.log_memory_checkpoint("post_cuda_graph_capture")
+        encoder_worker_count = (
+            _NPU_ENCODER_WORKER_COUNT
+            if current_platform.is_npu()
+            and self.enable_encoder_cuda_graph
+            and self.enable_pre_lm_encoder
+            else 1
+        )
         if self.enable_encoder_cuda_graph:
             from sglang_omni.models.qwen3_asr.audio_lengths import (
                 qwen3_asr_num_audio_tokens,
@@ -349,6 +358,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
             model.init_encoder_graphs(
                 max_batch_size=self.pre_lm_max_batch_size,
                 max_tokens_per_clip=max_tokens_per_clip,
+                runner_count=encoder_worker_count,
             )
             self.log_memory_checkpoint("post_encoder_graph_capture")
         init_mm_embedding_cache(self.mm_embedding_cache_size_bytes)
@@ -370,6 +380,7 @@ class Qwen3ASREngineBuilder(AsrEngineBuilder):
                 cache_max_bytes=self.pre_lm_cache_size_bytes,
                 max_batch_size=self.pre_lm_max_batch_size,
                 max_batch_wait_ms=self.pre_lm_max_batch_wait_ms,
+                worker_count=encoder_worker_count,
             )
 
     def should_wait_for_encode(self) -> bool:
