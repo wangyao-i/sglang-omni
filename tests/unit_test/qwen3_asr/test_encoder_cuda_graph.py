@@ -162,6 +162,7 @@ def test_layer_stack_forwards_precomputed_attention_metadata():
 def test_non_npu_lazy_capture_failure_leaves_bucket_eager():
     runner = object.__new__(Qwen3ASREncoderLayerStackGraphRunner)
     runner._graph_backend = SimpleNamespace(supports_graph_task_update=False)
+    runner._capture_lock = None
     runner._max_seqlen = 8
     runner._buckets = (8,)
     runner._failed = set()

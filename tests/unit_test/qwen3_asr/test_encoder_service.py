@@ -453,6 +453,7 @@ def test_batch_context_unwinds_inference_mode_when_stream_context_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = object.__new__(Qwen3ASRPreLMEncoderService)
+    service._worker_local = threading.local()
     service._stream = SimpleNamespace(device=torch.device("cuda", 0))
 
     class _FakeDeviceModule:
