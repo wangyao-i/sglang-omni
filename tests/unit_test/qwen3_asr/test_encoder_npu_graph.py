@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import sys
+import threading
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -23,6 +24,9 @@ class _NpuBackend:
 
 
 class _NpuDeviceModule:
+    def set_device(self, device):
+        pass
+
     def current_stream(self, device=None):
         return "encoder-compute"
 
@@ -85,14 +89,37 @@ def test_npu_replay_updates_window_boundaries_for_a_reused_bucket():
     assert runner.run(torch.ones(4, 2), [4]) is not None
     assert runner.run(torch.ones(3, 2), [3]) is not None
     assert captured == [(8, (4, 4))]
-    assert operations == [
-        ("wait", "encoder-compute"),
-        ("replay", 8),
+    assert operations.count(("wait", "encoder-compute")) == 2
+    assert operations.count(("replay", 8)) == 2
+    assert [op for op in operations if op[0] == "update"] == [
         ("update", [4, 8]),
-        ("wait", "encoder-compute"),
-        ("replay", 8),
         ("update", [3, 8]),
     ]
+
+
+def test_npu_replay_and_updates_run_on_separate_host_threads():
+    runner = _npu_runner()
+    runner.plan = lambda total, windows: (8, [8 - total])
+    update_submitted = threading.Event()
+    host_threads = {}
+
+    def apply(_device_module, _update_stream, _boundaries):
+        host_threads["update"] = threading.get_ident()
+        update_submitted.set()
+
+    def replay():
+        host_threads["replay"] = threading.get_ident()
+        assert update_submitted.wait(timeout=1)
+
+    runner._graphs[8] = SimpleNamespace(
+        hidden_states=torch.zeros(8, 2),
+        graph=SimpleNamespace(replay=replay),
+        output=torch.ones(8, 2),
+        npu_update_tasks=(SimpleNamespace(apply=apply),),
+    )
+
+    assert runner.run(torch.ones(3, 2), [3]) is not None
+    assert host_threads["update"] != host_threads["replay"]
 
 
 def test_npu_graph_update_rebinds_fia_lengths_on_the_runner_stream():
@@ -129,7 +156,9 @@ def test_npu_graph_update_rebinds_fia_lengths_on_the_runner_stream():
     ]
 
 
-@pytest.mark.parametrize("failure", ["replay", "signal"])
+@pytest.mark.parametrize(
+    "failure", ["set_device", "replay", "begin", "operation", "end", "signal"]
+)
 def test_npu_submission_failure_makes_the_graph_unrecoverable(failure):
     calls = []
     runner = _npu_runner()
@@ -140,6 +169,7 @@ def test_npu_submission_failure_makes_the_graph_unrecoverable(failure):
         if name == failure:
             raise torch.OutOfMemoryError("injected submission failure")
 
+    runner._device_module.set_device = lambda *args: call("set_device")
     runner._device_module.graph_task_update_begin = lambda *args: call("begin")
     runner._device_module.graph_task_update_end = lambda *args: call("end")
     runner._npu_update_stream.wait_stream = lambda stream: call("wait")
@@ -210,8 +240,8 @@ def test_npu_attention_capture_registers_an_explicit_fia_task(monkeypatch):
         sys.modules,
         "torch_npu",
         SimpleNamespace(
-            _npu_fused_infer_attention_score_get_max_workspace=lambda **kwargs: torch.empty(
-                16
+            _npu_fused_infer_attention_score_get_max_workspace=lambda **kwargs: (
+                torch.empty(16)
             ),
             npu_fused_infer_attention_score=SimpleNamespace(out=operation),
         ),

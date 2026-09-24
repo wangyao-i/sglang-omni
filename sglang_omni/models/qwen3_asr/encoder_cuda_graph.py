@@ -12,6 +12,7 @@ graph inputs so different layouts in one bucket can replay the same graph.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -353,6 +354,35 @@ class Qwen3ASREncoderLayerStackGraphRunner:
                     cumulative_window_lens,
                 )
 
+    def replay_with_npu_attention_updates(
+        self,
+        entry: CapturedGraph,
+        cumulative_window_lens: list[int],
+    ) -> None:
+        """Submit FIA updates beside replay, following SGLang's NPU pattern."""
+        update_errors: list[Exception] = []
+        compute_stream = self._device_module.current_stream()
+
+        def update() -> None:
+            try:
+                self._device_module.set_device(self._device)
+                self._npu_update_stream.wait_stream(compute_stream)
+                self.update_npu_attention_tasks(entry, cumulative_window_lens)
+            except Exception as exc:  # noqa: BLE001
+                update_errors.append(exc)
+
+        update_thread = threading.Thread(
+            target=update,
+            name="qwen3-asr-encoder-graph-update",
+        )
+        update_thread.start()
+        try:
+            self._graph_backend.replay(entry.graph)
+        finally:
+            update_thread.join()
+        if update_errors:
+            raise update_errors[0]
+
     def capture(
         self,
         bucket_size: int,
@@ -524,11 +554,8 @@ class Qwen3ASREncoderLayerStackGraphRunner:
         if self._graph_backend.supports_graph_task_update:
             # This runner is owned by the single encoder worker. Its update
             # stream is private, so no decoder submission lock is required.
-            # Insert the dependency before replay: replay awaits these updates.
-            self._npu_update_stream.wait_stream(self._device_module.current_stream())
             try:
-                self._graph_backend.replay(entry.graph)
-                self.update_npu_attention_tasks(entry, cumulative_window_lens)
+                self.replay_with_npu_attention_updates(entry, cumulative_window_lens)
             except Exception as exc:
                 # Replay may already be waiting for a signal that was not
                 # recorded. Retrying or synchronizing that stream can hang;
