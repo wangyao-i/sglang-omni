@@ -6,9 +6,8 @@ dedicated worker thread and CUDA stream. Request building submits encode
 and admits only after the future completes with the LM-ready embedding
 attached.
 
-A cache hit is resolved before mel extraction in the request builder. On NPU,
-its device transfer is queued on the encoder worker so graph submission and
-transfer have one owner; other backends retain the direct cache-hit path.
+A cache hit is resolved before mel extraction in the request builder and
+transferred directly on the caller's current stream.
 """
 
 from __future__ import annotations
@@ -59,12 +58,6 @@ _FRONTEND_CONFIG_FIELDS = (
 class DetachedFailure:
     exception: Exception
     formatted_traceback: str
-
-
-@dataclass(frozen=True)
-class CachedEmbeddingTransfer:
-    item: Any
-    embedding: torch.Tensor
 
 
 def build_cache_namespace(
@@ -130,7 +123,6 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
         self._model = model
         reference = next(model.audio_tower.parameters())
         self._device = reference.device
-        self._is_npu = self._device.type == "npu"
         self._dtype = reference.dtype
         self._hidden_size = text_hidden_size(model)
         # Keep encoder submissions off the generation lane on Ascend, where the
@@ -270,19 +262,10 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
     def submit_cached_embedding(
         self, item: Any, embedding: torch.Tensor
     ) -> concurrent.futures.Future[torch.Tensor]:
-        """Attach a cached embedding without re-encoding.
-
-        NPU transfers run on the encoder worker and resolve after its stream
-        synchronizes. The queue entry retains the CPU source even if the cache
-        evicts it. Other backends keep the original caller-thread path.
-        """
+        """Attach a cached embedding on the caller thread without re-encoding."""
         expected = expected_audio_tokens(item)
         if expected is None or not self.is_valid(embedding, expected):
             raise ValueError("Qwen3-ASR cached embedding does not match the item")
-        if self._is_npu:
-            return self.count_failed(
-                self.submit(CachedEmbeddingTransfer(item, embedding))
-            )
         self.attach_embedding(item, embedding)
         completed: concurrent.futures.Future[torch.Tensor] = concurrent.futures.Future()
         completed.set_result(embedding)
@@ -448,33 +431,6 @@ class Qwen3ASRPreLMEncoderService(PreLMEncoderService[Any, torch.Tensor, torch.T
 
     def encode_batch(self, items: list[Any]) -> torch.Tensor:
         return self._model.get_audio_feature(items)
-
-    def execute_batch(self, items: list[Any]) -> list[torch.Tensor]:
-        if not self._is_npu:
-            return super().execute_batch(items)
-        encode_items = [
-            item for item in items if not isinstance(item, CachedEmbeddingTransfer)
-        ]
-        results: list[torch.Tensor] = []
-        transfers = [
-            item for item in items if isinstance(item, CachedEmbeddingTransfer)
-        ]
-        if transfers:
-            # NPU queue entries keep sources alive through synchronization.
-            # Futures complete only after this entire method returns.
-            with self.batch_context():
-                for transfer in transfers:
-                    self.attach_embedding(transfer.item, transfer.embedding)
-            self.synchronize_batch()
-        # Transfer failures must not force already encoded items (whose mel
-        # inputs have been cleared) through the per-item retry path.
-        encoded = iter(super().execute_batch(encode_items) if encode_items else [])
-        for item in items:
-            if isinstance(item, CachedEmbeddingTransfer):
-                results.append(item.item.precomputed_embeddings)
-            else:
-                results.append(next(encoded))
-        return results
 
     def split_embeddings(
         self,
